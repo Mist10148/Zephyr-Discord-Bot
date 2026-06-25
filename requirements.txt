@@ -1,0 +1,30 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Zephyr — Weather / Music / AI Discord bot + Flask website
+# Install with:  pip install -r requirements.txt
+# Version floors (>=) pull current releases; freeze exact pins with `pip freeze`.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Discord bot core ──
+discord.py[voice]>=2.4.0     # includes PyNaCl for voice support
+yt-dlp>=2024.8.6             # YouTube extraction / streaming
+spotipy>=2.24.0              # Spotify track/playlist/album lookups
+gTTS>=2.5.3                  # text-to-speech for /say
+google-genai>=1.0.0          # modern `from google import genai` SDK (Gemini)
+aiohttp>=3.10.0              # async HTTP (lyrics, image fetch)
+requests>=2.32.0             # sync HTTP (weather APIs)
+async-timeout>=4.0.3         # idle/queue timeout in the music player
+python-dotenv>=1.0.1         # loads the .env file
+tzdata>=2024.1               # IANA timezone DB (needed on Windows for ZoneInfo)
+
+# ── Flask weather website ──
+Flask>=3.0.0
+geopy>=2.4.1                 # city -> lat/lon geocoding (Nominatim)
+timezonefinder>=6.5.0        # lat/lon -> timezone
+pytz>=2024.1
+
+# ── Optional: only needed if you add back the /generate `image_generator` module ──
+# (Imported in the original but unused; kept here so the environment is a superset.)
+aiofiles>=24.1.0
+Pillow>=10.4.0
+PyPDF2>=3.0.1
+python-docx>=1.1.2

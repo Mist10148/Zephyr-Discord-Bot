@@ -1,0 +1,32 @@
+# Secrets
+.env
+
+# Bundled FFmpeg binaries (~380 MB, each over GitHub's 100 MB limit).
+# Install FFmpeg yourself or drop the executables here locally — see README.
+ffmpeg/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Bot runtime artifacts
+settings.json
+tts.mp3
+response_*.txt
+generated_output.png
+*.log
+
+# OS / IDE
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+build/
+dist/
+*.spec

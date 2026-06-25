@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Weather App</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/Swiper/4.3.5/css/swiper.min.css">
+    <style>
+body {
+    font-family: Arial, sans-serif;
+    margin: 0;
+    padding: 0;
+    background-color: #212121;
+    color: #ffffff;
+}
+
+.container {
+    background-color: #333333;
+    padding: 20px;
+    margin: 20px;
+    border-radius: 8px;
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4);
+    width: 100%;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+h1, h2 {
+    text-align: center;
+    color: #00bfff;
+}
+
+.search-bar {
+    width: 80%;
+    padding: 10px;
+    margin: 10px;
+    border: 1px solid #444;
+    border-radius: 4px;
+    background-color: #444;
+    color: #ffffff;
+}
+
+button {
+    padding: 10px 15px;
+    border: none;
+    background-color: #00bfff;
+    color: white;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+button:hover {
+    background-color: #0099cc;
+}
+
+#currentWeather, #forecast, #cityForecast {
+    margin-top: 20px;
+}
+
+.forecast-cards {
+    display: flex;
+    gap: 20px;
+    overflow-x: auto;
+    padding-bottom: 20px;
+    transition: all 0.3s ease-in-out;
+    scrollbar-width: thin;
+    scrollbar-color: #00bfff #333;
+}
+
+/* For Webkit browsers (Chrome, Safari) */
+.forecast-cards::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+.forecast-cards::-webkit-scrollbar-track {
+    background: #333;
+    border-radius: 10px;
+}
+
+.forecast-cards::-webkit-scrollbar-thumb {
+    background-color: #00bfff;
+    border-radius: 10px;
+    border: 2px solid #333;
+}
+
+.forecast-cards::-webkit-scrollbar-thumb:hover {
+    background-color: #0099cc;
+}
+
+.forecast-card {
+    background-color: #444;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.5);
+    min-width: 250px;
+    flex-shrink: 0;
+    transition: transform 0.3s ease-in-out, width 0.3s ease-in-out, opacity 0.3s ease-in-out;
+    cursor: pointer;
+    overflow: hidden;
+}
+
+.forecast-card.expanded {
+    transform: scale(1.1);
+    opacity: 1;
+    width: 300px;
+}
+
+.forecast-card:not(.expanded) {
+    opacity: 0.85;
+}
+
+.forecast-card.hide {
+    display: none;
+}
+
+.swiper-container {
+    width: 100%;
+    padding-top: 50px;
+    padding-bottom: 50px;
+}
+
+.swiper-slide {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.swiper-button {
+    position: absolute;
+    top: 50%;
+    z-index: 10;
+    width: 50px;
+    height: 50px;
+    background-color: rgba(0, 191, 255, 0.8);
+    border-radius: 50%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    cursor: pointer;
+    color: #fff;
+    font-size: 24px;
+    transform: translateY(-50%);
+}
+
+.swiper-button:hover {
+    background-color: #0099cc;
+}
+
+.swiper-button-left {
+    left: 20px;
+}
+
+.swiper-button-right {
+    right: 20px;
+}
+
+.expanded-details {
+    padding: 10px;
+    background-color: #555;
+    border-radius: 8px;
+    margin-top: 10px;
+}
+
+.expanded-details h4 {
+    margin: 10px 0 5px;
+    color: #00bfff;
+}
+
+.expanded-details p {
+    margin: 5px 0;
+    color: #ddd;
+}
+
+.city-header {
+    font-size: 1.5rem;
+    text-align: center;
+    margin-bottom: 20px;
+}
+
+    </style>
+</head>
+<body>
+
+    <!-- Swiper Container -->
+    <div class="swiper-container">
+        <div class="swiper-wrapper">
+            <!-- First Container: Iloilo City Weather -->
+            <div class="swiper-slide">
+                <div class="container" id="container1">
+                    <h1>Iloilo City, Philippines</h1>
+                    <div id="cityForecast">
+                        <p id="cityWeather">Loading current weather...</p>
+                    </div>
+                    <div id="forecast">
+                        <h2>4-Day Forecast</h2>
+                        <div class="forecast-cards"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Second Container: Search Bar for Any City -->
+            <div class="swiper-slide">
+                <div class="container" id="container2">
+                    <h1>Weather App</h1>
+                    <form id="searchForm">
+                        <input type="text" class="search-bar" name="city" placeholder="Enter your city" required>
+                        <button type="submit">Search</button>
+                    </form>
+                    <div id="currentWeather2"></div>
+                    <div id="forecast2">
+                        <h2>4-Day Forecast</h2>
+                        <div class="forecast-cards"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="swiper-button swiper-button-left">‹</div>
+        <div class="swiper-button swiper-button-right">›</div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Swiper/4.3.5/js/swiper.min.js"></script>
+    <script>
+        const swiper = new Swiper('.swiper-container', {
+            slidesPerView: 1,
+            spaceBetween: 0,
+        });
+
+        document.querySelector('.swiper-button-left').addEventListener('click', () => swiper.slidePrev());
+        document.querySelector('.swiper-button-right').addEventListener('click', () => swiper.slideNext());
+
+        async function fetchIloiloWeather() {
+            const city = "Iloilo City, Philippines";
+            const response = await fetch('/weather', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: new URLSearchParams({ city }),
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+                document.getElementById('cityWeather').innerHTML = `
+                    <p>Current Temperature: ${data.current.temp}°C</p>
+                    <p>Description: ${data.current.desc}</p>
+                    <p>Humidity: ${data.current.humidity}%</p>
+                    <p>Wind Speed: ${data.current.wind_speed} m/s</p>
+                `;
+
+                const forecastCards = document.querySelector('#forecast .forecast-cards');
+                forecastCards.innerHTML = '';
+
+                data.forecast.forEach((day) => {
+                    const card = document.createElement('div');
+                    card.classList.add('forecast-card');
+                    card.innerHTML = `
+                        <p><strong>${day.weekday}</strong> (${day.date})</p>
+                        <p>Day Temp: ${day.day_temp}°C</p>
+                        <p>Night Temp: ${day.night_temp}°C</p>
+                    `;
+                    forecastCards.appendChild(card);
+                });
+            } else {
+                alert("Error fetching weather data.");
+            }
+        }
+
+        fetchIloiloWeather();
+
+        async function handleSearch(formId, currentWeatherId, forecastId) {
+            const form = document.getElementById(formId);
+            const currentWeather = document.getElementById(currentWeatherId);
+            const forecastCards = document.querySelector(`#${forecastId} .forecast-cards`);
+
+            form.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const city = e.target.city.value;
+
+                const response = await fetch('/weather', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: new URLSearchParams({ city }),
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    currentWeather.innerHTML = `
+                        <h2>Current Weather</h2>
+                        <p>Temperature: ${data.current.temp || 'N/A'}°C</p>
+                        <p>Description: ${data.current.desc || 'N/A'}</p>
+                        <p>Humidity: ${data.current.humidity || 'N/A'}%</p>
+                        <p>Pressure: ${data.current.pressure || 'N/A'} hPa</p>
+                        <p>Wind Speed: ${data.current.wind_speed || 'N/A'} m/s</p>
+                    `;
+
+                    forecastCards.innerHTML = '';
+
+                    data.forecast.forEach((day) => {
+                        const card = document.createElement('div');
+                        card.classList.add('forecast-card');
+                        card.innerHTML = `
+                            <p><strong>${day.weekday || 'Unknown'}</strong> (${day.date || 'Unknown'})</p>
+                            <p>Day Temp: ${day.day_temp || 'N/A'}°C</p>
+                            <p>Night Temp: ${day.night_temp || 'N/A'}°C</p>
+                        `;
+                        forecastCards.appendChild(card);
+                    });
+                } else {
+                    alert("City not found.");
+                }
+            });
+        }
+
+        handleSearch('searchForm', 'currentWeather2', 'forecast2');
+    </script>
+</body>
+</html>
