@@ -48,7 +48,10 @@ async def _send_paginated_embeds(interaction: discord.Interaction, embeds: list)
     view.add_item(prev)
     view.add_item(next_b)
     embeds[current_page].set_footer(text=f"Page {current_page + 1}/{len(embeds)}")
-    await interaction.response.send_message(embed=embeds[current_page], view=view)
+    if interaction.response.is_done():
+        await interaction.followup.send(embed=embeds[current_page], view=view)
+    else:
+        await interaction.response.send_message(embed=embeds[current_page], view=view)
 
     async def cb(interaction: discord.Interaction):
         nonlocal current_page

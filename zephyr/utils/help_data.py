@@ -99,7 +99,7 @@ HELP_CATEGORIES = [
         title="Weather",
         commands=[
             HelpEntry("/weather <city>", "Current weather, air quality & precipitation"),
-            HelpEntry("/forecast <city>", "3-day weather and air quality forecast"),
+            HelpEntry("/forecast <city>", "Clean 3-day forecast with temperature and feels-like"),
             HelpEntry("/temperature <city>", "Current temperature"),
             HelpEntry("/description <city>", "Weather description"),
             HelpEntry("/humidity <city>", "Humidity"),
@@ -109,7 +109,7 @@ HELP_CATEGORIES = [
             HelpEntry("/precipitation <city>", "Precipitation details"),
             HelpEntry("/typhoon", "Latest typhoon alert for Iloilo City"),
             HelpEntry("/search <city>", "Search current weather & air quality"),
-            HelpEntry("/class", "Class suspension forecast from heat index"),
+            HelpEntry("/class", "Class suspension forecast from feels-like temperature"),
         ],
     ),
     HelpCategory(

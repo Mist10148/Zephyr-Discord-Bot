@@ -23,8 +23,17 @@ from zephyr.config import (
     ILOILO_COORDS,
     WEB_APP_URL,
 )
-from zephyr.utils.weather_utils import get_tcws_description, _format_datetime_pht
+from zephyr.utils.weather_utils import (
+    get_tcws_description,
+    _format_datetime_pht,
+    _format_date_label,
+    wmo_description,
+    geocode_city,
+    get_openmeteo_daily_forecast,
+    get_openmeteo_current,
+)
 from zephyr.utils.help_data import categories_by_key, _send_categorized_help
+from zephyr.utils.pagination import _send_paginated_embeds
 
 
 # ---------------------------------------------------------------------------
@@ -367,49 +376,144 @@ PREFIX_COMMANDS = [
 # ---------------------------------------------------------------------------
 # Class Suspension Helpers
 # ---------------------------------------------------------------------------
-def class_suspension(heat_index):
-    if heat_index >= 50:
-        return "🔴 **Class will be suspended certainly!**", "**Excessive Heat** 🔴"
-    elif heat_index >= 41:
-        return "🟠 **High possibility**", "**Very Hot** 🟠"
-    elif heat_index >= 38:
-        return "🟡 **Low possibility**", "**Hot Conditions** 🟡"
-    elif heat_index >= 15:
-        return "✅ **Classes will certainly resume**", "**Pleasant Weather** 🟢"
+def class_suspension(feels_like: float):
+    """Return a (decision, description) tuple based on the feels-like temperature."""
+    if feels_like >= 50:
+        return "🔴 **Class will certainly be suspended!**", "Excessive Heat"
+    elif feels_like >= 41:
+        return "🟠 **High possibility of suspension**", "Very Hot"
+    elif feels_like >= 38:
+        return "🟡 **Low possibility of suspension**", "Hot Conditions"
+    elif feels_like >= 15:
+        return "✅ **Classes will likely resume**", "Pleasant Weather"
     else:
-        return "🤔 **Do those temperature readings even exist?**", "**Unusual Temperature** ⚠"
+        return "🤔 **Unusual temperature reading**", "Unusual Weather"
 
 
-def get_current_weather():
-    response = requests.get(f"{CURRENT_URL}?lat={ILOILO_COORDS['lat']}&lon={ILOILO_COORDS['lon']}&appid={API_KEY}&units=metric")
-    if response.status_code != 200:
-        return None
-    data = response.json()
-    return {"temp": data["main"]["temp"], "humidity": data["main"]["humidity"], "heat_index": data["main"]["feels_like"]}
+def _class_color(feels_like: float) -> discord.Color:
+    if feels_like >= 50:
+        return discord.Color.red()
+    elif feels_like >= 41:
+        return discord.Color.orange()
+    elif feels_like >= 38:
+        return discord.Color.gold()
+    return discord.Color.green()
 
 
-def get_2pm_forecasts():
-    response = requests.get(f"{FORECAST_URL}?lat={ILOILO_COORDS['lat']}&lon={ILOILO_COORDS['lon']}&appid={API_KEY}&units=metric")
-    if response.status_code != 200:
-        return None
-    data = response.json()
+def _get_class_weather_data():
+    """Fetch current and daily forecast data for Iloilo from Open-Meteo."""
+    lat, lon = ILOILO_COORDS["lat"], ILOILO_COORDS["lon"]
+    current = get_openmeteo_current(lat, lon)
+    daily = get_openmeteo_daily_forecast(lat, lon, days=3)
+    return current, daily
+
+
+def _build_class_embed(title: str, data: dict) -> Embed:
+    """Build a clean class-suspension embed for one day."""
+    feels_like = data["feels_like"]
+    suspension, desc = class_suspension(feels_like)
+    condition = data.get("condition") or wmo_description(data.get("weather_code"))
+    embed = Embed(
+        title=f"📅 Class Suspension Forecast: {title}",
+        description=f"**{condition}**",
+        color=_class_color(feels_like),
+    )
+    embed.add_field(name="🌡 Temperature", value=f"{data['temp']}°C", inline=True)
+    embed.add_field(name="🥵 Feels Like", value=f"{feels_like}°C", inline=True)
+    if data.get("humidity") is not None:
+        embed.add_field(name="💧 Humidity", value=f"{data['humidity']}%", inline=True)
+    if data.get("precipitation_probability") is not None:
+        embed.add_field(name="🌧 Rain Chance", value=f"{data['precipitation_probability']}%", inline=True)
+    if data.get("wind_speed") is not None:
+        embed.add_field(name="💨 Wind", value=f"{data['wind_speed']} km/h", inline=True)
+    embed.add_field(name="📢 Decision", value=f"{suspension}\n{desc}", inline=False)
+    return embed
+
+
+# ---------------------------------------------------------------------------
+# OpenWeatherMap fallback helpers
+# ---------------------------------------------------------------------------
+def _owm_daily_forecast(city: str = None, lat: float = None, lon: float = None, days: int = 3) -> list[dict]:
+    """Aggregate OpenWeatherMap 3-hour forecast into daily summaries.
+
+    Returns data in the same shape as Open-Meteo's daily forecast.
+    """
+    params = {"appid": API_KEY, "units": "metric"}
+    if city:
+        params["q"] = city
+    else:
+        params["lat"] = lat
+        params["lon"] = lon
+
+    resp = requests.get(FORECAST_URL, params=params, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()
+    if str(data.get("cod")) != "200":
+        raise RuntimeError(data.get("message", "OpenWeatherMap forecast unavailable"))
+
+    grouped: dict[str, dict] = {}
+    for item in data.get("list", []):
+        date = datetime.utcfromtimestamp(item["dt"]).strftime("%Y-%m-%d")
+        main = item.get("main", {})
+        wind = item.get("wind", {})
+        pop = item.get("pop") or 0
+        weather_list = item.get("weather", [])
+        description = weather_list[0].get("main", "Unknown") if weather_list else "Unknown"
+
+        entry = grouped.setdefault(date, {
+            "temps": [],
+            "feels": [],
+            "winds": [],
+            "pops": [],
+            "description": description,
+        })
+        entry["temps"].append(main.get("temp"))
+        entry["feels"].append(main.get("feels_like"))
+        entry["winds"].append((wind.get("speed") or 0) * 3.6)
+        entry["pops"].append(pop)
+
     today = datetime.utcnow().date()
-    next_days = [today + timedelta(days=1), today + timedelta(days=2)]
-    forecasts = {}
-    for forecast_item in data["list"]:
-        timestamp = datetime.utcfromtimestamp(forecast_item["dt"])
-        date = timestamp.date()
-        hour = timestamp.hour
-        if date in next_days and hour == 6:
-            forecasts[date] = {
-                "temp": forecast_item["main"]["temp"],
-                "humidity": forecast_item["main"]["humidity"],
-                "heat_index": forecast_item["main"]["feels_like"]
-            }
-    return [
-        ("Next day", forecasts.get(next_days[0], {"temp": 0, "humidity": 0, "heat_index": 0})),
-        ("Next two days", forecasts.get(next_days[1], {"temp": 0, "humidity": 0, "heat_index": 0}))
-    ]
+    result = []
+    for i in range(days):
+        date = (today + timedelta(days=i)).strftime("%Y-%m-%d")
+        g = grouped.get(date)
+        if not g or not g["temps"]:
+            continue
+        result.append({
+            "date": date,
+            "weather_code": None,
+            "description": g["description"],
+            "temp_max": max(t for t in g["temps"] if t is not None),
+            "temp_min": min(t for t in g["temps"] if t is not None),
+            "feels_like_max": max(t for t in g["feels"] if t is not None),
+            "feels_like_min": min(t for t in g["feels"] if t is not None),
+            "precipitation_probability": int(max(g["pops"]) * 100),
+            "wind_speed_max": max(g["winds"]),
+        })
+    return result
+
+
+def _owm_current(lat: float, lon: float) -> dict:
+    """Fetch current conditions from OpenWeatherMap for the given coordinates."""
+    resp = requests.get(
+        CURRENT_URL,
+        params={"lat": lat, "lon": lon, "appid": API_KEY, "units": "metric"},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    if str(data.get("cod")) != "200":
+        raise RuntimeError(data.get("message", "OpenWeatherMap current weather unavailable"))
+
+    weather = data.get("weather", [{}])[0]
+    return {
+        "temp": data["main"]["temp"],
+        "humidity": data["main"]["humidity"],
+        "apparent_temp": data["main"]["feels_like"],
+        "weather_code": None,
+        "condition": weather.get("main", "Unknown"),
+        "wind_speed": (data.get("wind", {}).get("speed") or 0) * 3.6,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -572,66 +676,60 @@ class WeatherCog(commands.Cog):
             embed = Embed(title=f"City {city} not found.", color=discord.Color.red())
         await interaction.response.send_message(embed=embed)
 
-    @app_commands.command(name="forecast", description="Get a 3-day weather and air quality forecast for a city.")
+    @app_commands.command(name="forecast", description="Get a clean 3-day forecast for a city.")
     async def slash_forecast(self, interaction: discord.Interaction, city: str = "Iloilo"):
-        data = requests.get(f"{FORECAST_URL}?appid={API_KEY}&q={city}&units=metric").json()
-        if data.get("cod") == "200":
-            lat, lon = data['city']['coord']['lat'], data['city']['coord']['lon']
-            aqi_data = requests.get(f"http://api.openweathermap.org/data/2.5/air_pollution/forecast?lat={lat}&lon={lon}&appid={API_KEY}").json()
-            forecasts = data['list'][:24][::2]
-            await self._send_forecast_pagination(interaction, city, forecasts, aqi_data.get('list', []))
-        else:
-            await interaction.response.send_message(embed=Embed(title=f"City {city} not found.", color=0xFF0000))
+        await interaction.response.defer()
 
-    async def _send_forecast_pagination(self, interaction, city, forecasts, aqi_list):
-        class FView(View):
-            def __init__(self, items, aqi_items):
-                super().__init__(timeout=120)
-                self.items = items
-                self.aqi_items = aqi_items
-                self.index = 0
-                self.prev = Button(label="◀ Previous", style=discord.ButtonStyle.primary, disabled=True)
-                self.next = Button(label="Next ▶", style=discord.ButtonStyle.primary, disabled=len(items) <= 1)
-                self.prev.callback = self.prev_cb
-                self.next.callback = self.next_cb
-                self.add_item(self.prev)
-                self.add_item(self.next)
+        days = []
+        fallback = False
 
-            def make_embed(self):
-                f = self.items[self.index]
-                date = _format_datetime_pht(f['dt'])
-                temp = f['main'].get('temp', 'N/A')
-                desc = f['weather'][0].get('description', 'N/A')
-                hum = f['main'].get('humidity', 'N/A')
-                wind = f['wind'].get('speed', 'N/A')
-                closest = min(self.aqi_items, key=lambda x: abs(x['dt'] - f['dt']), default=None) if self.aqi_items else None
-                aqi = closest['main']['aqi'] if closest else None
-                aqi_desc = {1: "Good", 2: "Fair", 3: "Moderate", 4: "Poor", 5: "Very Poor"}.get(aqi, "Unknown")
-                embed = Embed(title=f"Weather Forecast for {city}", color=0x1E90FF)
-                embed.add_field(name=f"Forecast for {date}:", value=(
-                    f"**Temperature:** {temp}°C\n"
-                    f"**Description:** {desc.capitalize()}\n"
-                    f"**Humidity:** {hum}%\n"
-                    f"**Wind Speed:** {wind} m/s\n"
-                    f"**Air Quality:** {aqi_desc}"
-                ), inline=False)
-                embed.set_footer(text=f"Page {self.index + 1}/{len(self.items)}")
-                return embed
+        # Try Open-Meteo first
+        try:
+            coords = geocode_city(city)
+            if coords:
+                days = get_openmeteo_daily_forecast(*coords, days=3)
+        except Exception as e:
+            print(f"[Forecast Open-Meteo Error] {e}")
 
-            async def prev_cb(self, interaction: discord.Interaction):
-                self.index -= 1
-                self.prev.disabled = self.index == 0
-                self.next.disabled = self.index == len(self.items) - 1
-                await interaction.response.edit_message(embed=self.make_embed(), view=self)
+        # Fall back to OpenWeatherMap if Open-Meteo failed or returned nothing
+        if not days:
+            try:
+                days = _owm_daily_forecast(city=city, days=3)
+                fallback = True
+            except Exception as e:
+                await interaction.followup.send(
+                    embed=Embed(title="❌ Forecast unavailable", description=str(e), color=discord.Color.red())
+                )
+                return
 
-            async def next_cb(self, interaction: discord.Interaction):
-                self.index += 1
-                self.prev.disabled = self.index == 0
-                self.next.disabled = self.index == len(self.items) - 1
-                await interaction.response.edit_message(embed=self.make_embed(), view=self)
+        if not days:
+            await interaction.followup.send(
+                embed=Embed(title="❌ Forecast unavailable", description="No forecast data returned.", color=discord.Color.red())
+            )
+            return
 
-        view = FView(forecasts, aqi_list[:len(forecasts)])
-        await interaction.response.send_message(embed=view.make_embed(), view=view)
+        embeds = [self._build_forecast_embed(city, day) for day in days]
+        if fallback and embeds:
+            note = "\n\n*Using OpenWeatherMap fallback data*"
+            embeds[0].description = (embeds[0].description or "") + note
+        await _send_paginated_embeds(interaction, embeds)
+
+    @staticmethod
+    def _build_forecast_embed(city: str, day: dict) -> Embed:
+        """Build a clean, laid-out embed for one forecast day."""
+        condition = day.get("description") or wmo_description(day.get("weather_code"))
+        embed = Embed(
+            title=f"🌤️ Forecast for {city}",
+            description=f"**{_format_date_label(day['date'])}**\n{condition}",
+            color=discord.Color.blue(),
+        )
+        embed.add_field(name="🌡 High", value=f"{day['temp_max']}°C", inline=True)
+        embed.add_field(name="🌡 Low", value=f"{day['temp_min']}°C", inline=True)
+        embed.add_field(name="🥵 Feels Like High", value=f"{day['feels_like_max']}°C", inline=True)
+        embed.add_field(name="🥶 Feels Like Low", value=f"{day['feels_like_min']}°C", inline=True)
+        embed.add_field(name="🌧 Rain Chance", value=f"{day['precipitation_probability']}%", inline=True)
+        embed.add_field(name="💨 Max Wind", value=f"{day['wind_speed_max']} km/h", inline=True)
+        return embed
 
     @app_commands.command(name="search", description="Search for current weather and air quality in a city.")
     async def slash_search(self, interaction: discord.Interaction, city: str = "Iloilo"):
@@ -662,15 +760,70 @@ class WeatherCog(commands.Cog):
         embed.add_field(name="Latency", value=f"{round(interaction.client.latency * 1000)}ms")
         await interaction.response.send_message(embed=embed)
 
-    @app_commands.command(name="class", description="Check the class suspension forecast based on the heat index.")
+    @app_commands.command(name="class", description="Check the class suspension forecast based on the feels-like temperature.")
     async def class_command(self, interaction: discord.Interaction):
-        current = get_current_weather()
-        forecast_data = get_2pm_forecasts()
-        if not current or not forecast_data:
-            await interaction.response.send_message("⚠ Error fetching weather data. Try again later.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+
+        current = None
+        daily = []
+        fallback = False
+
+        # Try Open-Meteo first
+        try:
+            current, daily = _get_class_weather_data()
+        except Exception as e:
+            print(f"[Class Open-Meteo Error] {e}")
+
+        # Fall back to OpenWeatherMap for Iloilo
+        if not current or not daily or len(daily) < 3:
+            try:
+                lat, lon = ILOILO_COORDS["lat"], ILOILO_COORDS["lon"]
+                current = _owm_current(lat, lon)
+                daily = _owm_daily_forecast(lat=lat, lon=lon, days=3)
+                fallback = True
+            except Exception as e:
+                await interaction.followup.send(
+                    embed=Embed(title="⚠ Error fetching weather data", description=str(e), color=discord.Color.red()),
+                    ephemeral=True,
+                )
+                return
+
+        if not current or not daily or len(daily) < 3:
+            await interaction.followup.send(
+                embed=Embed(title="⚠ Error fetching weather data", description="Try again later.", color=discord.Color.red()),
+                ephemeral=True,
+            )
             return
 
-        forecasts = [("Today", current)] + forecast_data
+        forecasts = [
+            ("Today", {
+                "temp": current["temp"],
+                "feels_like": current["apparent_temp"],
+                "humidity": current["humidity"],
+                "precipitation_probability": None,
+                "wind_speed": current["wind_speed"],
+                "weather_code": current.get("weather_code"),
+                "condition": current.get("condition"),
+            }),
+            ("Next day", {
+                "temp": daily[1]["temp_max"],
+                "feels_like": daily[1]["feels_like_max"],
+                "humidity": None,
+                "precipitation_probability": daily[1]["precipitation_probability"],
+                "wind_speed": daily[1]["wind_speed_max"],
+                "weather_code": daily[1].get("weather_code"),
+                "condition": daily[1].get("description"),
+            }),
+            ("Next two days", {
+                "temp": daily[2]["temp_max"],
+                "feels_like": daily[2]["feels_like_max"],
+                "humidity": None,
+                "precipitation_probability": daily[2]["precipitation_probability"],
+                "wind_speed": daily[2]["wind_speed_max"],
+                "weather_code": daily[2].get("weather_code"),
+                "condition": daily[2].get("description"),
+            }),
+        ]
         index = 0
 
         class CView(View):
@@ -694,25 +847,17 @@ class WeatherCog(commands.Cog):
                 await update_embed(interaction, self.index)
 
         def make_embed(idx):
-            title, weather_data = forecasts[idx]
-            temp, humidity_val, heat = weather_data["temp"], weather_data["humidity"], weather_data["heat_index"]
-            suspension, desc = class_suspension(heat)
-            return Embed(
-                title=f"📅 Class Suspension Forecast: {title}",
-                description=(
-                    f"🌡 **Temperature:** {temp}°C\n"
-                    f"💧 **Humidity:** {humidity_val}%\n"
-                    f"🔥 **Heat Index:** {heat}°C\n\n"
-                    f"{desc}\n📢 {suspension}"
-                ),
-                color=discord.Color.blue()
-            )
+            title, data = forecasts[idx]
+            embed = _build_class_embed(title, data)
+            if fallback and idx == 0:
+                embed.description = (embed.description or "") + "\n\n*Using OpenWeatherMap fallback data*"
+            return embed
 
         async def update_embed(interaction, idx):
             view = CView(idx)
             await interaction.response.edit_message(embed=make_embed(idx), view=view)
 
-        await interaction.response.send_message(embed=make_embed(index), view=CView(index))
+        await interaction.followup.send(embed=make_embed(index), view=CView(index), ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
