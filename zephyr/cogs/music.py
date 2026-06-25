@@ -12,6 +12,7 @@ import functools
 import itertools
 import traceback
 import time
+import re
 from collections import deque
 
 import aiohttp
@@ -28,6 +29,28 @@ from spotipy.oauth2 import SpotifyClientCredentials
 from zephyr.config import SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET
 from zephyr.core.ffmpeg import FFMPEG_PATH
 from zephyr.utils.time_utils import _parse_user_time, _format_timestamp
+
+
+# ---------------------------------------------------------------------------
+# URL / query helpers
+# ---------------------------------------------------------------------------
+def _sanitize_search(search: str) -> str:
+    """Strip Discord markdown brackets and whitespace from a user query."""
+    return search.strip().strip("<>").strip()
+
+
+_URL_RE = re.compile(r"^https?://\S+$", re.IGNORECASE)
+
+
+def _is_url(search: str) -> bool:
+    return bool(_URL_RE.match(_sanitize_search(search)))
+
+
+def _is_spotify_url(search: str) -> bool:
+    s = _sanitize_search(search).lower()
+    if s.startswith("spotify:"):
+        return True
+    return ("spotify.com" in s or "spotify.link" in s) and _is_url(s)
 
 
 class VoiceError(Exception):
@@ -87,15 +110,47 @@ class YTDLSource(discord.PCMVolumeTransformer):
     async def create_source(cls, ctx: commands.Context, search: str, *, loop: asyncio.AbstractEventLoop = None,
                             ffmpeg_options: dict = None, max_entries: int = 200):
         loop = loop or asyncio.get_event_loop()
+        search = _sanitize_search(search)
+        as_url = _is_url(search)
+
+        def _entry_url(entry: dict) -> str | None:
+            """Best-effort URL from a flat yt-dlp entry."""
+            if not entry:
+                return None
+            url = entry.get('url') or entry.get('webpage_url')
+            if not url and entry.get('id'):
+                url = f"https://www.youtube.com/watch?v={entry['id']}"
+            return url
+
         try:
             partial = functools.partial(cls.ytdl.extract_info, search, download=False, process=False)
             data = await loop.run_in_executor(None, partial)
             if data is None:
                 raise YTDLError(f'Could not find anything that matches `{search}`')
 
+            # Plain text search -> only return the top result instead of
+            # enqueueing every search result.
+            if not as_url:
+                entries = data.get('entries', [])
+                if not entries:
+                    raise YTDLError(f'Could not find anything that matches `{search}`')
+                top_url = _entry_url(entries[0])
+                if not top_url:
+                    raise YTDLError(f'Could not find anything that matches `{search}`')
+                partial = functools.partial(cls.ytdl.extract_info, top_url, download=False)
+                info = await loop.run_in_executor(None, partial)
+                if info is None or 'url' not in info:
+                    raise YTDLError(f'Could not fetch `{top_url}`')
+                return cls(ctx,
+                           discord.FFmpegPCMAudio(info['url'], executable=FFMPEG_PATH,
+                                                  **(ffmpeg_options or cls.DEFAULT_FFMPEG_OPTIONS)),
+                           data=info)
+
             if 'entries' not in data:
                 process_info = data
                 webpage_url = process_info.get('webpage_url', process_info.get('url'))
+                if not webpage_url:
+                    raise YTDLError(f'Could not fetch `{search}`')
                 partial = functools.partial(cls.ytdl.extract_info, webpage_url, download=False)
                 processed_info = await loop.run_in_executor(None, partial)
                 if processed_info is None:
@@ -117,14 +172,16 @@ class YTDLSource(discord.PCMVolumeTransformer):
                 entries = data['entries'][:max_entries] if max_entries else data['entries']
                 sources = []
                 for entry in entries:
-                    if entry and entry.get('url'):
-                        partial = functools.partial(cls.ytdl.extract_info, entry['url'], download=False)
-                        processed_info = await loop.run_in_executor(None, partial)
-                        if processed_info and 'url' in processed_info:
-                            sources.append(cls(ctx,
-                                               discord.FFmpegPCMAudio(processed_info['url'], executable=FFMPEG_PATH,
-                                                                      **(ffmpeg_options or cls.DEFAULT_FFMPEG_OPTIONS)),
-                                               data=processed_info))
+                    entry_url = _entry_url(entry)
+                    if not entry_url:
+                        continue
+                    partial = functools.partial(cls.ytdl.extract_info, entry_url, download=False)
+                    processed_info = await loop.run_in_executor(None, partial)
+                    if processed_info and 'url' in processed_info:
+                        sources.append(cls(ctx,
+                                           discord.FFmpegPCMAudio(processed_info['url'], executable=FFMPEG_PATH,
+                                                                  **(ffmpeg_options or cls.DEFAULT_FFMPEG_OPTIONS)),
+                                           data=processed_info))
                 return sources
         except Exception as e:
             traceback.print_exc()
@@ -135,7 +192,17 @@ class YTDLSource(discord.PCMVolumeTransformer):
                              max_results: int = 10):
         """Return a list of YTDLSource entries for a search query (no FFmpeg source yet)."""
         loop = loop or asyncio.get_event_loop()
+        search = _sanitize_search(search)
         query = f"ytsearch{max_results}:{search}"
+
+        def _entry_url(entry: dict) -> str | None:
+            if not entry:
+                return None
+            url = entry.get('url') or entry.get('webpage_url')
+            if not url and entry.get('id'):
+                url = f"https://www.youtube.com/watch?v={entry['id']}"
+            return url
+
         try:
             partial = functools.partial(cls.ytdl.extract_info, query, download=False, process=False)
             data = await loop.run_in_executor(None, partial)
@@ -143,10 +210,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
                 return []
             entries = []
             for entry in data['entries']:
-                if not entry:
-                    continue
-                # Fully process each entry so we have metadata
-                url = entry.get('url') or entry.get('webpage_url')
+                url = _entry_url(entry)
                 if not url:
                     continue
                 partial = functools.partial(cls.ytdl.extract_info, url, download=False)
@@ -579,17 +643,17 @@ class MusicCog(commands.Cog):
     # ---------------- Playback Control ----------------
 
     @app_commands.command(name='play', description='Plays a song from YouTube or Spotify.')
-    @app_commands.describe(search="Song name, YouTube URL, or Spotify URL")
+    @app_commands.describe(search="Song name, YouTube/video URL, YouTube playlist URL, or Spotify track/playlist/album URL")
     async def play(self, interaction: discord.Interaction, search: str):
         await self._play_core(interaction, search, mode='normal')
 
     @app_commands.command(name='playskip', description='Adds a song and immediately skips to it.')
-    @app_commands.describe(search="Song name, YouTube URL, or Spotify URL")
+    @app_commands.describe(search="Song name, YouTube/video URL, YouTube playlist URL, or Spotify track/playlist/album URL")
     async def playskip(self, interaction: discord.Interaction, search: str):
         await self._play_core(interaction, search, mode='skip')
 
     @app_commands.command(name='playnext', description='Adds a song to the top of the queue.')
-    @app_commands.describe(search="Song name, YouTube URL, or Spotify URL")
+    @app_commands.describe(search="Song name, YouTube/video URL, YouTube playlist URL, or Spotify track/playlist/album URL")
     async def playnext(self, interaction: discord.Interaction, search: str):
         await self._play_core(interaction, search, mode='next')
 
@@ -626,8 +690,9 @@ class MusicCog(commands.Cog):
         songs = []
         try:
             ffmpeg_options = state.get_ffmpeg_options()
+            search = _sanitize_search(search)
 
-            if 'spotify.com' in search:
+            if _is_spotify_url(search):
                 track_ids = await self._get_spotify_tracks(search)
                 if not track_ids:
                     await reply(embed=discord.Embed(description='❌ Could not extract track information from the Spotify URL.', color=discord.Color.red()))
@@ -635,9 +700,10 @@ class MusicCog(commands.Cog):
 
                 for track_id in track_ids:
                     try:
-                        track_info = self.sp.track(track_id)
-                        track_name = f"{track_info['name']} by {track_info['artists'][0]['name']}"
-                        youtube_url = await self._search_youtube(track_name)
+                        track_info = await self.bot.loop.run_in_executor(
+                            None, functools.partial(self.sp.track, track_id)
+                        )
+                        youtube_url = await self._search_youtube(track_info)
                         if youtube_url:
                             source = await YTDLSource.create_source(ctx, youtube_url, loop=self.bot.loop, ffmpeg_options=ffmpeg_options, max_entries=1)
                             if isinstance(source, list):
@@ -1200,17 +1266,52 @@ class MusicCog(commands.Cog):
 
     # ---------------- Spotify Helpers ----------------
 
-    async def _get_spotify_tracks(self, url: str):
-        track_ids = []
+    @staticmethod
+    def _resolve_spotify_short_link(url: str) -> str:
+        """Follow spotify.link (or similar) redirects to the real open.spotify.com URL."""
         try:
-            if 'track' in url:
-                track_id = url.split('/')[-1].split('?')[0]
+            resp = requests.head(url, allow_redirects=True, timeout=10)
+            resolved = str(resp.url)
+            if 'spotify.com' in resolved or resolved.startswith('spotify:'):
+                return resolved
+        except Exception as e:
+            print(f"[Spotify Resolve Error] {e}")
+        return url
+
+    @staticmethod
+    def _parse_spotify_id(url: str, kind: str) -> str | None:
+        """Extract a Spotify ID from a web URL, URI, or short link."""
+        if url.startswith('spotify:'):
+            parts = url.split(':')
+            if len(parts) >= 3 and parts[1] == kind:
+                return parts[2].split('?')[0]
+            return None
+        # Web URL: https://open.spotify.com/<kind>/<id>?...
+        match = re.search(rf'/{kind}/([^/?#]+)', url)
+        return match.group(1) if match else None
+
+    async def _get_spotify_tracks(self, url: str):
+        url = _sanitize_search(url)
+        if 'spotify.link' in url:
+            url = await asyncio.get_event_loop().run_in_executor(None, functools.partial(self._resolve_spotify_short_link, url))
+
+        track_ids = []
+        loop = asyncio.get_event_loop()
+
+        try:
+            track_id = self._parse_spotify_id(url, 'track')
+            if track_id:
                 track_ids.append(track_id)
-            elif 'playlist' in url:
+                return track_ids
+
+            playlist_id = self._parse_spotify_id(url, 'playlist')
+            if playlist_id:
                 offset = 0
                 limit = 100
                 while True:
-                    results = self.sp.playlist_tracks(url, limit=limit, offset=offset)
+                    results = await loop.run_in_executor(
+                        None, functools.partial(self.sp.playlist_tracks, url, limit=limit, offset=offset)
+                    )
                     items = results.get('items', [])
                     if not items:
                         break
@@ -1223,11 +1324,16 @@ class MusicCog(commands.Cog):
                     offset += limit
                     if len(track_ids) >= 200:
                         break
-            elif 'album' in url:
+                return track_ids
+
+            album_id = self._parse_spotify_id(url, 'album')
+            if album_id:
                 offset = 0
                 limit = 50
                 while True:
-                    results = self.sp.album_tracks(url, limit=limit, offset=offset)
+                    results = await loop.run_in_executor(
+                        None, functools.partial(self.sp.album_tracks, url, limit=limit, offset=offset)
+                    )
                     items = results.get('items', [])
                     if not items:
                         break
@@ -1243,13 +1349,20 @@ class MusicCog(commands.Cog):
             print(f"[Spotify Error] {e}")
         return track_ids
 
-    async def _search_youtube(self, track_name: str):
+    async def _search_youtube(self, track_info: dict):
+        """Search YouTube for a Spotify track dict and return the best result URL."""
         try:
+            name = track_info.get('name', '')
+            artists = ' '.join(a.get('name', '') for a in track_info.get('artists', []))
+            query = f"ytsearch:{name} {artists}".strip()
             loop = asyncio.get_event_loop()
-            partial = functools.partial(YTDLSource.ytdl.extract_info, f"ytsearch:{track_name}", download=False, process=False)
+            partial = functools.partial(YTDLSource.ytdl.extract_info, query, download=False, process=False)
             data = await loop.run_in_executor(None, partial)
-            if data and 'entries' in data and len(data['entries']) > 0:
-                return data['entries'][0].get('url') or data['entries'][0].get('webpage_url')
+            if data and 'entries' in data and data['entries']:
+                entry = data['entries'][0]
+                return entry.get('url') or entry.get('webpage_url') or (
+                    f"https://www.youtube.com/watch?v={entry['id']}" if entry.get('id') else None
+                )
             elif data and 'url' in data:
                 return data['url']
         except Exception:
