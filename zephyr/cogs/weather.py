@@ -32,7 +32,6 @@ from zephyr.utils.weather_utils import (
     get_openmeteo_daily_forecast,
     get_openmeteo_current,
 )
-from zephyr.utils.help_data import categories_by_key, _send_categorized_help
 from zephyr.utils.pagination import _send_paginated_embeds
 
 
@@ -573,15 +572,6 @@ class WeatherCog(commands.Cog):
     async def slash_use(self, interaction: discord.Interaction):
         embed = Embed(title="Web Application Version", description=f"[Click here to access the app]({WEB_APP_URL})", color=0x0000FF)
         await interaction.response.send_message(embed=embed)
-
-    @app_commands.command(name="helpweather", description="Show a list of available weather commands.")
-    async def slash_helpweather(self, interaction: discord.Interaction):
-        await _send_categorized_help(
-            interaction,
-            categories_by_key("weather"),
-            title="Weather Help",
-            color=discord.Color.blue(),
-        )
 
     @app_commands.command(name="precipitation", description="Get precipitation details for a city.")
     async def slash_precipitation(self, interaction: discord.Interaction, city: str = "Iloilo"):
