@@ -24,7 +24,7 @@ from zephyr.config import (
     WEB_APP_URL,
 )
 from zephyr.utils.weather_utils import get_tcws_description, _format_datetime_pht
-from zephyr.utils.pagination import _send_paginated_help
+from zephyr.utils.help_data import categories_by_key, _send_categorized_help
 
 
 # ---------------------------------------------------------------------------
@@ -472,24 +472,12 @@ class WeatherCog(commands.Cog):
 
     @app_commands.command(name="helpweather", description="Show a list of available weather commands.")
     async def slash_helpweather(self, interaction: discord.Interaction):
-        pages = [
-            "**Weather Commands (Page 1/2):**\n"
-            "`/typhoon` - Latest typhoon alert for Iloilo City.\n"
-            "`/weather <city>` - Current weather.\n"
-            "`/forecast <city>` - 3-day forecast.\n"
-            "`/temperature <city>` - Current temperature.\n"
-            "`/description <city>` - Weather description.\n"
-            "`/air <city>` - Air quality.",
-            "**Weather Commands (Page 2/2):**\n"
-            "`/humidity <city>` - Humidity.\n"
-            "`/pressure <city>` - Pressure.\n"
-            "`/windspeed <city>` - Wind speed.\n"
-            "`/precipitation <city>` - Precipitation.\n"
-            "`/search <query>` - Search weather info.\n"
-            "`/use` - Link to web app.\n"
-            "`/helpweather` - This help message."
-        ]
-        await _send_paginated_help(interaction, "Help - Weather Bot Commands", pages)
+        await _send_categorized_help(
+            interaction,
+            categories_by_key("weather"),
+            title="Weather Help",
+            color=discord.Color.blue(),
+        )
 
     @app_commands.command(name="precipitation", description="Get precipitation details for a city.")
     async def slash_precipitation(self, interaction: discord.Interaction, city: str = "Iloilo"):
