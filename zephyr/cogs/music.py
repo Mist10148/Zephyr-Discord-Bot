@@ -53,6 +53,21 @@ def _is_spotify_url(search: str) -> bool:
     return ("spotify.com" in s or "spotify.link" in s) and _is_url(s)
 
 
+def _is_youtube_url(search: str) -> bool:
+    s = _sanitize_search(search).lower()
+    return _is_url(search) and ("youtube.com" in s or "youtu.be" in s or "youtube" in s)
+
+
+def _is_youtube_playlist(search: str) -> bool:
+    s = _sanitize_search(search).lower()
+    return _is_youtube_url(search) and ("list=" in s or "/playlist" in s)
+
+
+def _is_audio_file_url(search: str) -> bool:
+    s = _sanitize_search(search).lower()
+    return _is_url(search) and s.endswith((".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac", ".opus", ".wma"))
+
+
 class VoiceError(Exception):
     pass
 
@@ -112,6 +127,10 @@ class YTDLSource(discord.PCMVolumeTransformer):
         loop = loop or asyncio.get_event_loop()
         search = _sanitize_search(search)
         as_url = _is_url(search)
+        # Explicitly route plain-text queries through YouTube search. Recent
+        # yt-dlp/YouTube changes make ``default_search: 'auto'`` unreliable
+        # and can return a generic extractor with no entries.
+        query = search if as_url else f"ytsearch10:{search}"
 
         def _entry_url(entry: dict) -> str | None:
             """Best-effort URL from a flat yt-dlp entry."""
@@ -119,11 +138,21 @@ class YTDLSource(discord.PCMVolumeTransformer):
                 return None
             url = entry.get('url') or entry.get('webpage_url')
             if not url and entry.get('id'):
-                url = f"https://www.youtube.com/watch?v={entry['id']}"
+                # Use the extractor's canonical URL when possible.
+                extractor = entry.get('extractor_key', 'youtube')
+                if extractor.startswith('Youtube'):
+                    url = f"https://www.youtube.com/watch?v={entry['id']}"
+                else:
+                    url = f"https://www.youtube.com/watch?v={entry['id']}"
             return url
 
+        async def _extract_one(url: str):
+            """Extract a single stream URL with a bounded timeout."""
+            partial = functools.partial(cls.ytdl.extract_info, url, download=False)
+            return await asyncio.wait_for(loop.run_in_executor(None, partial), timeout=15)
+
         try:
-            partial = functools.partial(cls.ytdl.extract_info, search, download=False, process=False)
+            partial = functools.partial(cls.ytdl.extract_info, query, download=False, process=False)
             data = await loop.run_in_executor(None, partial)
             if data is None:
                 raise YTDLError(f'Could not find anything that matches `{search}`')
@@ -131,14 +160,13 @@ class YTDLSource(discord.PCMVolumeTransformer):
             # Plain text search -> only return the top result instead of
             # enqueueing every search result.
             if not as_url:
-                entries = data.get('entries', [])
+                entries = list(data.get('entries', []))
                 if not entries:
                     raise YTDLError(f'Could not find anything that matches `{search}`')
                 top_url = _entry_url(entries[0])
                 if not top_url:
                     raise YTDLError(f'Could not find anything that matches `{search}`')
-                partial = functools.partial(cls.ytdl.extract_info, top_url, download=False)
-                info = await loop.run_in_executor(None, partial)
+                info = await _extract_one(top_url)
                 if info is None or 'url' not in info:
                     raise YTDLError(f'Could not fetch `{top_url}`')
                 return cls(ctx,
@@ -146,46 +174,75 @@ class YTDLSource(discord.PCMVolumeTransformer):
                                                   **(ffmpeg_options or cls.DEFAULT_FFMPEG_OPTIONS)),
                            data=info)
 
+            # Single URL that resolves directly (video, audio file, etc.)
             if 'entries' not in data:
-                process_info = data
-                webpage_url = process_info.get('webpage_url', process_info.get('url'))
+                webpage_url = data.get('webpage_url', data.get('url'))
                 if not webpage_url:
                     raise YTDLError(f'Could not fetch `{search}`')
-                partial = functools.partial(cls.ytdl.extract_info, webpage_url, download=False)
-                processed_info = await loop.run_in_executor(None, partial)
+                processed_info = await _extract_one(webpage_url)
                 if processed_info is None:
                     raise YTDLError(f'Could not fetch `{webpage_url}`')
                 if 'entries' in processed_info:
-                    info = None
-                    while info is None:
-                        try:
-                            info = processed_info['entries'].pop(0)
-                        except IndexError:
-                            raise YTDLError(f'Couldn\'t retrieve any matches for `{webpage_url}`')
-                else:
-                    info = processed_info
+                    # URL looked like a single item but yt-dlp returned a playlist anyway.
+                    entries = list(processed_info['entries'])[:max_entries] if max_entries else list(processed_info['entries'])
+                    partial = functools.partial(cls._build_sources_from_entries, ctx, entries, ffmpeg_options)
+                    return await loop.run_in_executor(None, partial)
                 return cls(ctx,
-                           discord.FFmpegPCMAudio(info['url'], executable=FFMPEG_PATH,
+                           discord.FFmpegPCMAudio(processed_info['url'], executable=FFMPEG_PATH,
                                                   **(ffmpeg_options or cls.DEFAULT_FFMPEG_OPTIONS)),
-                           data=info)
-            else:
-                entries = data['entries'][:max_entries] if max_entries else data['entries']
-                sources = []
-                for entry in entries:
-                    entry_url = _entry_url(entry)
-                    if not entry_url:
-                        continue
-                    partial = functools.partial(cls.ytdl.extract_info, entry_url, download=False)
-                    processed_info = await loop.run_in_executor(None, partial)
-                    if processed_info and 'url' in processed_info:
-                        sources.append(cls(ctx,
-                                           discord.FFmpegPCMAudio(processed_info['url'], executable=FFMPEG_PATH,
-                                                                  **(ffmpeg_options or cls.DEFAULT_FFMPEG_OPTIONS)),
-                                           data=processed_info))
-                return sources
+                           data=processed_info)
+
+            # Playlist / search result with multiple entries
+            entries = list(data['entries'])[:max_entries] if max_entries else list(data['entries'])
+            partial = functools.partial(cls._build_sources_from_entries, ctx, entries, ffmpeg_options)
+            return await loop.run_in_executor(None, partial)
+
+        except asyncio.TimeoutError:
+            raise YTDLError(f'Request timed out while processing `{search}`. Try a shorter query or playlist.')
+        except YTDLError:
+            raise
         except Exception as e:
             traceback.print_exc()
             raise YTDLError(f"Failed to process `{search}`: {e}")
+
+    @classmethod
+    def _build_sources_from_entries(cls, ctx: commands.Context, entries: list, ffmpeg_options: dict = None):
+        """Build YTDLSource objects from a list of flat entries, skipping failures."""
+        sources = []
+        skipped = 0
+
+        def _entry_url(entry: dict) -> str | None:
+            if not entry:
+                return None
+            url = entry.get('url') or entry.get('webpage_url')
+            if not url and entry.get('id'):
+                url = f"https://www.youtube.com/watch?v={entry['id']}"
+            return url
+
+        for entry in entries:
+            entry_url = _entry_url(entry)
+            if not entry_url:
+                skipped += 1
+                continue
+            try:
+                processed_info = cls.ytdl.extract_info(entry_url, download=False)
+            except Exception as e:
+                print(f"[Playlist Skip] {entry_url}: {e}")
+                skipped += 1
+                continue
+            if processed_info and 'url' in processed_info:
+                sources.append(cls(ctx,
+                                   discord.FFmpegPCMAudio(processed_info['url'], executable=FFMPEG_PATH,
+                                                          **(ffmpeg_options or cls.DEFAULT_FFMPEG_OPTIONS)),
+                                   data=processed_info))
+            else:
+                skipped += 1
+
+        if not sources:
+            raise YTDLError('Could not resolve any tracks from the playlist. All entries were unavailable or unsupported.')
+        if skipped:
+            print(f"[Playlist] Added {len(sources)} tracks, skipped {skipped}.")
+        return sources
 
     @classmethod
     async def search_sources(cls, ctx: commands.Context, search: str, *, loop: asyncio.AbstractEventLoop = None,
@@ -684,21 +741,31 @@ class MusicCog(commands.Cog):
 
         state.start_player()
 
-        async def reply(content=None, embed=None):
-            await interaction.followup.send(content=content, embed=embed)
+        async def _edit_status(description: str):
+            embed = discord.Embed(description=description, color=discord.Color.blurple())
+            try:
+                await interaction.edit_original_response(embed=embed)
+            except Exception:
+                # Fallback if the message has not been sent yet or is unavailable.
+                await interaction.followup.send(embed=embed)
 
         songs = []
         try:
             ffmpeg_options = state.get_ffmpeg_options()
             search = _sanitize_search(search)
+            is_playlist_input = _is_youtube_playlist(search) or (_is_spotify_url(search) and not _parse_spotify_id(search, 'track'))
 
             if _is_spotify_url(search):
                 track_ids = await self._get_spotify_tracks(search)
                 if not track_ids:
-                    await reply(embed=discord.Embed(description='❌ Could not extract track information from the Spotify URL.', color=discord.Color.red()))
+                    await _edit_status('❌ Could not extract track information from the Spotify URL.')
                     return
 
-                for track_id in track_ids:
+                if len(track_ids) > 1:
+                    await _edit_status(f'🔎 Resolving **{len(track_ids)}** Spotify tracks...')
+
+                last_update = time.time()
+                for i, track_id in enumerate(track_ids):
                     try:
                         track_info = await self.bot.loop.run_in_executor(
                             None, functools.partial(self.sp.track, track_id)
@@ -714,45 +781,52 @@ class MusicCog(commands.Cog):
                         print(f"[Spotify Track Error] {e}")
                         continue
 
+                    # Throttle progress edits to once per second.
+                    if len(track_ids) > 1 and time.time() - last_update >= 1:
+                        await _edit_status(f'🔎 Resolved **{len(songs)} / {len(track_ids)}** Spotify tracks...')
+                        last_update = time.time()
+
                 if not songs:
-                    await reply(embed=discord.Embed(description='❌ No tracks could be processed from Spotify.', color=discord.Color.red()))
+                    await _edit_status('❌ No tracks could be processed from Spotify.')
                     return
             else:
+                if is_playlist_input:
+                    await _edit_status('🔎 Resolving playlist, this may take a moment...')
                 sources = await YTDLSource.create_source(ctx, search, loop=self.bot.loop, ffmpeg_options=ffmpeg_options)
                 if not isinstance(sources, list):
                     sources = [sources]
                 songs = [Song(s) for s in sources]
 
             if not songs:
-                await reply(embed=discord.Embed(description='❌ No tracks found.', color=discord.Color.red()))
+                await _edit_status('❌ No tracks found.')
                 return
 
             if mode == 'skip':
                 for song in reversed(songs):
                     state.songs.add_to_front(song)
                 state.skip()
-                await reply(embed=discord.Embed(description=f'⏭️ Playing **{songs[0].source.title}** now.', color=discord.Color.green()))
+                await _edit_status(f'⏭️ Playing **{songs[0].source.title}** now.')
             elif mode == 'next':
                 for song in reversed(songs):
                     state.songs.add_to_front(song)
                 if len(songs) > 1:
-                    await reply(embed=discord.Embed(description=f'🎶 Added **{len(songs)}** songs to the top of the queue.', color=discord.Color.green()))
+                    await _edit_status(f'🎶 Added **{len(songs)}** songs to the top of the queue.')
                 else:
-                    await reply(embed=discord.Embed(description=f'🎶 Added to top: {songs[0].source}', color=discord.Color.green()))
+                    await _edit_status(f'🎶 Added to top: {songs[0].source}')
             else:
                 if len(songs) > 1:
                     for song in songs:
                         state.songs.put_nowait(song)
-                    await reply(embed=discord.Embed(description=f'🎶 Enqueued **{len(songs)}** songs.', color=discord.Color.green()))
+                    await _edit_status(f'🎶 Enqueued **{len(songs)}** songs.')
                 else:
                     state.songs.put_nowait(songs[0])
-                    await reply(embed=discord.Embed(description=f'🎶 Enqueued {songs[0].source}', color=discord.Color.green()))
+                    await _edit_status(f'🎶 Enqueued {songs[0].source}')
 
         except YTDLError as e:
-            await reply(embed=discord.Embed(description=f'❌ Error processing request: {e}', color=discord.Color.red()))
+            await _edit_status(f'❌ Error processing request: {e}')
         except Exception as e:
             traceback.print_exc()
-            await reply(embed=discord.Embed(description=f'❌ Unexpected error: {e}', color=discord.Color.red()))
+            await _edit_status(f'❌ Unexpected error: {e}')
 
     @app_commands.command(name='msearch', description='Search YouTube and pick a track to play.')
     @app_commands.describe(query="What to search for")
