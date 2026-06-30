@@ -1,0 +1,34 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Secrets / local state
+.env
+settings.json
+*.txt
+!requirements.txt
+
+# Git
+.git/
+.gitignore
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Runtime artifacts
+tts.mp3
+response_*.txt
+generated_output.png
+
+# Windows-only bundled binaries (Linux containers install their own)
+ffmpeg/*.exe
+libopus-0.x64.dll

@@ -21,6 +21,12 @@ def home():
     return render_template("index.html")
 
 
+@app.route('/health')
+def health():
+    """Health check used by load balancers and deployment platforms."""
+    return jsonify({"status": "ok"}), 200
+
+
 @app.route('/weather', methods=["POST"])
 def get_weather():
     city = request.form['city']

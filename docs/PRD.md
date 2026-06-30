@@ -10,7 +10,7 @@
 
 Zephyr is a modular, multi-purpose Discord bot built for community servers. It bundles a weather service, a Groovy-style music player, a Google Gemini AI chat companion, text-to-speech, and a small Flask companion website — all organized into clean, self-contained cogs.
 
-The bot is written in Python 3.13 using `discord.py`, exposes **64 slash commands** (including aliases) and **13 prefix commands**, and runs on Windows with bundled FFmpeg/Opus binaries.
+The bot is written in Python 3.13 using `discord.py`, exposes **64 slash commands** (including aliases) and **13 prefix commands**, and runs on Windows, macOS, or Linux. It can be run locally, in Docker, or deployed to cloud platforms such as Render, Heroku, AWS, and Vercel.
 
 ---
 
@@ -48,11 +48,12 @@ The bot is written in Python 3.13 using `discord.py`, exposes **64 slash command
 | Music extraction | `yt-dlp` |
 | Spotify metadata | `spotipy` (Spotify Web API) |
 | Text-to-speech | `gTTS` |
-| Audio codec | FFmpeg, Opus (`libopus-0.x64.dll`) |
+| Audio codec | FFmpeg, Opus (`libopus-0.x64.dll` on Windows, system libs on Linux/macOS) |
 | Weather data | Open-Meteo (primary), OpenWeatherMap (fallback) |
 | Website | Flask, `geopy`, `timezonefinder`, `pytz`, Swiper.js |
-| Configuration | `python-dotenv` (`.env`) + `settings.json` |
+| Configuration | `python-dotenv` (`.env`) + `settings.json` or Redis |
 | Utilities | `aiohttp`, `requests`, `async-timeout` |
+| Cloud deployment | Docker, Gunicorn, Redis, Render Blueprint, Vercel, AWS Lambda |
 
 ---
 
@@ -61,10 +62,18 @@ The bot is written in Python 3.13 using `discord.py`, exposes **64 slash command
 ```
 project-root/
 ├── run_bot.py              # Discord bot entry point
-├── run_web.py              # Flask website entry point
+├── run_web.py              # Flask website entry point (local dev)
+├── wsgi.py                 # Production WSGI entry point
+├── aws_lambda_handler.py   # AWS Lambda entry point (website)
+├── vercel_handler.py       # Vercel serverless entry point (website)
+├── Dockerfile              # Container image for bot or website
+├── docker-compose.yml      # Local orchestration: Redis + bot + website
+├── Procfile                # Render/Heroku process definitions
+├── render.yaml             # Render Blueprint
+├── vercel.json             # Vercel routing config
 ├── requirements.txt
 ├── .env.example            # Secret/template file
-├── settings.json           # Persisted per-context AI settings
+├── settings.json           # Persisted per-context AI settings (local file)
 ├── ffmpeg/                 # FFmpeg binaries (not committed)
 ├── libopus-0.x64.dll       # Windows Opus codec
 ├── zephyr/                 # Bot package
@@ -77,8 +86,9 @@ project-root/
 │   │   ├── voice_tts.py
 │   │   ├── chat.py
 │   │   └── help.py
-│   ├── services/           # AI engine
-│   │   └── gemini.py
+│   ├── services/           # AI engine + portable storage
+│   │   ├── gemini.py
+│   │   └── storage.py
 │   └── utils/              # Shared helpers
 │       ├── weather_utils.py
 │       ├── pagination.py
@@ -93,8 +103,12 @@ project-root/
 `zephyr/client.py` loads every cog in `EXTENSIONS` during `setup_hook()`, then syncs the slash command tree. Loading failures are logged but do not crash the bot.
 
 ### Entry points
-- **Bot:** `python run_bot.py` → validates config → runs `ZephyrBot`.
-- **Website:** `python run_web.py` → validates web config → runs Flask on `FLASK_HOST:FLASK_PORT`.
+- **Bot (local):** `python run_bot.py` → validates config → runs `ZephyrBot`.
+- **Website (local):** `python run_web.py` → validates web config → runs Flask on `FLASK_HOST:FLASK_PORT`.
+- **Website (production WSGI):** `gunicorn wsgi:app`.
+- **Website (Vercel):** `vercel_handler.py` exposes the Flask `app` callable.
+- **Website (AWS Lambda):** `aws_lambda_handler.lambda_handler` proxies requests via `awsgi`.
+- **Container:** `Dockerfile` installs Linux FFmpeg/Opus; default command runs the website; override to run the bot.
 
 ---
 
@@ -196,11 +210,15 @@ All secrets live in `.env` (see `.env.example`).
 | `GEMINI_API_KEY` | Bot | Google Gemini API key |
 | `SPOTIFY_CLIENT_ID` | Bot | Spotify app client ID |
 | `SPOTIFY_CLIENT_SECRET` | Bot | Spotify app client secret |
-| `FFMPEG_PATH` | Optional | Path to `ffmpeg.exe` |
+| `FFMPEG_PATH` | Optional | Path to FFmpeg |
 | `WEB_APP_URL` | Optional | URL shown by `/use` |
 | `FLASK_HOST` / `FLASK_PORT` | Optional | Website bind address |
+| `PORT` | Optional | Cloud-platform port override |
+| `REDIS_URL` | Optional | Shared AI settings storage |
+| `SETTINGS_PATH` | Optional | Custom `settings.json` path |
+| `FLASK_DEBUG` | Optional | Enable Flask debug mode |
 
-`settings.json` stores per-server/DM AI preferences and chat context; it is auto-managed and git-ignored.
+`settings.json` stores per-server/DM AI preferences locally; when `REDIS_URL` is set, the same JSON payload is stored in Redis for shared cloud state.
 
 ---
 
@@ -229,6 +247,7 @@ Additional permissions needed at invite time:
 
 ## 12. Roadmap / TODO
 
+- [x] Support local and cloud deployment (Docker, Render, Vercel, AWS).
 - [ ] Add persistent music playlists.
 - [ ] Support more music sources (SoundCloud, Bandcamp).
 - [ ] Add server-specific settings for default AI model and music volume.
@@ -240,7 +259,14 @@ Additional permissions needed at invite time:
 
 ## 13. Changelog
 
-### 1.0 — Current
+### 1.1 — Cloud-ready deployment
+- Added cross-platform FFmpeg/Opus detection for Linux, macOS, and Windows.
+- Added portable `settings.json` / Redis storage abstraction (`zephyr/services/storage.py`).
+- Added production WSGI entry point (`wsgi.py`) and `/health` endpoint.
+- Added deployment artifacts: `Dockerfile`, `docker-compose.yml`, `Procfile`, `render.yaml`, `vercel.json`, `vercel_handler.py`, `aws_lambda_handler.py`, `.dockerignore`.
+- Updated documentation with local, Docker, Render, Vercel, and AWS deployment guides.
+
+### 1.0 — Baseline
 - Centralized help system with categorized slash help commands.
 - Music feature supports YouTube URLs/playlists and Spotify links resolved to YouTube.
 - Weather `/forecast` and `/class` migrated to Open-Meteo with OpenWeatherMap fallback.

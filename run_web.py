@@ -5,6 +5,8 @@
 Then open http://localhost:5000
 """
 
+import os
+
 from zephyr import config
 
 # Fail early with a clear message if the OpenWeather key is missing.
@@ -14,7 +16,8 @@ from website.app import app
 
 
 def main():
-    app.run(debug=True, host=config.FLASK_HOST, port=config.FLASK_PORT)
+    debug = os.getenv("FLASK_DEBUG", "0").lower() in ("1", "true", "yes")
+    app.run(debug=debug, host=config.FLASK_HOST, port=config.PORT)
 
 
 if __name__ == "__main__":

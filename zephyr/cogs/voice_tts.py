@@ -5,6 +5,7 @@ Ported 1:1 from the original bot.py (lines 2218-2264). The module-level
 """
 
 import os
+import tempfile
 
 import discord
 from discord import app_commands
@@ -44,22 +45,38 @@ class TTSCog(commands.Cog):
             await interaction.response.send_message("I'm not in a voice call, let me in.", ephemeral=True)
             return
         await interaction.response.defer()
-        tts = gTTS(text=text, lang=self.tts_language)
-        tts.save("tts.mp3")
-        vc = interaction.guild.voice_client
-        if vc and not vc.is_playing():
-            audio_source = discord.FFmpegPCMAudio("tts.mp3", executable=FFMPEG_PATH)
-            vc.play(audio_source, after=lambda e: os.remove("tts.mp3"))
-            await interaction.followup.send(f"Speaking: {text}", ephemeral=True)
-        else:
-            os.remove("tts.mp3")
-            await interaction.followup.send("Bot is already speaking. Wait for it to finish.", ephemeral=True)
+
+        # Write the temporary TTS file to the system temp directory so the bot
+        # works on read-only / ephemeral cloud filesystems.
+        tts_fd, tts_path = tempfile.mkstemp(suffix=".mp3")
+        os.close(tts_fd)
+        try:
+            tts = gTTS(text=text, lang=self.tts_language)
+            tts.save(tts_path)
+            vc = interaction.guild.voice_client
+            if vc and not vc.is_playing():
+                audio_source = discord.FFmpegPCMAudio(tts_path, executable=FFMPEG_PATH)
+                vc.play(audio_source, after=lambda e: _safe_remove(tts_path))
+                await interaction.followup.send(f"Speaking: {text}", ephemeral=True)
+            else:
+                _safe_remove(tts_path)
+                await interaction.followup.send("Bot is already speaking. Wait for it to finish.", ephemeral=True)
+        except Exception as exc:
+            _safe_remove(tts_path)
+            await interaction.followup.send(f"TTS failed: {exc}", ephemeral=True)
 
     @app_commands.command(name="language", description="Change the TTS language output.")
     @app_commands.describe(lang="Language code (e.g., 'en' for English, 'ja' for Japanese)")
     async def language_command(self, interaction: discord.Interaction, lang: str):
         self.tts_language = lang
         await interaction.response.send_message(f"Language changed to `{lang}`!", ephemeral=True)
+
+
+def _safe_remove(path: str):
+    try:
+        os.remove(path)
+    except Exception:
+        pass
 
 
 async def setup(bot: commands.Bot):

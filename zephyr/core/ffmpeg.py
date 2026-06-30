@@ -1,9 +1,10 @@
 """FFmpeg executable resolver.
 
-Adapted from the original bot.py ``get_ffmpeg_path`` (lines 116-148). The local
-lookup is anchored to the project root (where the bundled ``ffmpeg/`` folder
-lives), and the ``FFMPEG_PATH`` override is read from config (which loads it
-from .env).
+Works on Windows, macOS, and Linux. Lookup order:
+1. PyInstaller one-file or one-dir bundle
+2. Explicit ``FFMPEG_PATH`` override from the environment
+3. Bundled ``ffmpeg/`` folder next to the project root
+4. ``ffmpeg`` on the system ``PATH``
 """
 
 import os
@@ -39,7 +40,7 @@ def get_ffmpeg_path():
     if os.path.exists(bundled):
         return bundled
 
-    # System PATH fallback
+    # System PATH fallback (works on all platforms)
     return shutil.which(ffmpeg_exe_name) or ffmpeg_exe_name
 
 

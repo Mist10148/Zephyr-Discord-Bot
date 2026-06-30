@@ -22,6 +22,11 @@ geopy>=2.4.1                 # city -> lat/lon geocoding (Nominatim)
 timezonefinder>=6.5.0        # lat/lon -> timezone
 pytz>=2024.1
 
+# ── Production / cloud deployment ──
+gunicorn>=23.0.0             # production WSGI server for Render/Heroku/Docker
+redis>=5.0.0                 # optional shared settings storage (REDIS_URL)
+apig-wsgi>=2.20.0            # AWS Lambda adapter for Flask (pure Python)
+
 # ── Optional: only needed if you add back the /generate `image_generator` module ──
 # (Imported in the original but unused; kept here so the environment is a superset.)
 aiofiles>=24.1.0

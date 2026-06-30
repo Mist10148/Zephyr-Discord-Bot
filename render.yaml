@@ -1,0 +1,49 @@
+services:
+  - type: web
+    name: zephyr-website
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn wsgi:app --bind 0.0.0.0:${PORT:-5000}
+    envVars:
+      - key: OPENWEATHER_API_KEY
+        sync: false
+      - key: WEB_APP_URL
+        sync: false
+      - key: PYTHON_VERSION
+        value: 3.13.0
+
+  - type: worker
+    name: zephyr-bot
+    runtime: python
+    plan: starter  # Background workers require a paid plan on Render
+    buildCommand: pip install -r requirements.txt
+    startCommand: python run_bot.py
+    envVars:
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: OPENWEATHER_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: SPOTIFY_CLIENT_ID
+        sync: false
+      - key: SPOTIFY_CLIENT_SECRET
+        sync: false
+      - key: WEB_APP_URL
+        fromService:
+          name: zephyr-website
+          type: web
+          property: url
+      - key: REDIS_URL
+        fromService:
+          name: zephyr-redis
+          type: redis
+          property: connectionString
+      - key: PYTHON_VERSION
+        value: 3.13.0
+
+  - type: redis
+    name: zephyr-redis
+    plan: free
+    ipAllowList: []

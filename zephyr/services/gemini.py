@@ -25,8 +25,8 @@ from zephyr.config import (
     DEFAULT_CHAT_MODEL,
     SECONDARY_CHAT_MODEL,
     TERTIARY_CHAT_MODEL,
-    SETTINGS_FILE,
 )
+from zephyr.services.storage import storage
 
 # ---------------------------------------------------------------------------
 # Gemini client
@@ -97,13 +97,10 @@ def load_user_settings():
     global settings_store, user_settings
     settings_store = {}
     user_settings = {}
-    if not os.path.exists(SETTINGS_FILE):
-        return
     try:
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-            settings_store = json.load(f)
+        settings_store = storage.load()
     except Exception as exc:
-        print(f"Failed to load settings.json: {exc}")
+        print(f"Failed to load settings: {exc}")
         settings_store = {}
         return
 
@@ -127,8 +124,7 @@ def save_user_settings():
         payload[key] = normalize_context_settings(value)
     payload["user_settings"] = nested
     try:
-        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=4)
+        storage.save(payload)
         settings_store = payload
     except Exception as e:
         print(f"Failed to save settings: {e}")

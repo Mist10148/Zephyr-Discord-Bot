@@ -45,6 +45,16 @@ WEB_APP_URL = os.getenv("WEB_APP_URL", "https://severely-musical-mollusk.ngrok-f
 FLASK_HOST = os.getenv("FLASK_HOST", "0.0.0.0")
 FLASK_PORT = int(os.getenv("FLASK_PORT", "5000"))
 
+# Cloud / container overrides
+# Render, Heroku, AWS, etc. set PORT for the web process.
+PORT = int(os.getenv("PORT") or FLASK_PORT)
+
+# Optional Redis URL for shared settings/history across cloud instances.
+REDIS_URL = os.getenv("REDIS_URL") or os.getenv("REDISCLOUD_URL") or None
+
+# Optional custom path for the local settings file (useful for mounted volumes).
+SETTINGS_PATH = os.getenv("SETTINGS_PATH") or str(PROJECT_ROOT / "settings.json")
+
 # ---------------------------------------------------------------------------
 # Weather API endpoints & coordinates
 # ---------------------------------------------------------------------------
@@ -64,7 +74,8 @@ TERTIARY_CHAT_MODEL = "gemini-2.5-flash"
 # ---------------------------------------------------------------------------
 # Settings persistence
 # ---------------------------------------------------------------------------
-SETTINGS_FILE = str(PROJECT_ROOT / "settings.json")
+# Kept for backwards compatibility; new code should use SETTINGS_PATH.
+SETTINGS_FILE = SETTINGS_PATH
 
 
 def validate_bot_config():

@@ -1,8 +1,10 @@
-"""Opus codec loader (required for Discord voice on Windows).
+"""Opus codec loader (required for Discord voice).
 
-Adapted from the original bot.py ``_load_opus`` (lines 77-110); the only change
-is that the local lookup is anchored to the project root (where the bundled
-``libopus-0.x64.dll`` lives) instead of the script directory.
+Tries platform-specific library names in this order:
+1. PyInstaller one-file bundle
+2. Bundled copy at the project root (Windows DLL)
+3. System libraries (libopus.so.0 / libopus.so on Linux, libopus.dylib on macOS)
+4. Generic "opus" name from PATH
 """
 
 import os
@@ -13,31 +15,56 @@ import discord
 from zephyr.config import PROJECT_ROOT
 
 
+def _opus_lib_names():
+    """Return the candidate library names for this OS."""
+    if os.name == "nt":
+        return ["libopus-0.x64.dll", "libopus-0.dll", "opus.dll"]
+    if sys.platform == "darwin":
+        return ["libopus.dylib", "opus"]
+    # Linux and other Unix-like systems
+    return ["libopus.so.0", "libopus.so", "opus"]
+
+
 def load_opus():
     """Load the Opus codec library needed for Discord voice, then report status."""
-    if not discord.opus.is_loaded():
-        opus_lib = "libopus-0.x64.dll" if os.name == "nt" else "opus"
+    if discord.opus.is_loaded():
+        print("[Startup] Opus already loaded.")
+        return
 
-        # PyInstaller / one-file bundle
-        loaded = False
-        if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-            meipass_path = os.path.join(sys._MEIPASS, opus_lib)
-            if os.path.exists(meipass_path):
-                discord.opus.load_opus(meipass_path)
-                loaded = True
+    loaded = False
+    candidates = []
 
-        # Project-root copy (normal run)
-        if not loaded:
-            local_path = os.path.join(str(PROJECT_ROOT), opus_lib)
-            if os.path.exists(local_path):
-                discord.opus.load_opus(local_path)
-                loaded = True
+    # PyInstaller / one-file bundle
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        for name in _opus_lib_names():
+            path = os.path.join(sys._MEIPASS, name)
+            if os.path.exists(path):
+                candidates.append(("PyInstaller bundle", path))
 
-        # System PATH fallback
-        if not loaded:
-            try:
-                discord.opus.load_opus(opus_lib)
-            except Exception as exc:
-                print(f"[Startup Warning] Could not load Opus: {exc}")
+    # Project-root copy (normal local run on Windows)
+    for name in _opus_lib_names():
+        path = os.path.join(str(PROJECT_ROOT), name)
+        if os.path.exists(path):
+            candidates.append(("project root", path))
 
-    print(f"[Startup] Opus loaded: {discord.opus.is_loaded()}")
+    # System libraries / PATH
+    for name in _opus_lib_names():
+        candidates.append(("system", name))
+
+    last_error = None
+    for source, path in candidates:
+        try:
+            discord.opus.load_opus(path)
+            loaded = True
+            print(f"[Startup] Opus loaded from {source}: {path}")
+            break
+        except Exception as exc:
+            last_error = exc
+
+    if not loaded:
+        print(
+            "[Startup Warning] Could not load Opus. "
+            "Discord voice will not work until libopus is installed or bundled."
+        )
+        if last_error:
+            print(f"[Startup Warning] Last error: {last_error}")
