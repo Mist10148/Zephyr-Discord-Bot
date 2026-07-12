@@ -74,8 +74,15 @@ Zephyr-Discord-Bot/
 │   │   └── storage.py
 │   └── cogs/                 # weather, music, chat, voice_tts, help
 └── website/
-    ├── app.py                # Flask weather app
-    └── templates/index.html
+    ├── app.py                # Flask weather API
+    ├── frontend/             # React source (Vite + Tailwind)
+    │   ├── src/
+    │   │   ├── App.jsx
+    │   │   ├── components/
+    │   │   ├── api/
+    │   │   └── utils/
+    │   └── package.json
+    └── static/               # React build output (served by Flask)
 ```
 
 ---
@@ -138,6 +145,7 @@ You can also just **@mention**, **reply to**, or **DM** the bot to chat with it 
 ## 📋 Requirements
 
 - **Python 3.13+**
+- **Node.js 18+** and **npm** — required to build the React website frontend.
 - **FFmpeg** — required for all voice/music/TTS audio. The bot looks for it in this order:
   1. the `FFMPEG_PATH` value in your `.env`,
   2. a bundled `ffmpeg/` folder next to the project,
@@ -168,10 +176,16 @@ python -m venv .venv
 .venv\Scripts\activate          # Windows
 # source .venv/bin/activate     # macOS / Linux
 
-# 3. Install dependencies
+# 3. Install Python dependencies
 pip install -r requirements.txt
 
-# 4. Configure your secrets
+# 4. Build the React website frontend
+cd website/frontend
+npm install
+npm run build
+cd ../..
+
+# 5. Configure your secrets
 copy .env.example .env          # Windows  (cp on macOS/Linux)
 #   then edit .env and fill in your tokens/keys
 ```
@@ -187,6 +201,11 @@ On startup it loads every cog, syncs the slash commands with Discord, and sets i
 ```bash
 python run_web.py
 ```
+Then open **http://localhost:5000**.
+
+> **Frontend development:** To work on the website UI with hot reload, run the Vite dev server
+> (`cd website/frontend && npm run dev`) alongside the Flask API (`python run_web.py`). Vite proxies
+> `/weather` and `/health` to Flask on port 5000 by default.
 Then open **http://localhost:5000** — the home panel shows Iloilo City's forecast, and a second
 panel lets you search the weather for any city.
 

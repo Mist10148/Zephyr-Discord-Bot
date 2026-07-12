@@ -2,11 +2,34 @@
   "version": 2,
   "builds": [
     {
+      "src": "package.json",
+      "use": "@vercel/static-build",
+      "config": {
+        "distDir": "website/static"
+      }
+    },
+    {
       "src": "vercel_handler.py",
       "use": "@vercel/python"
     }
   ],
   "routes": [
+    {
+      "src": "/assets/(.*)",
+      "dest": "/assets/$1"
+    },
+    {
+      "src": "/vite.svg",
+      "dest": "/vite.svg"
+    },
+    {
+      "src": "/weather",
+      "dest": "vercel_handler.py"
+    },
+    {
+      "src": "/health",
+      "dest": "vercel_handler.py"
+    },
     {
       "src": "/(.*)",
       "dest": "vercel_handler.py"

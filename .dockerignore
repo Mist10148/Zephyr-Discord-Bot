@@ -24,6 +24,11 @@ settings.json
 .DS_Store
 Thumbs.db
 
+# Frontend build artifacts / dependencies
+website/frontend/node_modules/
+website/static/
+package-lock.json
+
 # Runtime artifacts
 tts.mp3
 response_*.txt

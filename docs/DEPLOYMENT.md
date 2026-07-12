@@ -26,6 +26,7 @@ Zephyr can run **locally on your machine** or be deployed to the cloud. This gui
 ### Requirements
 
 - **Python 3.13+**
+- **Node.js 18+** and **npm** — required to build the React website frontend
 - **FFmpeg** and **Opus** (see [Cross-platform binaries](#cross-platform-binaries))
 - API keys: Discord bot token, OpenWeatherMap, Google Gemini, Spotify
 
@@ -57,11 +58,35 @@ python run_bot.py
 
 ### Run the website
 
+Build the React frontend once (repeat after UI changes):
+
+```bash
+cd website/frontend
+npm install
+npm run build
+cd ../..
+```
+
+Then start Flask:
+
 ```bash
 python run_web.py
 ```
 
 Open **http://localhost:5000**.
+
+For frontend development with hot reload, run the Vite dev server alongside Flask:
+
+```bash
+# Terminal 1
+cd website/frontend
+npm run dev
+
+# Terminal 2
+python run_web.py
+```
+
+Vite proxies `/weather` and `/health` to Flask on port 5000 by default.
 
 To enable debug mode, set `FLASK_DEBUG=1` in your `.env` or shell.
 
@@ -69,7 +94,7 @@ To enable debug mode, set `FLASK_DEBUG=1` in your `.env` or shell.
 
 ## Docker
 
-A single `Dockerfile` is included. It installs Linux FFmpeg and Opus automatically, so you do not need Windows binaries.
+A single `Dockerfile` is included. It installs Linux FFmpeg and Opus automatically, so you do not need Windows binaries. It also installs Node.js and builds the React frontend during the image build.
 
 ```bash
 # Build
@@ -133,7 +158,7 @@ The website's live URL is automatically passed to the bot as `WEB_APP_URL`.
 If you prefer not to use the Blueprint:
 
 1. Create a **Web Service** for the website:
-   - Build command: `pip install -r requirements.txt`
+   - Build command: `pip install -r requirements.txt && cd website/frontend && npm install && npm run build && cd ../..`
    - Start command: `gunicorn wsgi:app --bind 0.0.0.0:${PORT:-5000}`
 2. Create a **Background Worker** for the bot:
    - Build command: `pip install -r requirements.txt`
@@ -144,7 +169,7 @@ If you prefer not to use the Blueprint:
 
 ## Vercel (website only)
 
-The Flask website can be deployed to Vercel's serverless platform.
+The Flask website can be deployed to Vercel's serverless platform. `vercel.json` is already configured to build the React frontend and route API calls to the Flask handler.
 
 1. Install the Vercel CLI and log in:
    ```bash
@@ -167,11 +192,18 @@ The website can run on **AWS Lambda** + **API Gateway** using the included `aws_
 
 ### Deploy with the AWS CLI / console
 
-1. Create a Lambda function with Python 3.13 runtime.
-2. Upload a deployment package containing the project and dependencies, or use a Lambda layer.
-3. Set the handler to `aws_lambda_handler.lambda_handler`.
-4. Add `OPENWEATHER_API_KEY` as an environment variable.
-5. Attach an API Gateway (HTTP or REST) trigger.
+1. Build the React frontend so the static assets exist in `website/static/`:
+   ```bash
+   cd website/frontend
+   npm install
+   npm run build
+   cd ../..
+   ```
+2. Create a Lambda deployment package containing the project, dependencies, and the `website/static/` build output.
+3. Create a Lambda function with Python 3.13 runtime.
+4. Set the handler to `aws_lambda_handler.lambda_handler`.
+5. Add `OPENWEATHER_API_KEY` as an environment variable.
+6. Attach an API Gateway (HTTP or REST) trigger.
 
 > As with Vercel, the Discord bot cannot run on Lambda. Run the bot on EC2, ECS/Fargate, or similar.
 

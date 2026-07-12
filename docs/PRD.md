@@ -50,7 +50,7 @@ The bot is written in Python 3.13 using `discord.py`, exposes **64 slash command
 | Text-to-speech | `gTTS` |
 | Audio codec | FFmpeg, Opus (`libopus-0.x64.dll` on Windows, system libs on Linux/macOS) |
 | Weather data | Open-Meteo (primary), OpenWeatherMap (fallback) |
-| Website | Flask, `geopy`, `timezonefinder`, `pytz`, Swiper.js |
+| Website | Flask API + React frontend (Vite, Tailwind CSS, Lucide), `geopy`, `timezonefinder`, `pytz` |
 | Configuration | `python-dotenv` (`.env`) + `settings.json` or Redis |
 | Utilities | `aiohttp`, `requests`, `async-timeout` |
 | Cloud deployment | Docker, Gunicorn, Redis, Render Blueprint, Vercel, AWS Lambda |
@@ -94,9 +94,16 @@ project-root/
 │       ├── pagination.py
 │       ├── help_data.py
 │       └── time_utils.py
-└── website/                # Flask app
-    ├── app.py
-    └── templates/index.html
+└── website/                # Flask API + React frontend
+    ├── app.py              # Flask weather API
+    ├── frontend/           # React source (Vite + Tailwind)
+    │   ├── src/
+    │   │   ├── App.jsx
+    │   │   ├── components/
+    │   │   ├── api/
+    │   │   └── utils/
+    │   └── package.json
+    └── static/             # React build output (served by Flask)
 ```
 
 ### Cog loading
