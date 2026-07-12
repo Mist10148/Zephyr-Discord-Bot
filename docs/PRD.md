@@ -1,7 +1,7 @@
 # Zephyr — Product Requirements Document (PRD)
 
-**Version:** 1.0  
-**Last updated:** 2026-06-25  
+**Version:** 1.2  
+**Last updated:** 2026-07-12  
 **Owner:** Zephyr Discord Bot project  
 
 ---
@@ -132,8 +132,10 @@ project-root/
 
 ### 6.3 AI Chat & TTS
 - **Gemini chat:** `/prompt` with text, image, or `.txt` attachments; mention/reply/DM the bot to chat.
-- **Customization:** choose AI model and response format (embed / text / `.txt` file) via `/settings` and `/output`.
-- **Rate limits:** local per-model RPM/TPM/RPD tracking shown with `/token`.
+- **Web-search grounding:** Chat uses **Gemini 3.5 Flash with Grounding with Google Search**. The model decides per-message whether a query needs current information — software versions, prices, sports scores/news, weather, current events, etc. — and returns grounded answers with a plain-text **Sources:** list.
+- **Models:** Chat defaults to `gemini-3.5-flash`; `/settings` also exposes `gemini-3.5-pro` as a higher-quality drop-in. Older/non-3.5 model choices are overridden to the web-search model at runtime.
+- **Customization:** choose the AI model and response format (embed / text / `.txt` file) via `/settings` and `/output`.
+- **Rate limits & billing visibility:** local per-model RPM/TPM/RPD tracking shown with `/token`; the number of Google Search queries the model ran is logged per response (Gemini 3 models bill per search query).
 - **Image generation:** `/image-gen` (Gemini) and `/generate` (optional external hook).
 - **TTS:** `/say` speaks in a voice channel; `/language` changes the TTS language.
 
@@ -191,7 +193,7 @@ project-root/
 |---------|----------|------|
 | **Open-Meteo** | Daily forecast, current apparent temperature, geocoding | None |
 | **OpenWeatherMap** | Legacy/current weather, forecast fallback, website data, prefix weather commands | API key |
-| **Google Gemini** | AI chat, image generation | API key |
+| **Google Gemini** | AI chat (with Grounding with Google Search), image generation | API key |
 | **Spotify Web API** | Track/playlist/album metadata lookup | Client ID + Secret |
 | **YouTube** | Audio streaming (via `yt-dlp`) | None |
 | **Discord** | Bot platform | Bot token |
@@ -258,6 +260,13 @@ Additional permissions needed at invite time:
 ---
 
 ## 13. Changelog
+
+### 1.2 — Web-search-aware chat
+- Added Grounding with Google Search to the AI chat feature.
+- Chat now uses `gemini-3.5-flash` by default, with `gemini-3.5-pro` as a quality fallback/option.
+- Added source attribution (plain-text **Sources:** list) to grounded Discord replies.
+- Added search-query-count logging for billing visibility.
+- Added unit tests for grounding metadata extraction, source formatting, and domain-specific prompts.
 
 ### 1.1 — Cloud-ready deployment
 - Added cross-platform FFmpeg/Opus detection for Linux, macOS, and Windows.

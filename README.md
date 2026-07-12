@@ -17,9 +17,11 @@ Zephyr started life as a single 3,000-line script and was rebuilt into a maintai
 - **Music** — a Groovy-style player streaming from **YouTube** and **Spotify**, with a queue,
   search-and-pick, seeking, loop modes, live audio effects (nightcore, vaporwave, 8D, reverb,
   bass boost, pitch…), and on-demand lyrics.
-- **AI chat** — talk to the bot by mentioning it, replying to it, or DMing it. Backed by Google
-  Gemini with a customizable persona, per-server/DM preferences, response-format options, local
-  rate-limit tracking, and image generation.
+- **AI chat** — talk to the bot by mentioning it, replying to it, or DMing it. Backed by
+  **Gemini 3.5 Flash with Grounding with Google Search**, so it automatically fetches current
+  information (software versions, prices, sports scores, news, weather, etc.) when needed and cites
+  its sources. Supports a customizable persona, per-server/DM preferences, response-format options,
+  local rate-limit tracking, and image generation.
 - **Text-to-speech** — make the bot speak in a voice channel in your chosen language.
 - **Website** — a small Flask app that shows Iloilo City's forecast and lets you search any city.
 
@@ -112,7 +114,7 @@ Zephyr-Discord-Bot/
 | Command | Description |
 |---------|-------------|
 | `/prompt <message> [attachment]` | Ask the AI (supports image & `.txt` attachments) |
-| `/settings` | Choose the Gemini model & response format |
+| `/settings` | Choose the Gemini model (`3.5 Flash/Pro` with Search) & response format |
 | `/output` | Quickly toggle embed vs. plain-text replies |
 | `/token` | Show this session's Gemini usage / rate-limit status |
 | `/image-gen <prompt>` | Generate an image with Gemini |
@@ -122,6 +124,11 @@ Zephyr-Discord-Bot/
 | `/helpchat` | Chat command help |
 
 You can also just **@mention**, **reply to**, or **DM** the bot to chat with it directly.
+
+> **Web search & attribution:** Chat is powered by Gemini's Grounding with Google Search. The model
+> decides per-message whether current real-world data is needed. When it searches, the bot appends
+> a plain-text **Sources:** list to the reply. Review Google's latest Grounding with Google Search
+> terms before shipping publicly to confirm this attribution meets their requirements.
 
 ### 📖 Help
 `/help` — a paginated overview of every command, grouped by category.
@@ -240,13 +247,16 @@ kept local unless you set `REDIS_URL`.
 ## 📝 Notes
 
 - AI responses, the persona, model fallbacks, and all rate-limit logic are configurable in
-  `zephyr/services/gemini.py`.
+  `zephyr/services/gemini.py`. Chat now uses `gemini-3.5-flash` with Grounding with Google Search
+  by default; swap to `gemini-3.5-pro` via `/settings` for higher answer quality.
 - `/generate` is an optional hook that looks for a separate `image_generator` module; if it's not
   present it simply reports that image generation is unavailable. The built-in Gemini image
   command is `/image-gen`.
 - Privileged intents must be enabled in the Discord Developer Portal for chat and some features to
   work.
 - When running multiple bot instances in the cloud, set `REDIS_URL` so AI settings stay in sync.
+- Google Search queries are logged per response (`[Gemini search] queries=N`) so you can monitor
+  usage; Gemini 3 models bill per search query, not per message.
 
 ---
 
