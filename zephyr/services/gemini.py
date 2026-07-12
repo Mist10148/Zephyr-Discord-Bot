@@ -48,12 +48,6 @@ SAFETY_SETTINGS = [
     types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
     types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
 ]
-TOOLS = [
-    types.Tool(google_search=types.GoogleSearch()),
-    types.Tool(code_execution=types.ToolCodeExecution()),
-    types.Tool(google_maps=types.GoogleMaps()),
-    types.Tool(url_context=types.UrlContext()),
-]
 MODEL_LIMITS = {
     DEFAULT_CHAT_MODEL: {"rpm": 15, "tpm": 250000, "rpd": 1000},
     SECONDARY_CHAT_MODEL: {"rpm": 15, "tpm": 250000, "rpd": 1000},
@@ -62,12 +56,12 @@ MODEL_LIMITS = {
 }
 
 # ---------------------------------------------------------------------------
-# Web-search behavior spec
+# Tool behavior specs
 # ---------------------------------------------------------------------------
-# Instructs Gemini when to use its built-in Google Search grounding. The model
-# decides internally per-message whether a search is needed; no manual tool
-# loop is required. Grounding is enabled by passing the Google Search tool in
-# the generation config (see get_generate_config).
+# Tool selection is seamless: every enabled tool that is legal for the target
+# model is registered in the generation config, and Gemini itself decides
+# per-message whether to invoke each one. These instructions just steer that
+# decision (see resolve_tool_variants / get_generate_config).
 WEB_SEARCH_BEHAVIOR_INSTRUCTION = (
     "You have access to Google Search grounding. Use it wisely.\n\n"
     "SEARCH when a question depends on something that changes over time or could plausibly be outdated, regardless of subject:\n"
@@ -91,7 +85,8 @@ ADDITIONAL_TOOLS_BEHAVIOR_INSTRUCTION = (
     "You also have access to Code Execution, Google Maps grounding, and URL context. Use each only when it genuinely helps answer the user.\n\n"
     "CODE EXECUTION: use for math, calculations, data processing, running small scripts, or verifying a computed result instead of guessing at one.\n\n"
     "MAPS GROUNDING: use ONLY when the message has real geographic intent — a specific place, 'near me,' directions, hours, local businesses, or location-aware recommendations. "
-    "Do not fire it just because a place name is mentioned in passing.\n\n"
+    "Do not fire it just because a place name is mentioned in passing. "
+    "Maps grounding may be unavailable; if you cannot use it, answer from web search or general knowledge instead.\n\n"
     "URL CONTEXT: use when the user pastes or references a specific link and asks about its content (summarize, compare, verify, etc.).\n\n"
     "When a tool provides data, keep the answer Discord-native and concise."
 )
@@ -121,7 +116,8 @@ def default_context_settings():
     return {
         "ai_model": DEFAULT_CHAT_MODEL,
         "response_format": "embed",
-        "tools_enabled": {"search": True, "code": True, "maps": True, "url_context": True},
+        # Maps grounding is a paid-tier Gemini feature, so it is off by default.
+        "tools_enabled": {"search": True, "code": True, "maps": False, "url_context": True},
     }
 
 
@@ -309,77 +305,71 @@ def build_user_content(user_input, image_bytes=None, mime_type=None):
     return types.UserContent(parts=parts)
 
 
-def detect_message_intent(user_input):
-    """Detect which tool intents a message has.
-
-    We only register a built-in tool when the message actually looks like it
-    needs it. This avoids paying for expensive tools (maps) on casual chat and
-    works around the API limitation that google_maps and code_execution cannot
-    be combined in one request.
-    """
-    text = (user_input or "").lower()
-
-    code_keywords = [
-        "calculate", "compute", "solve", "what is", "what's", "how much",
-        "factorial", "sum of", "product of", "sqrt", "square root",
-        "sin", "cos", "tan", "log", "ln", "pi", "euler",
-    ]
-    maps_keywords = [
-        "near me", "nearby", "directions to", "restaurants", "places", "hotels",
-        "cafes", "bars", "gas stations", "hospitals", "pharmacies", "stores",
-        "closest", "nearest", "around here", "in the area", "local",
-        "hours", "open now", "address", "located", "where is", "how do i get to",
-    ]
-    search_keywords = [
-        "latest", "current", "now", "today", "this week", "this month", "this year",
-        "news", "weather", "price", "stock", "crypto", "bitcoin", "score", "standings",
-        "version", "release", "update", "who won", "election", "rate", "forecast",
-    ]
-
-    # Simple math/code heuristic: digits with operators or explicit math words.
-    has_math_operators = any(op in text for op in ["+", "-", "*", "/", "^", "=", "%"])
-    has_code = any(kw in text for kw in code_keywords) or has_math_operators
-
-    has_maps = any(kw in text for kw in maps_keywords)
-    has_search = any(kw in text for kw in search_keywords)
-    has_url = bool(re.search(r"https?://\S+", user_input or ""))
-
-    return {
-        "code": has_code,
-        "maps": has_maps,
-        "search": has_search,
-        "url_context": has_url,
-    }
+def is_gemini_3_model(model_name):
+    return bool(model_name) and model_name.startswith("gemini-3")
 
 
-def get_generate_config(system_personality, tools_enabled=None, location=None, user_input=None):
-    """Build a Gemini generation config.
+def resolve_tool_variants(model_name, tools_enabled):
+    """Return the ordered tool-set ladder to attempt for a model.
 
-    Only registers the enabled tools that match the message's intent. This keeps
-    costs down and avoids the API error that forbids combining google_maps and
-    code_execution in the same request.
+    Each entry is a frozenset of tool names ("search", "code", "maps",
+    "url_context"). The first entry is the most capable legal set for the
+    model; later entries are degraded fallbacks tried when the API rejects the
+    tool configuration. The ladder always ends with no tools at all.
+
+    Gemini 3.x models can combine built-in tools in one request. Gemini 2.5-era
+    models reject most combos ("Multiple tools are supported only when they are
+    all search tools"): only google_search + url_context may be combined, and
+    code_execution must be the sole tool. Maps grounding is a paid-tier feature
+    and is never sent to 2.5 models.
     """
     tools_enabled = tools_enabled or {}
+    defaults = default_context_settings()["tools_enabled"]
+    enabled = frozenset(
+        name for name, default_value in defaults.items()
+        if tools_enabled.get(name, default_value)
+    )
+
+    search_tools = enabled & {"search", "url_context"}
+    if is_gemini_3_model(model_name):
+        ladder = [enabled, search_tools, frozenset()]
+    else:
+        first = search_tools if search_tools else (frozenset({"code"}) if "code" in enabled else frozenset())
+        ladder = [first, frozenset()]
+
+    deduped = []
+    for variant in ladder:
+        if not deduped or deduped[-1] != variant:
+            deduped.append(variant)
+    return deduped
+
+
+TOOL_BUILDERS = {
+    "search": lambda: types.Tool(google_search=types.GoogleSearch()),
+    "code": lambda: types.Tool(code_execution=types.ToolCodeExecution()),
+    "maps": lambda: types.Tool(google_maps=types.GoogleMaps()),
+    "url_context": lambda: types.Tool(url_context=types.UrlContext()),
+}
+
+
+def get_generate_config(system_personality, tool_names=None, location=None):
+    """Build a Gemini generation config with the given tool set.
+
+    Registers exactly the tools in ``tool_names``; the model decides
+    per-message whether to actually invoke them. The lat/lng retrieval config
+    only matters for maps grounding, so it is attached only when maps is in
+    the tool set.
+    """
+    tool_names = tool_names or frozenset()
     config_kwargs = {
         "system_instruction": system_personality,
         "safety_settings": SAFETY_SETTINGS,
     }
 
-    intent = detect_message_intent(user_input)
-
-    enabled_tools = []
-    if tools_enabled.get("search", True) and intent["search"]:
-        enabled_tools.append(types.Tool(google_search=types.GoogleSearch()))
-    if tools_enabled.get("code", True) and intent["code"]:
-        enabled_tools.append(types.Tool(code_execution=types.ToolCodeExecution()))
-    if tools_enabled.get("maps", True) and intent["maps"]:
-        enabled_tools.append(types.Tool(google_maps=types.GoogleMaps()))
-    if tools_enabled.get("url_context", True) and intent["url_context"]:
-        enabled_tools.append(types.Tool(url_context=types.UrlContext()))
-
+    enabled_tools = [TOOL_BUILDERS[name]() for name in TOOL_BUILDERS if name in tool_names]
     if enabled_tools:
         config_kwargs["tools"] = enabled_tools
-    if location and location.get("lat") is not None and location.get("lng") is not None:
+    if "maps" in tool_names and location and location.get("lat") is not None and location.get("lng") is not None:
         config_kwargs["tool_config"] = types.ToolConfig(
             retrieval_config=types.RetrievalConfig(
                 lat_lng=types.LatLng(latitude=location["lat"], longitude=location["lng"])
@@ -714,6 +704,23 @@ def is_temporary_model_error(exc):
     return any(marker in message for marker in markers)
 
 
+def is_tool_config_error(exc):
+    """Detect API rejections of the tool configuration itself.
+
+    Covers the 2.5-era multi-tool rejection and paid-tier-only tools (maps
+    grounding on a free-tier key). Must be checked AFTER the quota/availability/
+    temporary classifiers so e.g. a 429 is never treated as a tool problem.
+    """
+    message = str(exc).lower()
+    markers = (
+        "400", "invalid_argument", "invalid argument",
+        "multiple tools", "only when they are all search tools",
+        "tool is not supported", "not supported for this model",
+        "403", "permission_denied", "permission denied", "failed_precondition",
+    )
+    return any(marker in message for marker in markers)
+
+
 def parse_retry_after_seconds(exc):
     message = str(exc)
     for pattern in [r"retry in ([0-9.]+)s", r"seconds:\s*([0-9]+)"]:
@@ -847,34 +854,52 @@ def resolve_fallback_models(selected_model):
     return fallback_chain.get(selected_model, [])
 
 
-async def request_gemini_content(model_name, contents, system_personality, tools_enabled=None, location=None, user_input=None):
-    config = get_generate_config(system_personality, tools_enabled=tools_enabled, location=location, user_input=user_input)
+async def request_gemini_content(model_name, contents, system_personality, tool_names=None, location=None):
+    config = get_generate_config(system_personality, tool_names=tool_names, location=location)
     return await gemini_async_client.models.generate_content(model=model_name, contents=contents, config=config)
 
 
-async def try_generate_with_model(model_name, contents, input_tokens, system_personality, tools_enabled=None, location=None, user_input=None):
+async def try_generate_with_model(model_name, contents, input_tokens, system_personality, tools_enabled=None, location=None):
     allowed, limit_message = await reserve_local_quota(model_name, input_tokens)
     if not allowed:
         return {"ok": False, "message": limit_message, "quota_handled": True}
-    try:
-        response = await request_gemini_content(model_name, contents, system_personality, tools_enabled=tools_enabled, location=location, user_input=user_input)
-        response_text = extract_response_text(response)
-        if response_text is None:
-            # Log the raw response shape so we can diagnose empty-text issues.
-            candidate = _first_candidate(response)
-            finish_reason = getattr(getattr(candidate, "finish_reason", None), "name", None) if candidate else None
-            print(f"[Gemini warning] {model_name}: no text in response. finish_reason={finish_reason}")
-            response_text = "I could not generate a response."
-        await record_successful_usage(model_name, getattr(response, "usage_metadata", None))
-        return {"ok": True, "response_text": response_text, "response": response}
-    except Exception as exc:
-        retry_after_seconds = parse_retry_after_seconds(exc)
-        if retry_after_seconds:
-            await store_model_cooldown(model_name, retry_after_seconds)
-        if is_quota_error(exc) or is_model_availability_error(exc) or is_temporary_model_error(exc):
-            print(f"[Gemini warning] {model_name}: {str(exc).splitlines()[0]}")
-            return {"ok": False, "quota_handled": True, "retry_after_seconds": retry_after_seconds, "exception": exc}
-        raise
+
+    # Degradation ladder: start with the most capable legal tool set for this
+    # model and retry the SAME model with fewer tools if the API rejects the
+    # tool configuration (2.5 multi-tool combos, paid-only maps grounding, ...).
+    variants = resolve_tool_variants(model_name, tools_enabled)
+    for index, tool_names in enumerate(variants):
+        is_last_variant = index == len(variants) - 1
+        try:
+            response = await request_gemini_content(model_name, contents, system_personality, tool_names=tool_names, location=location)
+            response_text = extract_response_text(response)
+            if response_text is None:
+                # Log the raw response shape so we can diagnose empty-text issues.
+                candidate = _first_candidate(response)
+                finish_reason = getattr(getattr(candidate, "finish_reason", None), "name", None) if candidate else None
+                print(f"[Gemini warning] {model_name}: no text in response. finish_reason={finish_reason}")
+                response_text = "I could not generate a response."
+            await record_successful_usage(model_name, getattr(response, "usage_metadata", None))
+            return {"ok": True, "response_text": response_text, "response": response}
+        except Exception as exc:
+            retry_after_seconds = parse_retry_after_seconds(exc)
+            if not retry_after_seconds and is_quota_error(exc):
+                # 429 with no retry hint: back off locally for a bit so every
+                # message doesn't burn a doomed request on this model.
+                retry_after_seconds = 60
+            if retry_after_seconds:
+                await store_model_cooldown(model_name, retry_after_seconds)
+            if is_quota_error(exc) or is_model_availability_error(exc) or is_temporary_model_error(exc):
+                # Fewer tools won't fix a quota/availability problem; move on
+                # to the fallback model instead of burning ladder rungs.
+                print(f"[Gemini warning] {model_name}: {str(exc).splitlines()[0]}")
+                return {"ok": False, "quota_handled": True, "retry_after_seconds": retry_after_seconds, "exception": exc}
+            if is_tool_config_error(exc) and not is_last_variant:
+                print(f"[Gemini tool-config error] {model_name} tools={sorted(tool_names)}: {exc!r}")
+                continue
+            print(f"[Gemini error] {model_name} tools={sorted(tool_names)}: {exc!r}")
+            traceback.print_exc()
+            raise
 
 
 async def generate_gemini_response(server_id, user_id, user_input, image_url=None, author=None):
@@ -923,10 +948,11 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
         attempted_fallbacks = []
         last_result = None
         best_retry_after = None
+        first_local_limit_message = None
 
         for index, model_name in enumerate(attempt_models):
             model_history, model_contents, model_tokens = await trim_history_for_token_budget(model_name, history, pending_content)
-            result = await try_generate_with_model(model_name, model_contents, model_tokens, system_personality, tools_enabled=tools_enabled, location=location, user_input=user_input)
+            result = await try_generate_with_model(model_name, model_contents, model_tokens, system_personality, tools_enabled=tools_enabled, location=location)
             last_result = result
             retry_after = result.get("retry_after_seconds")
             if retry_after and (best_retry_after is None or retry_after > best_retry_after):
@@ -983,21 +1009,20 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
                 ]
                 save_history_for_context(server_id, user_id, updated_history)
                 return embed
-            if result.get("message"):
-                # Quota/limit messages are plain text; wrap them in a simple embed.
-                return discord.Embed(
-                    description=result["message"],
-                    color=discord.Color.orange(),
-                )
+            if result.get("message") and first_local_limit_message is None:
+                # A local rate-limit on this model shouldn't block the fallback
+                # chain; remember the message and keep trying other models.
+                first_local_limit_message = result["message"]
             if index > 0:
                 attempted_fallbacks.append(model_name)
 
         return discord.Embed(
-            description=build_quota_message(selected_model, retry_after_seconds=best_retry_after, attempted_fallbacks=attempted_fallbacks),
+            description=first_local_limit_message
+            or build_quota_message(selected_model, retry_after_seconds=best_retry_after, attempted_fallbacks=attempted_fallbacks),
             color=discord.Color.orange(),
         )
     except Exception as exc:
-        print(f"[Gemini error] {selected_model}: {exc}")
+        print(f"[Gemini error] {selected_model}: {exc!r}")
         traceback.print_exc()
         return discord.Embed(
             description="An unexpected error occurred while generating a response. Please try again in a moment.",

@@ -130,7 +130,7 @@ class ChatCog(commands.Cog):
     @app_commands.describe(
         web_search="Let Gemini search the web for current info.",
         code_execution="Let Gemini run code for math, data, or verification.",
-        maps_grounding="Let Gemini use Google Maps for places, directions, and local info.",
+        maps_grounding="Let Gemini use Google Maps for places and local info (paid-tier feature, off by default).",
         url_context="Let Gemini read URLs the user pastes or references.",
     )
     async def aittools(
@@ -179,7 +179,7 @@ class ChatCog(commands.Cog):
         )
         if changed:
             embed.add_field(name="Changes", value="\n".join(changed), inline=False)
-        embed.set_footer(text="All tools are enabled by default.")
+        embed.set_footer(text="Search, code, and URL context are on by default. Maps is off by default (paid-tier feature).")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="output", description="Quickly switch the chatbot response format between embed and normal text.")

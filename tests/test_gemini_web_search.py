@@ -1,12 +1,15 @@
 """Tests for multi-tool chat (search, code execution, maps, URL context) and embed output.
 
 These tests mock the Gemini API so they perform no network calls. They verify:
-- All four tools are registered together in the generation config.
+- The generation config registers exactly the requested tool set; the model
+  itself decides per-message whether to invoke each tool (seamless behavior).
+- resolve_tool_variants produces the per-model degradation ladder (Gemini 3.x
+  combines tools; 2.5 models only allow search + url_context, code solo).
+- Tool-config API errors retry the same model with a degraded tool set.
 - Tool-specific metadata is extracted into the correct embed fields.
-- Embed layout respects Discord limits and only shows fields for fired tools.
 - Cost logging covers all four tools, not just search.
 - Chat history stores the plain answer without formatted tool output.
-- Tool toggles default to enabled and are persisted in context settings.
+- Tool toggles default to enabled (except paid-tier maps) and are persisted.
 """
 
 import pytest
@@ -17,6 +20,7 @@ from google.genai import types
 from zephyr.services import gemini
 from zephyr.services.gemini import (
     DEFAULT_CHAT_MODEL,
+    SECONDARY_CHAT_MODEL,
     QUATERNARY_CHAT_MODEL,
     WEB_SEARCH_BEHAVIOR_INSTRUCTION,
     ADDITIONAL_TOOLS_BEHAVIOR_INSTRUCTION,
@@ -28,6 +32,9 @@ from zephyr.services.gemini import (
     format_sources_list,
     split_discord_message,
     get_generate_config,
+    resolve_tool_variants,
+    is_gemini_3_model,
+    is_tool_config_error,
     generate_gemini_response,
     get_history_for_context,
     build_response_embed,
@@ -250,51 +257,68 @@ class TestDetectFiredTools:
 
 
 class TestGenerateConfig:
-    def test_get_generate_config_no_tools_for_casual_chat(self):
-        # Casual chat should not register any tools to avoid cost and model
-        # compatibility issues.
-        config = get_generate_config("be helpful", user_input="Hello")
-        assert not config.tools
-
-    def test_get_generate_config_registers_maps_for_geographic_intent(self):
-        config = get_generate_config("be helpful", user_input="restaurants near me")
-        assert config.tools is not None
-        assert any(tool.google_maps is not None for tool in config.tools)
-        assert not any(tool.code_execution is not None for tool in config.tools)
-
-    def test_get_generate_config_registers_code_for_math_intent(self):
-        config = get_generate_config("be helpful", user_input="calculate 15 factorial")
-        assert config.tools is not None
-        assert any(tool.code_execution is not None for tool in config.tools)
-        assert not any(tool.google_maps is not None for tool in config.tools)
-
-    def test_get_generate_config_registers_search_and_url_for_current_events_and_link(self):
-        config = get_generate_config(
-            "be helpful",
-            user_input="latest news and also https://example.com/article",
-        )
-        assert config.tools is not None
-        assert any(tool.google_search is not None for tool in config.tools)
-        assert any(tool.url_context is not None for tool in config.tools)
-
-    def test_get_generate_config_respects_disabled_tools(self):
-        config = get_generate_config(
-            "be helpful",
-            tools_enabled={"search": False, "code": True, "maps": False, "url_context": True},
-            user_input="calculate 2+2 and check https://example.com",
-        )
+    def test_get_generate_config_registers_requested_tools(self):
+        config = get_generate_config("be helpful", tool_names={"search", "url_context"})
         assert config.tools is not None
         assert len(config.tools) == 2
-        assert any(tool.code_execution is not None for tool in config.tools)
+        assert any(tool.google_search is not None for tool in config.tools)
         assert any(tool.url_context is not None for tool in config.tools)
-        assert not any(tool.google_search is not None for tool in config.tools)
+        assert not any(tool.code_execution is not None for tool in config.tools)
         assert not any(tool.google_maps is not None for tool in config.tools)
 
-    def test_get_generate_config_adds_location(self):
-        config = get_generate_config("be helpful", location={"lat": 10.72, "lng": 122.56})
+    def test_get_generate_config_no_tools(self):
+        assert not get_generate_config("be helpful", tool_names=set()).tools
+        assert not get_generate_config("be helpful").tools
+
+    def test_get_generate_config_adds_location_only_with_maps(self):
+        config = get_generate_config("be helpful", tool_names={"maps"}, location={"lat": 10.72, "lng": 122.56})
         assert config.tool_config is not None
         assert config.tool_config.retrieval_config.lat_lng.latitude == 10.72
         assert config.tool_config.retrieval_config.lat_lng.longitude == 122.56
+
+        without_maps = get_generate_config("be helpful", tool_names={"search"}, location={"lat": 10.72, "lng": 122.56})
+        assert without_maps.tool_config is None
+
+
+class TestToolVariants:
+    ALL_ON = {"search": True, "code": True, "maps": True, "url_context": True}
+
+    def test_is_gemini_3_model(self):
+        assert is_gemini_3_model("gemini-3.1-flash-lite")
+        assert not is_gemini_3_model("gemini-2.5-flash")
+        assert not is_gemini_3_model(None)
+
+    def test_gemini_3_full_ladder(self):
+        variants = resolve_tool_variants(DEFAULT_CHAT_MODEL, self.ALL_ON)
+        assert variants == [
+            frozenset({"search", "code", "maps", "url_context"}),
+            frozenset({"search", "url_context"}),
+            frozenset(),
+        ]
+
+    def test_gemini_25_never_combines_illegal_tools(self):
+        variants = resolve_tool_variants(SECONDARY_CHAT_MODEL, self.ALL_ON)
+        assert variants == [frozenset({"search", "url_context"}), frozenset()]
+
+    def test_gemini_25_code_only_when_sole_tool(self):
+        variants = resolve_tool_variants(
+            SECONDARY_CHAT_MODEL,
+            {"search": False, "code": True, "maps": False, "url_context": False},
+        )
+        assert variants == [frozenset({"code"}), frozenset()]
+
+    def test_disabled_tools_absent_from_every_rung(self):
+        variants = resolve_tool_variants(
+            DEFAULT_CHAT_MODEL,
+            {"search": False, "code": True, "maps": False, "url_context": True},
+        )
+        assert all("search" not in variant and "maps" not in variant for variant in variants)
+        assert variants[0] == frozenset({"code", "url_context"})
+        assert variants[-1] == frozenset()
+
+    def test_maps_off_by_default(self):
+        variants = resolve_tool_variants(DEFAULT_CHAT_MODEL, {})
+        assert variants[0] == frozenset({"search", "code", "url_context"})
 
     @pytest.mark.asyncio
     async def test_system_instruction_includes_search_and_additional_tools(self):
@@ -370,7 +394,7 @@ class TestBuildResponseEmbed:
 
 class TestGenerateGeminiResponse:
     @pytest.mark.asyncio
-    async def test_uses_selected_model_and_no_tools_for_casual_chat(self):
+    async def test_uses_selected_model_and_all_legal_tools(self):
         response = _make_response_no_tools("Hello there!")
         with patch.object(
             gemini.gemini_async_client.models,
@@ -385,7 +409,95 @@ class TestGenerateGeminiResponse:
         call_kwargs = mock_generate.call_args.kwargs
         assert call_kwargs["model"] == DEFAULT_CHAT_MODEL
         config = call_kwargs["config"]
-        assert not config.tools
+        # Every message gets the full legal tool set; Gemini decides whether to
+        # actually use anything. Maps stays off by default (paid tier).
+        assert any(tool.google_search is not None for tool in config.tools)
+        assert any(tool.code_execution is not None for tool in config.tools)
+        assert any(tool.url_context is not None for tool in config.tools)
+        assert not any(tool.google_maps is not None for tool in config.tools)
+
+    @pytest.mark.asyncio
+    async def test_tool_config_error_degrades_on_same_model(self):
+        gemini.set_context_settings(None, 22345, {"ai_model": SECONDARY_CHAT_MODEL, "response_format": "embed"})
+        response = _make_response_no_tools("Recovered answer.")
+        error = Exception("400 INVALID_ARGUMENT: Multiple tools are supported only when they are all search tools")
+        with patch.object(
+            gemini.gemini_async_client.models,
+            "generate_content",
+            new_callable=AsyncMock,
+            side_effect=[error, response],
+        ) as mock_generate:
+            with patch.object(gemini, "count_input_tokens", new_callable=AsyncMock, return_value=10):
+                result = await generate_gemini_response(None, 22345, "Hi", author=_fake_author())
+
+        assert mock_generate.call_count == 2
+        first_call, second_call = mock_generate.call_args_list
+        assert first_call.kwargs["model"] == SECONDARY_CHAT_MODEL
+        assert second_call.kwargs["model"] == SECONDARY_CHAT_MODEL
+        assert not second_call.kwargs["config"].tools
+        assert "Recovered answer." in result.description
+
+    @pytest.mark.asyncio
+    async def test_free_tier_maps_rejection_retries_without_maps(self):
+        gemini.set_context_settings(None, 32345, {
+            "ai_model": DEFAULT_CHAT_MODEL,
+            "response_format": "embed",
+            "tools_enabled": {"search": True, "code": True, "maps": True, "url_context": True},
+        })
+        response = _make_response_no_tools("Answer without maps.")
+        error = Exception("403 PERMISSION_DENIED: Google Maps grounding requires a paid tier")
+        with patch.object(
+            gemini.gemini_async_client.models,
+            "generate_content",
+            new_callable=AsyncMock,
+            side_effect=[error, response],
+        ) as mock_generate:
+            with patch.object(gemini, "count_input_tokens", new_callable=AsyncMock, return_value=10):
+                result = await generate_gemini_response(None, 32345, "restaurants near me", author=_fake_author())
+
+        assert mock_generate.call_count == 2
+        first_call, second_call = mock_generate.call_args_list
+        assert first_call.kwargs["model"] == DEFAULT_CHAT_MODEL
+        assert any(tool.google_maps is not None for tool in first_call.kwargs["config"].tools)
+        assert second_call.kwargs["model"] == DEFAULT_CHAT_MODEL
+        assert not any(tool.google_maps is not None for tool in second_call.kwargs["config"].tools)
+        assert "Answer without maps." in result.description
+
+    @pytest.mark.asyncio
+    async def test_local_cooldown_on_selected_model_falls_back(self):
+        from datetime import datetime, timezone, timedelta
+        gemini.model_cooldowns[DEFAULT_CHAT_MODEL] = datetime.now(timezone.utc) + timedelta(minutes=5)
+        response = _make_response_no_tools("Fallback answer.")
+        with patch.object(
+            gemini.gemini_async_client.models,
+            "generate_content",
+            new_callable=AsyncMock,
+            return_value=response,
+        ) as mock_generate:
+            with patch.object(gemini, "count_input_tokens", new_callable=AsyncMock, return_value=10):
+                result = await generate_gemini_response(None, 62345, "Hi", author=_fake_author())
+
+        # The locally rate-limited default model is skipped without an API call
+        # and the next model in the chain answers.
+        assert mock_generate.call_args.kwargs["model"] == SECONDARY_CHAT_MODEL
+        assert "Fallback answer." in result.description
+
+    @pytest.mark.asyncio
+    async def test_unexpected_error_is_logged_and_returns_error_embed(self):
+        error = Exception("totally exotic internal failure")
+        with patch("builtins.print") as mock_print:
+            with patch.object(
+                gemini.gemini_async_client.models,
+                "generate_content",
+                new_callable=AsyncMock,
+                side_effect=error,
+            ):
+                with patch.object(gemini, "count_input_tokens", new_callable=AsyncMock, return_value=10):
+                    result = await generate_gemini_response(None, 42345, "Hi", author=_fake_author())
+
+        assert "unexpected error" in result.description.lower()
+        error_logs = [str(call) for call in mock_print.call_args_list if "totally exotic internal failure" in str(call)]
+        assert error_logs
 
     @pytest.mark.asyncio
     async def test_returns_embed(self):
@@ -505,6 +617,12 @@ class TestGenerateGeminiResponse:
 
     @pytest.mark.asyncio
     async def test_logs_all_fired_tools(self):
+        # Maps is off by default, so explicitly enable it for this context.
+        gemini.set_context_settings(None, 52345, {
+            "ai_model": DEFAULT_CHAT_MODEL,
+            "response_format": "embed",
+            "tools_enabled": {"search": True, "code": True, "maps": True, "url_context": True},
+        })
         response = _make_response(
             "Answer.",
             web_sources=[{"title": "News", "uri": "https://news.example.com"}],
@@ -521,7 +639,7 @@ class TestGenerateGeminiResponse:
                 return_value=response,
             ):
                 with patch.object(gemini, "count_input_tokens", new_callable=AsyncMock, return_value=10):
-                    await generate_gemini_response(None, 12345, "multi-tool prompt", author=_fake_author())
+                    await generate_gemini_response(None, 52345, "multi-tool prompt", author=_fake_author())
 
         tool_logs = [call for call in mock_print.call_args_list if "[Gemini tools]" in str(call)]
         assert len(tool_logs) == 1
@@ -639,11 +757,11 @@ class TestGenerateGeminiResponse:
 class TestToolToggles:
     def test_default_tools_enabled(self):
         defaults = gemini.default_context_settings()
-        assert defaults["tools_enabled"] == {"search": True, "code": True, "maps": True, "url_context": True}
+        assert defaults["tools_enabled"] == {"search": True, "code": True, "maps": False, "url_context": True}
 
-    def test_normalize_settings_preserves_missing_tools_as_enabled(self):
+    def test_normalize_settings_fills_missing_tools_from_defaults(self):
         normalized = gemini.normalize_context_settings({"ai_model": "gemini-3.5-flash", "response_format": "text"})
-        assert normalized["tools_enabled"] == {"search": True, "code": True, "maps": True, "url_context": True}
+        assert normalized["tools_enabled"] == {"search": True, "code": True, "maps": False, "url_context": True}
 
     def test_normalize_settings_respects_disabled_tool(self):
         normalized = gemini.normalize_context_settings({
