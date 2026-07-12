@@ -91,6 +91,29 @@ ADDITIONAL_TOOLS_BEHAVIOR_INSTRUCTION = (
     "When a tool provides data, keep the answer Discord-native and concise."
 )
 
+
+def build_location_instruction(location):
+    """Build the system-instruction block for a saved user location.
+
+    The location name matters most: web-search queries are text, so telling
+    the model to include the place name in its searches is what makes
+    'near me' questions work on the free tier (no maps grounding needed).
+    """
+    if not location:
+        return ""
+    name = location.get("name")
+    lat, lng = location.get("lat"), location.get("lng")
+    if not name and lat is None:
+        return ""
+    described = name or f"lat {lat}, lng {lng}"
+    coords = f" (lat {lat}, lng {lng})" if (name and lat is not None) else ""
+    return (
+        f"\n\nSAVED LOCATION: The user's saved location is {described}{coords}. "
+        "For any 'near me', 'nearby', or local question (restaurants, stores, weather, events, directions), "
+        "use web search and include this location's name in the search query. "
+        "Do NOT ask the user where they are — assume this saved location unless the message names a different place."
+    )
+
 # ---------------------------------------------------------------------------
 # In-memory stores
 # ---------------------------------------------------------------------------
@@ -109,6 +132,9 @@ model_usage_totals = defaultdict(lambda: {
 
 MAX_HISTORY_MESSAGES = 10
 MAX_HISTORY_INPUT_TOKENS = 8000
+# When the whole model chain is rate-limited but the shortest server retry
+# hint is at most this many seconds, wait it out once and retry the chain.
+CHAIN_RETRY_MAX_WAIT_SECONDS = 10
 PACIFIC_TZ = ZoneInfo("America/Los_Angeles")
 
 
@@ -140,10 +166,14 @@ def normalize_context_settings(settings):
     normalized["tools_enabled"] = {key: bool(tools.get(key, default_value)) for key, default_value in defaults.items()}
     location = normalized.get("location")
     if isinstance(location, dict):
+        name = location.get("name")
         normalized["location"] = {
-            "lat": float(location.get("lat", 0)) if location.get("lat") is not None else None,
-            "lng": float(location.get("lng", 0)) if location.get("lng") is not None else None,
+            "name": str(name) if name else None,
+            "lat": float(location["lat"]) if location.get("lat") is not None else None,
+            "lng": float(location["lng"]) if location.get("lng") is not None else None,
         }
+        if normalized["location"]["name"] is None and normalized["location"]["lat"] is None:
+            normalized["location"] = None
     else:
         normalized["location"] = None
     return normalized
@@ -845,13 +875,14 @@ async def trim_history_for_token_budget(model_name, history, pending_content):
     return trimmed_history, request_contents, input_tokens
 
 
+# Every context should be able to reach the high-quota lite models, so the
+# fallback chain is "all other known models" in fixed priority order rather
+# than a downward-only ladder.
+FALLBACK_PRIORITY = [DEFAULT_CHAT_MODEL, SECONDARY_CHAT_MODEL, TERTIARY_CHAT_MODEL, QUATERNARY_CHAT_MODEL]
+
+
 def resolve_fallback_models(selected_model):
-    fallback_chain = {
-        DEFAULT_CHAT_MODEL: [SECONDARY_CHAT_MODEL, TERTIARY_CHAT_MODEL, QUATERNARY_CHAT_MODEL],
-        SECONDARY_CHAT_MODEL: [TERTIARY_CHAT_MODEL, QUATERNARY_CHAT_MODEL],
-        TERTIARY_CHAT_MODEL: [QUATERNARY_CHAT_MODEL],
-    }
-    return fallback_chain.get(selected_model, [])
+    return [model for model in FALLBACK_PRIORITY if model != selected_model]
 
 
 async def request_gemini_content(model_name, contents, system_personality, tool_names=None, location=None):
@@ -934,6 +965,7 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
     fallback_models = resolve_fallback_models(selected_model)
     tools_enabled = settings.get("tools_enabled", default_context_settings()["tools_enabled"])
     location = settings.get("location")
+    system_personality += build_location_instruction(location)
 
     try:
         history = get_history_for_context(server_id, user_id)
@@ -945,76 +977,89 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
         save_history_for_context(server_id, user_id, history)
 
         attempt_models = [selected_model, *fallback_models]
-        attempted_fallbacks = []
-        last_result = None
-        best_retry_after = None
-        first_local_limit_message = None
 
-        for index, model_name in enumerate(attempt_models):
-            model_history, model_contents, model_tokens = await trim_history_for_token_budget(model_name, history, pending_content)
-            result = await try_generate_with_model(model_name, model_contents, model_tokens, system_personality, tools_enabled=tools_enabled, location=location)
-            last_result = result
-            retry_after = result.get("retry_after_seconds")
-            if retry_after and (best_retry_after is None or retry_after > best_retry_after):
-                best_retry_after = retry_after
-            if result["ok"]:
-                bot_response = result["response_text"]
-                response = result["response"]
+        for chain_pass in range(2):
+            attempted_fallbacks = []
+            best_retry_after = None
+            shortest_retry_after = None
+            first_local_limit_message = None
 
-                # Log which tools fired for cost visibility. Maps grounding costs
-                # meaningfully more than search, so it is logged separately.
-                fired_tools = detect_fired_tools(response, tools_enabled=tools_enabled)
-                if fired_tools:
-                    tool_log = ", ".join(
-                        f"{tool}={value}" if isinstance(value, int) else tool
-                        for tool, value in fired_tools.items()
+            for index, model_name in enumerate(attempt_models):
+                model_history, model_contents, model_tokens = await trim_history_for_token_budget(model_name, history, pending_content)
+                result = await try_generate_with_model(model_name, model_contents, model_tokens, system_personality, tools_enabled=tools_enabled, location=location)
+                retry_after = result.get("retry_after_seconds")
+                if retry_after:
+                    if best_retry_after is None or retry_after > best_retry_after:
+                        best_retry_after = retry_after
+                    if shortest_retry_after is None or retry_after < shortest_retry_after:
+                        shortest_retry_after = retry_after
+                if result["ok"]:
+                    bot_response = result["response_text"]
+                    response = result["response"]
+
+                    # Log which tools fired for cost visibility. Maps grounding costs
+                    # meaningfully more than search, so it is logged separately.
+                    fired_tools = detect_fired_tools(response, tools_enabled=tools_enabled)
+                    if fired_tools:
+                        tool_log = ", ".join(
+                            f"{tool}={value}" if isinstance(value, int) else tool
+                            for tool, value in fired_tools.items()
+                        )
+                        print(f"[Gemini tools] model={model_name}, fired={tool_log}")
+
+                    web_sources, _ = extract_grounding_sources(response)
+                    maps_sources = extract_maps_sources(response)
+                    url_pages = extract_url_context_pages(response)
+                    code_executions = extract_code_executions(response)
+                    any_tool_data = code_executions or web_sources or maps_sources or url_pages
+
+                    # If the model returned no usable text and produced no tool data,
+                    # treat it as a model failure and try the next fallback.
+                    if bot_response == "I could not generate a response." and not any_tool_data:
+                        print(f"[Gemini warning] {model_name}: empty response with no tool data; trying fallback.")
+                        if index > 0:
+                            attempted_fallbacks.append(model_name)
+                        continue
+
+                    # If the model produced tool output but no text, use a placeholder
+                    # description so the tool fields are still visible.
+                    if bot_response == "I could not generate a response." and any_tool_data:
+                        bot_response = "Here's what I found:"
+
+                    # Build a Discord embed that lays out the answer and any tool
+                    # metadata in separate, clearly labeled sections.
+                    embed = build_response_embed(
+                        bot_response=bot_response,
+                        code_executions=code_executions,
+                        web_sources=web_sources,
+                        maps_sources=maps_sources,
+                        url_pages=url_pages,
+                        author=author,
                     )
-                    print(f"[Gemini tools] model={model_name}, fired={tool_log}")
 
-                web_sources, _ = extract_grounding_sources(response)
-                maps_sources = extract_maps_sources(response)
-                url_pages = extract_url_context_pages(response)
-                code_executions = extract_code_executions(response)
-                any_tool_data = code_executions or web_sources or maps_sources or url_pages
+                    # Store the plain answer (without sources) in conversation history
+                    # to keep tokens clean; the user still sees structured output in Discord.
+                    updated_history = model_history + [
+                        {"role": "user", "text": user_input or ""},
+                        {"role": "model", "text": bot_response},
+                    ]
+                    save_history_for_context(server_id, user_id, updated_history)
+                    return embed
+                if result.get("message") and first_local_limit_message is None:
+                    # A local rate-limit on this model shouldn't block the fallback
+                    # chain; remember the message and keep trying other models.
+                    first_local_limit_message = result["message"]
+                if index > 0:
+                    attempted_fallbacks.append(model_name)
 
-                # If the model returned no usable text and produced no tool data,
-                # treat it as a model failure and try the next fallback.
-                if bot_response == "I could not generate a response." and not any_tool_data:
-                    print(f"[Gemini warning] {model_name}: empty response with no tool data; trying fallback.")
-                    if index > 0:
-                        attempted_fallbacks.append(model_name)
-                    continue
-
-                # If the model produced tool output but no text, use a placeholder
-                # description so the tool fields are still visible.
-                if bot_response == "I could not generate a response." and any_tool_data:
-                    bot_response = "Here's what I found:"
-
-                # Build a Discord embed that lays out the answer and any tool
-                # metadata in separate, clearly labeled sections.
-                embed = build_response_embed(
-                    bot_response=bot_response,
-                    code_executions=code_executions,
-                    web_sources=web_sources,
-                    maps_sources=maps_sources,
-                    url_pages=url_pages,
-                    author=author,
-                )
-
-                # Store the plain answer (without sources) in conversation history
-                # to keep tokens clean; the user still sees structured output in Discord.
-                updated_history = model_history + [
-                    {"role": "user", "text": user_input or ""},
-                    {"role": "model", "text": bot_response},
-                ]
-                save_history_for_context(server_id, user_id, updated_history)
-                return embed
-            if result.get("message") and first_local_limit_message is None:
-                # A local rate-limit on this model shouldn't block the fallback
-                # chain; remember the message and keep trying other models.
-                first_local_limit_message = result["message"]
-            if index > 0:
-                attempted_fallbacks.append(model_name)
+            # Whole chain failed. Gemini-app-like patience: if some model said it
+            # will recover within a few seconds, wait that out once and retry the
+            # chain (cooldowns self-expire, so the recovered model is usable again).
+            if chain_pass == 0 and shortest_retry_after and shortest_retry_after <= CHAIN_RETRY_MAX_WAIT_SECONDS:
+                print(f"[Gemini] whole chain limited; waiting {shortest_retry_after}s and retrying once.")
+                await asyncio.sleep(shortest_retry_after + 1)
+                continue
+            break
 
         return discord.Embed(
             description=first_local_limit_message

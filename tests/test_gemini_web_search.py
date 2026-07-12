@@ -21,7 +21,10 @@ from zephyr.services import gemini
 from zephyr.services.gemini import (
     DEFAULT_CHAT_MODEL,
     SECONDARY_CHAT_MODEL,
+    TERTIARY_CHAT_MODEL,
     QUATERNARY_CHAT_MODEL,
+    resolve_fallback_models,
+    build_location_instruction,
     WEB_SEARCH_BEHAVIOR_INSTRUCTION,
     ADDITIONAL_TOOLS_BEHAVIOR_INSTRUCTION,
     extract_grounding_sources,
@@ -769,6 +772,154 @@ class TestToolToggles:
             "tools_enabled": {"search": False, "code": True, "maps": True, "url_context": True},
         })
         assert normalized["tools_enabled"]["search"] is False
+
+
+class TestFallbackChain:
+    def test_default_model_chain(self):
+        assert resolve_fallback_models(DEFAULT_CHAT_MODEL) == [
+            SECONDARY_CHAT_MODEL, TERTIARY_CHAT_MODEL, QUATERNARY_CHAT_MODEL,
+        ]
+
+    def test_tertiary_model_reaches_high_quota_lite_models(self):
+        # Regression: a server with 2.5-flash selected must be able to fall
+        # back to the big-quota lite models, not only to 2.5-pro.
+        assert resolve_fallback_models(TERTIARY_CHAT_MODEL) == [
+            DEFAULT_CHAT_MODEL, SECONDARY_CHAT_MODEL, QUATERNARY_CHAT_MODEL,
+        ]
+
+    def test_selected_model_never_in_own_chain(self):
+        for model in [DEFAULT_CHAT_MODEL, SECONDARY_CHAT_MODEL, TERTIARY_CHAT_MODEL, QUATERNARY_CHAT_MODEL]:
+            assert model not in resolve_fallback_models(model)
+
+
+class TestChainRetryWait:
+    @pytest.mark.asyncio
+    async def test_short_retry_hint_waits_and_retries_chain(self):
+        response = _make_response_no_tools("Answer after waiting.")
+        error = Exception("429 RESOURCE_EXHAUSTED: rate limited. retry in 3s")
+        # Four models fail on pass 1, then the first model succeeds on pass 2.
+        # Cooldown storage is disabled: sleep is mocked, so real cooldowns
+        # would still be active on pass 2 (in production the sleep outlasts them).
+        with patch.object(gemini.asyncio, "sleep", new_callable=AsyncMock) as mock_sleep:
+            with patch.object(gemini, "store_model_cooldown", new_callable=AsyncMock):
+                with patch.object(
+                    gemini.gemini_async_client.models,
+                    "generate_content",
+                    new_callable=AsyncMock,
+                    side_effect=[error, error, error, error, response],
+                ):
+                    with patch.object(gemini, "count_input_tokens", new_callable=AsyncMock, return_value=10):
+                        result = await generate_gemini_response(None, 72345, "Hi", author=_fake_author())
+
+        # One chain-retry sleep of retry_after + 1 seconds.
+        chain_sleeps = [call for call in mock_sleep.call_args_list if call.args and call.args[0] == 4]
+        assert len(chain_sleeps) == 1
+        assert "Answer after waiting." in result.description
+
+    @pytest.mark.asyncio
+    async def test_hintless_429_does_not_wait(self):
+        error = Exception("429 RESOURCE_EXHAUSTED: quota exceeded")
+        with patch.object(gemini.asyncio, "sleep", new_callable=AsyncMock) as mock_sleep:
+            with patch.object(
+                gemini.gemini_async_client.models,
+                "generate_content",
+                new_callable=AsyncMock,
+                side_effect=error,
+            ):
+                with patch.object(gemini, "count_input_tokens", new_callable=AsyncMock, return_value=10):
+                    result = await generate_gemini_response(None, 82345, "Hi", author=_fake_author())
+
+        # Hint-less 429s get a synthetic 60s cooldown (> max wait) so the bot
+        # doesn't stall the user; it returns the quota embed immediately.
+        mock_sleep.assert_not_called()
+        assert "temporarily unavailable" in result.description
+
+    @pytest.mark.asyncio
+    async def test_both_passes_fail_sleeps_only_once(self):
+        error = Exception("429 RESOURCE_EXHAUSTED: rate limited. retry in 2s")
+        with patch.object(gemini.asyncio, "sleep", new_callable=AsyncMock) as mock_sleep:
+            with patch.object(gemini, "store_model_cooldown", new_callable=AsyncMock):
+                with patch.object(
+                    gemini.gemini_async_client.models,
+                    "generate_content",
+                    new_callable=AsyncMock,
+                    side_effect=error,
+                ) as mock_generate:
+                    with patch.object(gemini, "count_input_tokens", new_callable=AsyncMock, return_value=10):
+                        result = await generate_gemini_response(None, 92345, "Hi", author=_fake_author())
+
+        # Exactly two chain passes (4 models each) and one wait between them.
+        assert mock_sleep.call_count == 1
+        assert mock_generate.call_count == 8
+        assert "temporarily unavailable" in result.description
+
+
+class TestLocationInstruction:
+    def test_no_location_returns_empty(self):
+        assert build_location_instruction(None) == ""
+        assert build_location_instruction({}) == ""
+        assert build_location_instruction({"name": None, "lat": None, "lng": None}) == ""
+
+    def test_name_and_coords(self):
+        text = build_location_instruction({"name": "Balantang, Jaro, Iloilo City", "lat": 10.73, "lng": 122.55})
+        assert "Balantang, Jaro, Iloilo City" in text
+        assert "10.73" in text and "122.55" in text
+        assert "Do NOT ask" in text
+
+    def test_name_only(self):
+        text = build_location_instruction({"name": "Balantang", "lat": None, "lng": None})
+        assert "Balantang" in text
+        assert "lat" not in text
+
+    def test_coords_only(self):
+        text = build_location_instruction({"name": None, "lat": 10.73, "lng": 122.55})
+        assert "10.73" in text
+
+    @pytest.mark.asyncio
+    async def test_location_injected_into_system_instruction(self):
+        gemini.set_context_settings(None, 13579, {
+            "ai_model": DEFAULT_CHAT_MODEL,
+            "response_format": "embed",
+            "location": {"name": "Jaro, Iloilo City", "lat": 10.72, "lng": 122.56},
+        })
+        response = _make_response_no_tools("The nearest one is in Jaro.")
+        with patch.object(
+            gemini.gemini_async_client.models,
+            "generate_content",
+            new_callable=AsyncMock,
+            return_value=response,
+        ) as mock_generate:
+            with patch.object(gemini, "count_input_tokens", new_callable=AsyncMock, return_value=10):
+                await generate_gemini_response(None, 13579, "nearest jollibee to me?", author=_fake_author())
+
+        system_instruction = mock_generate.call_args.kwargs["config"].system_instruction
+        assert "SAVED LOCATION" in system_instruction
+        assert "Jaro, Iloilo City" in system_instruction
+
+
+class TestLocationSettings:
+    def test_normalize_preserves_name_and_coords(self):
+        normalized = gemini.normalize_context_settings({
+            "location": {"name": "Jaro, Iloilo", "lat": 10.72, "lng": 122.56},
+        })
+        assert normalized["location"] == {"name": "Jaro, Iloilo", "lat": 10.72, "lng": 122.56}
+
+    def test_normalize_keeps_name_only_location(self):
+        normalized = gemini.normalize_context_settings({"location": {"name": "Balantang"}})
+        assert normalized["location"] == {"name": "Balantang", "lat": None, "lng": None}
+
+    def test_normalize_drops_empty_location(self):
+        assert gemini.normalize_context_settings({"location": {}})["location"] is None
+        assert gemini.normalize_context_settings({})["location"] is None
+
+    def test_location_round_trips_through_context_settings(self):
+        gemini.set_context_settings(None, 24680, {
+            "ai_model": DEFAULT_CHAT_MODEL,
+            "location": {"name": "Iloilo City", "lat": 10.72, "lng": 122.56},
+        })
+        settings = gemini.get_context_settings(None, 24680)
+        assert settings["location"]["name"] == "Iloilo City"
+        assert settings["location"]["lat"] == 10.72
 
 
 class TestLegacyHelpers:

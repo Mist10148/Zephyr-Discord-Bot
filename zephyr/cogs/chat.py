@@ -7,6 +7,7 @@ Gemini engine lives in ``zephyr.services.gemini``; the message-event handler
 lives on the bot in ``zephyr.client``.
 """
 
+import asyncio
 import io
 from collections import deque
 from datetime import datetime, timezone
@@ -31,6 +32,7 @@ from zephyr.services.gemini import (
     MODEL_LIMITS,
     DEFAULT_CHAT_MODEL,
 )
+from zephyr.utils.weather_utils import geocode_city
 
 # ---------------------------------------------------------------------------
 # Image Generation Rate Limiting (original 2477-2488)
@@ -179,8 +181,67 @@ class ChatCog(commands.Cog):
         )
         if changed:
             embed.add_field(name="Changes", value="\n".join(changed), inline=False)
-        embed.set_footer(text="Search, code, and URL context are on by default. Maps is off by default (paid-tier feature).")
+        embed.set_footer(text="Search, code, and URL context are on by default. Maps is off by default (paid-tier feature) — use /location to make 'near me' questions work via web search.")
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="location", description="Save a location for 'near me' questions in this server/DM.")
+    @app_commands.describe(
+        place="Your area, e.g. 'Balantang, Jaro, Iloilo City'.",
+        clear="Remove the saved location for this context.",
+    )
+    async def location(self, interaction: discord.Interaction, place: str = None, clear: bool = False):
+        server_id = interaction.guild.id if interaction.guild else None
+        current = get_context_settings(server_id, interaction.user.id)
+
+        if clear:
+            current["location"] = None
+            set_context_settings(server_id=server_id, user_id=interaction.user.id, settings=current)
+            save_user_settings()
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="✅ Location Cleared",
+                    description="The saved location for this context has been removed.",
+                    color=discord.Color.green(),
+                ),
+                ephemeral=True,
+            )
+            return
+
+        if not place:
+            saved = current.get("location")
+            if saved:
+                coords = f"{saved['lat']}, {saved['lng']}" if saved.get("lat") is not None else "not resolved"
+                description = f"**{saved.get('name') or 'Unnamed'}**\nCoordinates: {coords}"
+            else:
+                description = "No location saved. Use `/location place:<your area>` to set one."
+            await interaction.response.send_message(
+                embed=discord.Embed(title="📍 Saved Location", description=description, color=discord.Color.blurple()),
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        coords = await asyncio.to_thread(geocode_city, place)
+        lat, lng = coords if coords else (None, None)
+        current["location"] = {"name": place, "lat": lat, "lng": lng}
+        set_context_settings(server_id=server_id, user_id=interaction.user.id, settings=current)
+        save_user_settings()
+
+        embed = discord.Embed(title="✅ Location Saved", color=discord.Color.green())
+        embed.add_field(name="Location", value=place, inline=False)
+        if coords:
+            embed.add_field(name="Coordinates", value=f"{lat}, {lng}", inline=False)
+        else:
+            embed.add_field(
+                name="Coordinates",
+                value="Could not be resolved — 'near me' search will use the place name only.",
+                inline=False,
+            )
+        footer = "Near-me questions use web search with this location."
+        if server_id:
+            footer += " Shared by everyone in this server; in DMs it's just yours."
+        embed.set_footer(text=footer)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="output", description="Quickly switch the chatbot response format between embed and normal text.")
     @app_commands.describe(format="Choose embed or normal text")
