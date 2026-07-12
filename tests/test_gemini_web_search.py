@@ -250,33 +250,43 @@ class TestDetectFiredTools:
 
 
 class TestGenerateConfig:
-    def test_get_generate_config_includes_all_compatible_tools(self):
-        # With all tools enabled but a neutral message, code_execution is
-        # preferred over google_maps because the API forbids combining them.
+    def test_get_generate_config_no_tools_for_casual_chat(self):
+        # Casual chat should not register any tools to avoid cost and model
+        # compatibility issues.
         config = get_generate_config("be helpful", user_input="Hello")
-        assert config.tools is not None
-        assert len(config.tools) == 3
-        assert any(isinstance(tool.google_search, types.GoogleSearch) for tool in config.tools if tool.google_search is not None)
-        assert any(tool.code_execution is not None for tool in config.tools)
-        assert any(tool.url_context is not None for tool in config.tools)
-        assert not any(tool.google_maps is not None for tool in config.tools)
+        assert not config.tools
 
-    def test_get_generate_config_prefers_maps_for_geographic_intent(self):
+    def test_get_generate_config_registers_maps_for_geographic_intent(self):
         config = get_generate_config("be helpful", user_input="restaurants near me")
         assert config.tools is not None
         assert any(tool.google_maps is not None for tool in config.tools)
         assert not any(tool.code_execution is not None for tool in config.tools)
 
-    def test_get_generate_config_prefers_code_for_math_intent(self):
+    def test_get_generate_config_registers_code_for_math_intent(self):
         config = get_generate_config("be helpful", user_input="calculate 15 factorial")
         assert config.tools is not None
         assert any(tool.code_execution is not None for tool in config.tools)
         assert not any(tool.google_maps is not None for tool in config.tools)
 
+    def test_get_generate_config_registers_search_and_url_for_current_events_and_link(self):
+        config = get_generate_config(
+            "be helpful",
+            user_input="latest news and also https://example.com/article",
+        )
+        assert config.tools is not None
+        assert any(tool.google_search is not None for tool in config.tools)
+        assert any(tool.url_context is not None for tool in config.tools)
+
     def test_get_generate_config_respects_disabled_tools(self):
-        config = get_generate_config("be helpful", tools_enabled={"search": False, "code": True, "maps": False, "url_context": True})
+        config = get_generate_config(
+            "be helpful",
+            tools_enabled={"search": False, "code": True, "maps": False, "url_context": True},
+            user_input="calculate 2+2 and check https://example.com",
+        )
         assert config.tools is not None
         assert len(config.tools) == 2
+        assert any(tool.code_execution is not None for tool in config.tools)
+        assert any(tool.url_context is not None for tool in config.tools)
         assert not any(tool.google_search is not None for tool in config.tools)
         assert not any(tool.google_maps is not None for tool in config.tools)
 
@@ -360,7 +370,7 @@ class TestBuildResponseEmbed:
 
 class TestGenerateGeminiResponse:
     @pytest.mark.asyncio
-    async def test_uses_selected_model_and_enables_compatible_tools(self):
+    async def test_uses_selected_model_and_no_tools_for_casual_chat(self):
         response = _make_response_no_tools("Hello there!")
         with patch.object(
             gemini.gemini_async_client.models,
@@ -375,10 +385,7 @@ class TestGenerateGeminiResponse:
         call_kwargs = mock_generate.call_args.kwargs
         assert call_kwargs["model"] == DEFAULT_CHAT_MODEL
         config = call_kwargs["config"]
-        assert config.tools is not None
-        # google_maps and code_execution can't be combined; neutral messages keep code.
-        assert len(config.tools) == 3
-        assert not any(tool.google_maps is not None for tool in config.tools)
+        assert not config.tools
 
     @pytest.mark.asyncio
     async def test_returns_embed(self):
@@ -393,7 +400,7 @@ class TestGenerateGeminiResponse:
                 result = await generate_gemini_response(None, 12345, "Hi", author=_fake_author())
 
         assert isinstance(result, type(result))  # discord.Embed, but mocking avoids import
-        assert result.title == "🤖 My Response"
+        assert result.title is None
         assert "Hello there!" in result.description
 
     @pytest.mark.asyncio

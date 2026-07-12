@@ -310,35 +310,54 @@ def build_user_content(user_input, image_bytes=None, mime_type=None):
 
 
 def detect_message_intent(user_input):
-    """Detect whether a message has code/math or geographic intent.
+    """Detect which tool intents a message has.
 
-    Gemini's API does not allow google_maps and code_execution to be registered
-    together, so we pre-select which one fits better when both are enabled.
+    We only register a built-in tool when the message actually looks like it
+    needs it. This avoids paying for expensive tools (maps) on casual chat and
+    works around the API limitation that google_maps and code_execution cannot
+    be combined in one request.
     """
     text = (user_input or "").lower()
+
     code_keywords = [
         "calculate", "compute", "solve", "what is", "what's", "how much",
         "factorial", "sum of", "product of", "sqrt", "square root",
-        "+", "-", "*", "/", "^", "=", "%", "sin", "cos", "tan", "log",
+        "sin", "cos", "tan", "log", "ln", "pi", "euler",
     ]
     maps_keywords = [
-        "near me", "nearby", "directions", "restaurants", "places", "hotels",
+        "near me", "nearby", "directions to", "restaurants", "places", "hotels",
         "cafes", "bars", "gas stations", "hospitals", "pharmacies", "stores",
         "closest", "nearest", "around here", "in the area", "local",
         "hours", "open now", "address", "located", "where is", "how do i get to",
     ]
-    has_code = any(kw in text for kw in code_keywords)
+    search_keywords = [
+        "latest", "current", "now", "today", "this week", "this month", "this year",
+        "news", "weather", "price", "stock", "crypto", "bitcoin", "score", "standings",
+        "version", "release", "update", "who won", "election", "rate", "forecast",
+    ]
+
+    # Simple math/code heuristic: digits with operators or explicit math words.
+    has_math_operators = any(op in text for op in ["+", "-", "*", "/", "^", "=", "%"])
+    has_code = any(kw in text for kw in code_keywords) or has_math_operators
+
     has_maps = any(kw in text for kw in maps_keywords)
-    return {"code": has_code, "maps": has_maps}
+    has_search = any(kw in text for kw in search_keywords)
+    has_url = bool(re.search(r"https?://\S+", user_input or ""))
+
+    return {
+        "code": has_code,
+        "maps": has_maps,
+        "search": has_search,
+        "url_context": has_url,
+    }
 
 
 def get_generate_config(system_personality, tools_enabled=None, location=None, user_input=None):
     """Build a Gemini generation config.
 
-    The model decides per-message which of the enabled built-in tools to use.
-    Because the API forbids combining google_maps and code_execution in the
-    same request, we detect message intent and register only the compatible
-    subset when both would otherwise be enabled.
+    Only registers the enabled tools that match the message's intent. This keeps
+    costs down and avoids the API error that forbids combining google_maps and
+    code_execution in the same request.
     """
     tools_enabled = tools_enabled or {}
     config_kwargs = {
@@ -347,28 +366,15 @@ def get_generate_config(system_personality, tools_enabled=None, location=None, u
     }
 
     intent = detect_message_intent(user_input)
-    maps_enabled = tools_enabled.get("maps", True)
-    code_enabled = tools_enabled.get("code", True)
-
-    # google_maps and code_execution cannot be combined. If both are enabled,
-    # choose one based on message intent. Default to code execution because it
-    # is cheaper and more generally useful; only pick maps when the message
-    # clearly has geographic intent and no code/math intent.
-    include_maps = maps_enabled and (
-        not code_enabled or (intent["maps"] and not intent["code"])
-    )
-    include_code = code_enabled and (
-        not maps_enabled or not include_maps
-    )
 
     enabled_tools = []
-    if tools_enabled.get("search", True):
+    if tools_enabled.get("search", True) and intent["search"]:
         enabled_tools.append(types.Tool(google_search=types.GoogleSearch()))
-    if include_code:
+    if tools_enabled.get("code", True) and intent["code"]:
         enabled_tools.append(types.Tool(code_execution=types.ToolCodeExecution()))
-    if include_maps:
+    if tools_enabled.get("maps", True) and intent["maps"]:
         enabled_tools.append(types.Tool(google_maps=types.GoogleMaps()))
-    if tools_enabled.get("url_context", True):
+    if tools_enabled.get("url_context", True) and intent["url_context"]:
         enabled_tools.append(types.Tool(url_context=types.UrlContext()))
 
     if enabled_tools:
@@ -427,18 +433,27 @@ def extract_usage_value(usage_metadata, attr_name):
 
 
 def extract_response_text(response):
+    """Extract the model's text answer from the response.
+
+    Handles plain text responses and tool-augmented responses where text may be
+    mixed with code execution or grounding metadata. Returns None only when no
+    text part exists.
+    """
     try:
-        if getattr(response, "text", None):
-            return response.text
+        text = getattr(response, "text", None)
+        if text is not None and str(text).strip():
+            return str(text).strip()
     except Exception:
         pass
     try:
         for candidate in getattr(response, "candidates", []) or []:
             content = getattr(candidate, "content", None)
+            if not content:
+                continue
             for part in getattr(content, "parts", []) or []:
                 text = getattr(part, "text", None)
-                if text:
-                    return text
+                if text and str(text).strip():
+                    return str(text).strip()
     except Exception:
         pass
     return None
@@ -620,21 +635,17 @@ def _format_linked_list(items, key="title", link_key="uri", fallback_url_key=Non
 
 
 def build_response_embed(bot_response, code_executions, web_sources, maps_sources, url_pages, author=None):
-    """Build a Discord embed that lays out Gemini's answer plus any tool metadata.
+    """Build a minimal Discord embed that lays out Gemini's answer plus any tool metadata.
 
-    Respects Discord's embed limits: 4096 description chars, 1024 chars per
-    field value, 25 fields max, 6000 total chars. Long code/output is truncated
-    instead of raising.
+    No title or footer — just the answer and optional tool fields. Respects
+    Discord's embed limits: 4096 description chars, 1024 chars per field value,
+    25 fields max, 6000 total chars. Long code/output is truncated instead of
+    raising.
     """
     embed = discord.Embed(
-        title="🤖 My Response",
         description=_truncate(bot_response, EMBED_DESCRIPTION_LIMIT),
         color=discord.Color.purple(),
     )
-    if author is not None:
-        footer_text = f"Requested by {getattr(author, 'display_name', 'User')}"
-        icon_url = getattr(getattr(author, 'display_avatar', None), 'url', None)
-        embed.set_footer(text=footer_text, icon_url=icon_url)
 
     fields = []
 
@@ -847,7 +858,13 @@ async def try_generate_with_model(model_name, contents, input_tokens, system_per
         return {"ok": False, "message": limit_message, "quota_handled": True}
     try:
         response = await request_gemini_content(model_name, contents, system_personality, tools_enabled=tools_enabled, location=location, user_input=user_input)
-        response_text = extract_response_text(response) or "I could not generate a response."
+        response_text = extract_response_text(response)
+        if response_text is None:
+            # Log the raw response shape so we can diagnose empty-text issues.
+            candidate = _first_candidate(response)
+            finish_reason = getattr(getattr(candidate, "finish_reason", None), "name", None) if candidate else None
+            print(f"[Gemini warning] {model_name}: no text in response. finish_reason={finish_reason}")
+            response_text = "I could not generate a response."
         await record_successful_usage(model_name, getattr(response, "usage_metadata", None))
         return {"ok": True, "response_text": response_text, "response": response}
     except Exception as exc:
@@ -932,6 +949,20 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
                 maps_sources = extract_maps_sources(response)
                 url_pages = extract_url_context_pages(response)
                 code_executions = extract_code_executions(response)
+                any_tool_data = code_executions or web_sources or maps_sources or url_pages
+
+                # If the model returned no usable text and produced no tool data,
+                # treat it as a model failure and try the next fallback.
+                if bot_response == "I could not generate a response." and not any_tool_data:
+                    print(f"[Gemini warning] {model_name}: empty response with no tool data; trying fallback.")
+                    if index > 0:
+                        attempted_fallbacks.append(model_name)
+                    continue
+
+                # If the model produced tool output but no text, use a placeholder
+                # description so the tool fields are still visible.
+                if bot_response == "I could not generate a response." and any_tool_data:
+                    bot_response = "Here's what I found:"
 
                 # Build a Discord embed that lays out the answer and any tool
                 # metadata in separate, clearly labeled sections.
@@ -955,7 +986,6 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
             if result.get("message"):
                 # Quota/limit messages are plain text; wrap them in a simple embed.
                 return discord.Embed(
-                    title="⏳ Slow Down",
                     description=result["message"],
                     color=discord.Color.orange(),
                 )
@@ -963,7 +993,6 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
                 attempted_fallbacks.append(model_name)
 
         return discord.Embed(
-            title="⏳ Rate Limited",
             description=build_quota_message(selected_model, retry_after_seconds=best_retry_after, attempted_fallbacks=attempted_fallbacks),
             color=discord.Color.orange(),
         )
@@ -971,7 +1000,6 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
         print(f"[Gemini error] {selected_model}: {exc}")
         traceback.print_exc()
         return discord.Embed(
-            title="⚠️ Error",
             description="An unexpected error occurred while generating a response. Please try again in a moment.",
             color=discord.Color.red(),
         )
