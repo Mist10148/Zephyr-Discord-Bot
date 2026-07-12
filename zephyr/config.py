@@ -71,6 +71,11 @@ DEFAULT_CHAT_MODEL = "gemini-3.1-flash-lite"
 SECONDARY_CHAT_MODEL = "gemini-2.5-flash-lite"
 TERTIARY_CHAT_MODEL = "gemini-2.5-flash"
 
+# Web-search-aware chat uses Gemini 3.5 Flash with Google Search grounding.
+# Swap to gemini-3.5-pro for higher answer quality (drop-in replacement).
+WEB_SEARCH_CHAT_MODEL = "gemini-3.5-flash"
+WEB_SEARCH_PRO_MODEL = "gemini-3.5-pro"
+
 # ---------------------------------------------------------------------------
 # Settings persistence
 # ---------------------------------------------------------------------------

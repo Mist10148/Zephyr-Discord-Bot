@@ -28,6 +28,8 @@ from zephyr.services.gemini import (
     generate_gemini_response,
     send_response,
     MODEL_LIMITS,
+    WEB_SEARCH_CHAT_MODEL,
+    WEB_SEARCH_PRO_MODEL,
 )
 
 # ---------------------------------------------------------------------------
@@ -96,10 +98,12 @@ class ChatCog(commands.Cog):
     )
     @app_commands.choices(
         ai_model=[
-            app_commands.Choice(name="⚡ 3.1 Flash-Lite (Recommended)", value="gemini-3.1-flash-lite"),
+            app_commands.Choice(name="🔍 3.5 Flash with Search (Recommended)", value="gemini-3.5-flash"),
+            app_commands.Choice(name="🧠 3.5 Pro with Search (Higher quality)", value="gemini-3.5-pro"),
+            app_commands.Choice(name="⚡ 3.1 Flash-Lite", value="gemini-3.1-flash-lite"),
             app_commands.Choice(name="⚡ 2.5 Flash-Lite", value="gemini-2.5-flash-lite"),
             app_commands.Choice(name="⚡ 2.5 Flash", value="gemini-2.5-flash"),
-            app_commands.Choice(name="🧠 Pro (Powerful & Complex)", value="gemini-2.5-pro"),
+            app_commands.Choice(name="🧠 2.5 Pro", value="gemini-2.5-pro"),
         ],
         response_format=[
             app_commands.Choice(name="📄 Embed (Default)", value="embed"),
@@ -153,6 +157,10 @@ class ChatCog(commands.Cog):
         server_id = interaction.guild.id if interaction.guild else None
         settings = get_context_settings(server_id, interaction.user.id)
         effective_model = settings["ai_model"]
+        # Chat is web-search-aware and uses Gemini 3.5 Flash unless the user
+        # explicitly selected 3.5 Pro; non-3.5 choices are overridden at runtime.
+        if effective_model not in {WEB_SEARCH_CHAT_MODEL, WEB_SEARCH_PRO_MODEL}:
+            effective_model = WEB_SEARCH_CHAT_MODEL
         fallback_models = resolve_fallback_models(effective_model)
         fallback_label = ", ".join(fallback_models) if fallback_models else "None"
         limits = MODEL_LIMITS.get(effective_model)

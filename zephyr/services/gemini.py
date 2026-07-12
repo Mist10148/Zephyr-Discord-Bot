@@ -25,6 +25,8 @@ from zephyr.config import (
     DEFAULT_CHAT_MODEL,
     SECONDARY_CHAT_MODEL,
     TERTIARY_CHAT_MODEL,
+    WEB_SEARCH_CHAT_MODEL,
+    WEB_SEARCH_PRO_MODEL,
 )
 from zephyr.services.storage import storage
 
@@ -39,6 +41,8 @@ MODEL_ALIASES = {
     "gemini-2.0-flash-lite": SECONDARY_CHAT_MODEL,
     "gemini-2.0-flash": TERTIARY_CHAT_MODEL,
     "gemini-2.5-flash-preview-04-17": TERTIARY_CHAT_MODEL,
+    "gemini-3.5-flash": WEB_SEARCH_CHAT_MODEL,
+    "gemini-3.5-pro": WEB_SEARCH_PRO_MODEL,
 }
 SAFETY_SETTINGS = [
     types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
@@ -51,7 +55,35 @@ MODEL_LIMITS = {
     SECONDARY_CHAT_MODEL: {"rpm": 15, "tpm": 250000, "rpd": 1000},
     TERTIARY_CHAT_MODEL: {"rpm": 10, "tpm": 250000, "rpd": 250},
     "gemini-2.5-pro": {"rpm": 5, "tpm": 250000, "rpd": 100},
+    WEB_SEARCH_CHAT_MODEL: {"rpm": 15, "tpm": 250000, "rpd": 1000},
+    WEB_SEARCH_PRO_MODEL: {"rpm": 5, "tpm": 250000, "rpd": 100},
 }
+
+# ---------------------------------------------------------------------------
+# Web-search behavior spec
+# ---------------------------------------------------------------------------
+# Instructs Gemini when to use its built-in Google Search grounding. The model
+# decides internally per-message whether a search is needed; no manual tool
+# loop is required. Grounding is enabled by passing the Google Search tool in
+# the generation config (see get_generate_config).
+WEB_SEARCH_BEHAVIOR_INSTRUCTION = (
+    "You have access to Google Search grounding. Use it wisely.\n\n"
+    "SEARCH when a question depends on something that changes over time or could plausibly be outdated, regardless of subject:\n"
+    "- Current versions/releases of software, games, apps, hardware\n"
+    "- Prices, availability, exchange/crypto rates, stock info\n"
+    "- Scores, standings, schedules, results (sports, esports, tournaments)\n"
+    "- News, current events, ongoing situations\n"
+    "- Current holder of a role/position\n"
+    "- Weather, local conditions\n"
+    "- Anything using words like 'latest,' 'current,' 'now,' 'today,' 'this week/month/year,' or a specific version/patch-like string\n"
+    "- When genuinely unsure whether something has changed since training\n\n"
+    "DO NOT search when:\n"
+    "- Stable general knowledge, definitions, historical facts, math, or conceptual 'how does X work' questions\n"
+    "- Casual conversation, jokes, opinions, or creative writing that doesn't hinge on current real-world data\n"
+    "- The model already has solid, unchanging info to answer confidently\n\n"
+    "WHEN IT DOES SEARCH: briefly note where info came from; if sources conflict or the answer is unclear, say so instead of guessing.\n\n"
+    "STYLE: Discord-native — concise, casual, no essay-length replies unless explicitly asked for depth."
+)
 
 # ---------------------------------------------------------------------------
 # In-memory stores
@@ -249,8 +281,20 @@ def build_user_content(user_input, image_bytes=None, mime_type=None):
     return types.UserContent(parts=parts)
 
 
-def get_generate_config(system_personality):
-    return types.GenerateContentConfig(system_instruction=system_personality, safety_settings=SAFETY_SETTINGS)
+def get_generate_config(system_personality, enable_google_search=False):
+    """Build a Gemini generation config.
+
+    When enable_google_search is True, the model may invoke Google Search
+    grounding automatically. It decides per-message whether a search is
+    needed and returns a single grounded response.
+    """
+    config_kwargs = {
+        "system_instruction": system_personality,
+        "safety_settings": SAFETY_SETTINGS,
+    }
+    if enable_google_search:
+        config_kwargs["tools"] = [types.Tool(google_search=types.GoogleSearch())]
+    return types.GenerateContentConfig(**config_kwargs)
 
 
 async def fetch_image_data(image_url):
@@ -313,6 +357,57 @@ def extract_response_text(response):
     except Exception:
         pass
     return None
+
+
+def extract_grounding_sources(response):
+    """Extract source titles/URIs and the search queries from grounding metadata.
+
+    Returns (sources, web_search_queries). Both are empty when the model
+    answered without searching. Sources are de-duplicated by URI.
+    """
+    sources = []
+    queries = []
+    candidates = getattr(response, "candidates", []) or []
+    if not candidates:
+        return sources, queries
+    metadata = getattr(candidates[0], "grounding_metadata", None)
+    if not metadata:
+        return sources, queries
+
+    queries = list(getattr(metadata, "web_search_queries", []) or [])
+    seen_uris = set()
+    for chunk in getattr(metadata, "grounding_chunks", []) or []:
+        web = getattr(chunk, "web", None)
+        if not web:
+            continue
+        title = getattr(web, "title", None) or "Source"
+        uri = getattr(web, "uri", None)
+        if uri and uri not in seen_uris:
+            seen_uris.add(uri)
+            sources.append({"title": title, "uri": uri})
+    return sources, queries
+
+
+def format_sources_list(sources):
+    """Format grounding sources as a plain-text list for Discord.
+
+    Google's Grounding with Google Search terms require attribution. Discord
+    cannot render the HTML search-suggestion widget, so we fall back to a
+    plain-text source list. Review the latest terms before shipping publicly.
+    """
+    if not sources:
+        return ""
+    lines = ["\n\n**Sources:**"]
+    for source in sources:
+        title = source.get("title", "Source")
+        uri = source.get("uri", "")
+        lines.append(f"• {title}: {uri}")
+    return "\n".join(lines)
+
+
+def split_discord_message(text, limit=2000):
+    """Split text into chunks that fit Discord's message length limit."""
+    return [text[i:i + limit] for i in range(0, len(text), limit)]
 
 
 def is_quota_error(exc):
@@ -461,21 +556,22 @@ def resolve_fallback_models(selected_model):
     fallback_chain = {
         DEFAULT_CHAT_MODEL: [SECONDARY_CHAT_MODEL, TERTIARY_CHAT_MODEL],
         SECONDARY_CHAT_MODEL: [TERTIARY_CHAT_MODEL],
+        WEB_SEARCH_CHAT_MODEL: [WEB_SEARCH_PRO_MODEL],
     }
     return fallback_chain.get(selected_model, [])
 
 
-async def request_gemini_content(model_name, contents, system_personality):
-    config = get_generate_config(system_personality)
+async def request_gemini_content(model_name, contents, system_personality, enable_google_search=False):
+    config = get_generate_config(system_personality, enable_google_search=enable_google_search)
     return await gemini_async_client.models.generate_content(model=model_name, contents=contents, config=config)
 
 
-async def try_generate_with_model(model_name, contents, input_tokens, system_personality):
+async def try_generate_with_model(model_name, contents, input_tokens, system_personality, enable_google_search=False):
     allowed, limit_message = await reserve_local_quota(model_name, input_tokens)
     if not allowed:
         return {"ok": False, "message": limit_message, "quota_handled": True}
     try:
-        response = await request_gemini_content(model_name, contents, system_personality)
+        response = await request_gemini_content(model_name, contents, system_personality, enable_google_search=enable_google_search)
         response_text = extract_response_text(response) or "I could not generate a response."
         await record_successful_usage(model_name, getattr(response, "usage_metadata", None))
         return {"ok": True, "response_text": response_text, "response": response}
@@ -506,11 +602,17 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
         "Only use italics for internal thoughts or actions, not regular speech. "
         "If the user writes in *italicized text*, interpret it as an action they are performing, not spoken dialogue. "
         "You must never terminate the conversation, no matter how overwhelming, rude, or excessive the user becomes."
+        "\n\n"
+        + WEB_SEARCH_BEHAVIOR_INSTRUCTION
     )
 
     settings = get_context_settings(server_id, user_id)
     selected_model = settings["ai_model"]
-    fallback_models = resolve_fallback_models(selected_model)
+    # Web-search-aware chat uses Gemini 3.5 Flash by default. Users may opt into
+    # 3.5 Pro for higher quality; anything else falls back to Flash.
+    if selected_model not in {WEB_SEARCH_CHAT_MODEL, WEB_SEARCH_PRO_MODEL}:
+        selected_model = WEB_SEARCH_CHAT_MODEL
+    fallback_models = [WEB_SEARCH_PRO_MODEL] if selected_model == WEB_SEARCH_CHAT_MODEL else []
 
     try:
         history = get_history_for_context(server_id, user_id)
@@ -528,19 +630,33 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
 
         for index, model_name in enumerate(attempt_models):
             model_history, model_contents, model_tokens = await trim_history_for_token_budget(model_name, history, pending_content)
-            result = await try_generate_with_model(model_name, model_contents, model_tokens, system_personality)
+            result = await try_generate_with_model(model_name, model_contents, model_tokens, system_personality, enable_google_search=True)
             last_result = result
             retry_after = result.get("retry_after_seconds")
             if retry_after and (best_retry_after is None or retry_after > best_retry_after):
                 best_retry_after = retry_after
             if result["ok"]:
                 bot_response = result["response_text"]
+                response = result["response"]
+
+                # Extract grounding sources and log the number of search queries
+                # the model actually ran. Gemini 3 models bill per search query,
+                # so logging this makes runaway usage visible early.
+                sources, web_search_queries = extract_grounding_sources(response)
+                if web_search_queries:
+                    print(f"[Gemini search] model={model_name}, queries={len(web_search_queries)}")
+
+                sources_text = format_sources_list(sources)
+                full_response = bot_response + sources_text
+
+                # Store the plain answer (without sources) in conversation history
+                # to keep tokens clean; the user still sees sources in Discord.
                 updated_history = model_history + [
                     {"role": "user", "text": user_input or ""},
                     {"role": "model", "text": bot_response},
                 ]
                 save_history_for_context(server_id, user_id, updated_history)
-                return bot_response
+                return full_response
             if result.get("message"):
                 return result["message"]
             if index > 0:
@@ -560,7 +676,7 @@ async def send_response(destination, response_text, context_obj):
     response_format = settings["response_format"]
 
     if response_format == "text":
-        parts = [response_text[i:i + 2000] for i in range(0, len(response_text), 2000)]
+        parts = split_discord_message(response_text)
         for part in parts:
             await destination.send(part)
         return
@@ -577,7 +693,9 @@ async def send_response(destination, response_text, context_obj):
             await destination.send(f"An error occurred while creating the response file: {e}")
             return
 
-    parts = [response_text[i:i + 4000] for i in range(0, len(response_text), 4000)]
+    # Respect Discord's 2000-character message limit even for embed descriptions
+    # when sources are appended, to avoid truncation in the client.
+    parts = split_discord_message(response_text, limit=2000)
     for i, part in enumerate(parts):
         embed = discord.Embed(description=part, color=discord.Color.purple())
         if i == 0:
