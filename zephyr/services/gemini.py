@@ -25,8 +25,7 @@ from zephyr.config import (
     DEFAULT_CHAT_MODEL,
     SECONDARY_CHAT_MODEL,
     TERTIARY_CHAT_MODEL,
-    WEB_SEARCH_CHAT_MODEL,
-    WEB_SEARCH_PRO_MODEL,
+    QUATERNARY_CHAT_MODEL,
 )
 from zephyr.services.storage import storage
 
@@ -41,8 +40,7 @@ MODEL_ALIASES = {
     "gemini-2.0-flash-lite": SECONDARY_CHAT_MODEL,
     "gemini-2.0-flash": TERTIARY_CHAT_MODEL,
     "gemini-2.5-flash-preview-04-17": TERTIARY_CHAT_MODEL,
-    "gemini-3.5-flash": WEB_SEARCH_CHAT_MODEL,
-    "gemini-3.5-pro": WEB_SEARCH_PRO_MODEL,
+    "gemini-2.5-pro": QUATERNARY_CHAT_MODEL,
 }
 SAFETY_SETTINGS = [
     types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
@@ -60,9 +58,7 @@ MODEL_LIMITS = {
     DEFAULT_CHAT_MODEL: {"rpm": 15, "tpm": 250000, "rpd": 1000},
     SECONDARY_CHAT_MODEL: {"rpm": 15, "tpm": 250000, "rpd": 1000},
     TERTIARY_CHAT_MODEL: {"rpm": 10, "tpm": 250000, "rpd": 250},
-    "gemini-2.5-pro": {"rpm": 5, "tpm": 250000, "rpd": 100},
-    WEB_SEARCH_CHAT_MODEL: {"rpm": 15, "tpm": 250000, "rpd": 1000},
-    WEB_SEARCH_PRO_MODEL: {"rpm": 5, "tpm": 250000, "rpd": 100},
+    QUATERNARY_CHAT_MODEL: {"rpm": 5, "tpm": 250000, "rpd": 100},
 }
 
 # ---------------------------------------------------------------------------
@@ -313,27 +309,68 @@ def build_user_content(user_input, image_bytes=None, mime_type=None):
     return types.UserContent(parts=parts)
 
 
-def get_generate_config(system_personality, tools_enabled=None, location=None):
+def detect_message_intent(user_input):
+    """Detect whether a message has code/math or geographic intent.
+
+    Gemini's API does not allow google_maps and code_execution to be registered
+    together, so we pre-select which one fits better when both are enabled.
+    """
+    text = (user_input or "").lower()
+    code_keywords = [
+        "calculate", "compute", "solve", "what is", "what's", "how much",
+        "factorial", "sum of", "product of", "sqrt", "square root",
+        "+", "-", "*", "/", "^", "=", "%", "sin", "cos", "tan", "log",
+    ]
+    maps_keywords = [
+        "near me", "nearby", "directions", "restaurants", "places", "hotels",
+        "cafes", "bars", "gas stations", "hospitals", "pharmacies", "stores",
+        "closest", "nearest", "around here", "in the area", "local",
+        "hours", "open now", "address", "located", "where is", "how do i get to",
+    ]
+    has_code = any(kw in text for kw in code_keywords)
+    has_maps = any(kw in text for kw in maps_keywords)
+    return {"code": has_code, "maps": has_maps}
+
+
+def get_generate_config(system_personality, tools_enabled=None, location=None, user_input=None):
     """Build a Gemini generation config.
 
-    The model decides per-message which of the enabled built-in tools to use
-    (search, code execution, maps grounding, URL context) and returns a single
-    response with combined metadata. All tools are enabled by default.
+    The model decides per-message which of the enabled built-in tools to use.
+    Because the API forbids combining google_maps and code_execution in the
+    same request, we detect message intent and register only the compatible
+    subset when both would otherwise be enabled.
     """
     tools_enabled = tools_enabled or {}
     config_kwargs = {
         "system_instruction": system_personality,
         "safety_settings": SAFETY_SETTINGS,
     }
+
+    intent = detect_message_intent(user_input)
+    maps_enabled = tools_enabled.get("maps", True)
+    code_enabled = tools_enabled.get("code", True)
+
+    # google_maps and code_execution cannot be combined. If both are enabled,
+    # choose one based on message intent. Default to code execution because it
+    # is cheaper and more generally useful; only pick maps when the message
+    # clearly has geographic intent and no code/math intent.
+    include_maps = maps_enabled and (
+        not code_enabled or (intent["maps"] and not intent["code"])
+    )
+    include_code = code_enabled and (
+        not maps_enabled or not include_maps
+    )
+
     enabled_tools = []
     if tools_enabled.get("search", True):
         enabled_tools.append(types.Tool(google_search=types.GoogleSearch()))
-    if tools_enabled.get("code", True):
+    if include_code:
         enabled_tools.append(types.Tool(code_execution=types.ToolCodeExecution()))
-    if tools_enabled.get("maps", True):
+    if include_maps:
         enabled_tools.append(types.Tool(google_maps=types.GoogleMaps()))
     if tools_enabled.get("url_context", True):
         enabled_tools.append(types.Tool(url_context=types.UrlContext()))
+
     if enabled_tools:
         config_kwargs["tools"] = enabled_tools
     if location and location.get("lat") is not None and location.get("lng") is not None:
@@ -792,24 +829,24 @@ async def trim_history_for_token_budget(model_name, history, pending_content):
 
 def resolve_fallback_models(selected_model):
     fallback_chain = {
-        DEFAULT_CHAT_MODEL: [SECONDARY_CHAT_MODEL, TERTIARY_CHAT_MODEL],
-        SECONDARY_CHAT_MODEL: [TERTIARY_CHAT_MODEL],
-        WEB_SEARCH_CHAT_MODEL: [WEB_SEARCH_PRO_MODEL],
+        DEFAULT_CHAT_MODEL: [SECONDARY_CHAT_MODEL, TERTIARY_CHAT_MODEL, QUATERNARY_CHAT_MODEL],
+        SECONDARY_CHAT_MODEL: [TERTIARY_CHAT_MODEL, QUATERNARY_CHAT_MODEL],
+        TERTIARY_CHAT_MODEL: [QUATERNARY_CHAT_MODEL],
     }
     return fallback_chain.get(selected_model, [])
 
 
-async def request_gemini_content(model_name, contents, system_personality, tools_enabled=None, location=None):
-    config = get_generate_config(system_personality, tools_enabled=tools_enabled, location=location)
+async def request_gemini_content(model_name, contents, system_personality, tools_enabled=None, location=None, user_input=None):
+    config = get_generate_config(system_personality, tools_enabled=tools_enabled, location=location, user_input=user_input)
     return await gemini_async_client.models.generate_content(model=model_name, contents=contents, config=config)
 
 
-async def try_generate_with_model(model_name, contents, input_tokens, system_personality, tools_enabled=None, location=None):
+async def try_generate_with_model(model_name, contents, input_tokens, system_personality, tools_enabled=None, location=None, user_input=None):
     allowed, limit_message = await reserve_local_quota(model_name, input_tokens)
     if not allowed:
         return {"ok": False, "message": limit_message, "quota_handled": True}
     try:
-        response = await request_gemini_content(model_name, contents, system_personality, tools_enabled=tools_enabled, location=location)
+        response = await request_gemini_content(model_name, contents, system_personality, tools_enabled=tools_enabled, location=location, user_input=user_input)
         response_text = extract_response_text(response) or "I could not generate a response."
         await record_successful_usage(model_name, getattr(response, "usage_metadata", None))
         return {"ok": True, "response_text": response_text, "response": response}
@@ -848,11 +885,11 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
 
     settings = get_context_settings(server_id, user_id)
     selected_model = settings["ai_model"]
-    # Web-search-aware chat uses Gemini 3.5 Flash by default. Users may opt into
-    # 3.5 Pro for higher quality; anything else falls back to Flash.
-    if selected_model not in {WEB_SEARCH_CHAT_MODEL, WEB_SEARCH_PRO_MODEL}:
-        selected_model = WEB_SEARCH_CHAT_MODEL
-    fallback_models = [WEB_SEARCH_PRO_MODEL] if selected_model == WEB_SEARCH_CHAT_MODEL else []
+    # Use the model the user selected in /settings. If it's an unknown model,
+    # fall back to the default. The same fallback chain is used everywhere.
+    if selected_model not in MODEL_LIMITS:
+        selected_model = DEFAULT_CHAT_MODEL
+    fallback_models = resolve_fallback_models(selected_model)
     tools_enabled = settings.get("tools_enabled", default_context_settings()["tools_enabled"])
     location = settings.get("location")
 
@@ -872,7 +909,7 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
 
         for index, model_name in enumerate(attempt_models):
             model_history, model_contents, model_tokens = await trim_history_for_token_budget(model_name, history, pending_content)
-            result = await try_generate_with_model(model_name, model_contents, model_tokens, system_personality, tools_enabled=tools_enabled, location=location)
+            result = await try_generate_with_model(model_name, model_contents, model_tokens, system_personality, tools_enabled=tools_enabled, location=location, user_input=user_input)
             last_result = result
             retry_after = result.get("retry_after_seconds")
             if retry_after and (best_retry_after is None or retry_after > best_retry_after):

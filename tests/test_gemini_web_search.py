@@ -16,8 +16,8 @@ from google.genai import types
 
 from zephyr.services import gemini
 from zephyr.services.gemini import (
-    WEB_SEARCH_CHAT_MODEL,
-    WEB_SEARCH_PRO_MODEL,
+    DEFAULT_CHAT_MODEL,
+    QUATERNARY_CHAT_MODEL,
     WEB_SEARCH_BEHAVIOR_INSTRUCTION,
     ADDITIONAL_TOOLS_BEHAVIOR_INSTRUCTION,
     extract_grounding_sources,
@@ -250,14 +250,28 @@ class TestDetectFiredTools:
 
 
 class TestGenerateConfig:
-    def test_get_generate_config_includes_all_tools(self):
-        config = get_generate_config("be helpful")
+    def test_get_generate_config_includes_all_compatible_tools(self):
+        # With all tools enabled but a neutral message, code_execution is
+        # preferred over google_maps because the API forbids combining them.
+        config = get_generate_config("be helpful", user_input="Hello")
         assert config.tools is not None
-        assert len(config.tools) == 4
+        assert len(config.tools) == 3
         assert any(isinstance(tool.google_search, types.GoogleSearch) for tool in config.tools if tool.google_search is not None)
         assert any(tool.code_execution is not None for tool in config.tools)
-        assert any(tool.google_maps is not None for tool in config.tools)
         assert any(tool.url_context is not None for tool in config.tools)
+        assert not any(tool.google_maps is not None for tool in config.tools)
+
+    def test_get_generate_config_prefers_maps_for_geographic_intent(self):
+        config = get_generate_config("be helpful", user_input="restaurants near me")
+        assert config.tools is not None
+        assert any(tool.google_maps is not None for tool in config.tools)
+        assert not any(tool.code_execution is not None for tool in config.tools)
+
+    def test_get_generate_config_prefers_code_for_math_intent(self):
+        config = get_generate_config("be helpful", user_input="calculate 15 factorial")
+        assert config.tools is not None
+        assert any(tool.code_execution is not None for tool in config.tools)
+        assert not any(tool.google_maps is not None for tool in config.tools)
 
     def test_get_generate_config_respects_disabled_tools(self):
         config = get_generate_config("be helpful", tools_enabled={"search": False, "code": True, "maps": False, "url_context": True})
@@ -346,7 +360,7 @@ class TestBuildResponseEmbed:
 
 class TestGenerateGeminiResponse:
     @pytest.mark.asyncio
-    async def test_uses_web_search_model_and_enables_all_tools(self):
+    async def test_uses_selected_model_and_enables_compatible_tools(self):
         response = _make_response_no_tools("Hello there!")
         with patch.object(
             gemini.gemini_async_client.models,
@@ -359,10 +373,12 @@ class TestGenerateGeminiResponse:
 
         mock_generate.assert_called_once()
         call_kwargs = mock_generate.call_args.kwargs
-        assert call_kwargs["model"] == WEB_SEARCH_CHAT_MODEL
+        assert call_kwargs["model"] == DEFAULT_CHAT_MODEL
         config = call_kwargs["config"]
         assert config.tools is not None
-        assert len(config.tools) == 4
+        # google_maps and code_execution can't be combined; neutral messages keep code.
+        assert len(config.tools) == 3
+        assert not any(tool.google_maps is not None for tool in config.tools)
 
     @pytest.mark.asyncio
     async def test_returns_embed(self):
@@ -531,8 +547,8 @@ class TestGenerateGeminiResponse:
         assert "Official Site" not in history[-1]["text"]
 
     @pytest.mark.asyncio
-    async def test_pro_model_selected_when_settings_choose_pro(self):
-        gemini.set_context_settings(None, 12345, {"ai_model": WEB_SEARCH_PRO_MODEL, "response_format": "embed"})
+    async def test_quaternary_model_selected_when_settings_choose_it(self):
+        gemini.set_context_settings(None, 12345, {"ai_model": QUATERNARY_CHAT_MODEL, "response_format": "embed"})
         response = _make_response_no_tools("Premium answer.")
         with patch.object(
             gemini.gemini_async_client.models,
@@ -543,7 +559,7 @@ class TestGenerateGeminiResponse:
             with patch.object(gemini, "count_input_tokens", new_callable=AsyncMock, return_value=10):
                 await generate_gemini_response(None, 12345, "Hi", author=_fake_author())
 
-        assert mock_generate.call_args.kwargs["model"] == WEB_SEARCH_PRO_MODEL
+        assert mock_generate.call_args.kwargs["model"] == QUATERNARY_CHAT_MODEL
 
     @pytest.mark.parametrize(
         "prompt,expected_answer,web_sources,queries,user_id",

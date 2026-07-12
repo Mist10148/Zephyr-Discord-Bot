@@ -70,11 +70,11 @@ ILOILO_COORDS = {"lat": 10.7202, "lon": 122.5621}
 DEFAULT_CHAT_MODEL = "gemini-3.1-flash-lite"
 SECONDARY_CHAT_MODEL = "gemini-2.5-flash-lite"
 TERTIARY_CHAT_MODEL = "gemini-2.5-flash"
+QUATERNARY_CHAT_MODEL = "gemini-2.5-pro"
 
-# Web-search-aware chat uses Gemini 3.5 Flash with Google Search grounding.
-# Swap to gemini-3.5-pro for higher answer quality (drop-in replacement).
-WEB_SEARCH_CHAT_MODEL = "gemini-3.5-flash"
-WEB_SEARCH_PRO_MODEL = "gemini-3.5-pro"
+# Legacy names kept for backwards compatibility with old settings files.
+WEB_SEARCH_CHAT_MODEL = DEFAULT_CHAT_MODEL
+WEB_SEARCH_PRO_MODEL = QUATERNARY_CHAT_MODEL
 
 # ---------------------------------------------------------------------------
 # Settings persistence
