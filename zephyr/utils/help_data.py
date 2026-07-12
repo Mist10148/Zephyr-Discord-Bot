@@ -119,6 +119,7 @@ HELP_CATEGORIES = [
         commands=[
             HelpEntry("/prompt <message>", "Ask Gemini a question (supports images)"),
             HelpEntry("/settings", "Customize AI model and response format"),
+            HelpEntry("/aittools", "Enable or disable Gemini's built-in tools"),
             HelpEntry("/output", "Quickly switch between embed and text replies"),
             HelpEntry("/token", "Show Gemini usage stats"),
             HelpEntry("/image-gen <prompt>", "Generate an image with Gemini"),

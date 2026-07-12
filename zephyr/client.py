@@ -109,7 +109,7 @@ class ZephyrBot(commands.Bot):
                     await message.channel.send("Please provide a message when mentioning or replying to me.")
                 await self.process_commands(message)
                 return
-            response = await generate_gemini_response(server_id, user_id, final_message, image_url)
+            response = await generate_gemini_response(server_id, user_id, final_message, image_url, author=message.author)
             await send_response(message.channel, response, message)
 
         await self.process_commands(message)

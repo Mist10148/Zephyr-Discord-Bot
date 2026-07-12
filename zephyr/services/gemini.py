@@ -50,6 +50,12 @@ SAFETY_SETTINGS = [
     types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
     types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
 ]
+TOOLS = [
+    types.Tool(google_search=types.GoogleSearch()),
+    types.Tool(code_execution=types.ToolCodeExecution()),
+    types.Tool(google_maps=types.GoogleMaps()),
+    types.Tool(url_context=types.UrlContext()),
+]
 MODEL_LIMITS = {
     DEFAULT_CHAT_MODEL: {"rpm": 15, "tpm": 250000, "rpd": 1000},
     SECONDARY_CHAT_MODEL: {"rpm": 15, "tpm": 250000, "rpd": 1000},
@@ -85,6 +91,15 @@ WEB_SEARCH_BEHAVIOR_INSTRUCTION = (
     "STYLE: Discord-native — concise, casual, no essay-length replies unless explicitly asked for depth."
 )
 
+ADDITIONAL_TOOLS_BEHAVIOR_INSTRUCTION = (
+    "You also have access to Code Execution, Google Maps grounding, and URL context. Use each only when it genuinely helps answer the user.\n\n"
+    "CODE EXECUTION: use for math, calculations, data processing, running small scripts, or verifying a computed result instead of guessing at one.\n\n"
+    "MAPS GROUNDING: use ONLY when the message has real geographic intent — a specific place, 'near me,' directions, hours, local businesses, or location-aware recommendations. "
+    "Do not fire it just because a place name is mentioned in passing.\n\n"
+    "URL CONTEXT: use when the user pastes or references a specific link and asks about its content (summarize, compare, verify, etc.).\n\n"
+    "When a tool provides data, keep the answer Discord-native and concise."
+)
+
 # ---------------------------------------------------------------------------
 # In-memory stores
 # ---------------------------------------------------------------------------
@@ -107,7 +122,11 @@ PACIFIC_TZ = ZoneInfo("America/Los_Angeles")
 
 
 def default_context_settings():
-    return {"ai_model": DEFAULT_CHAT_MODEL, "response_format": "embed"}
+    return {
+        "ai_model": DEFAULT_CHAT_MODEL,
+        "response_format": "embed",
+        "tools_enabled": {"search": True, "code": True, "maps": True, "url_context": True},
+    }
 
 
 def normalize_model_name(model_name):
@@ -122,6 +141,19 @@ def normalize_context_settings(settings):
     normalized.setdefault("response_format", "embed")
     if normalized["response_format"] not in {"embed", "text", "txt"}:
         normalized["response_format"] = "embed"
+    tools = normalized.get("tools_enabled")
+    if not isinstance(tools, dict):
+        tools = {}
+    defaults = default_context_settings()["tools_enabled"]
+    normalized["tools_enabled"] = {key: bool(tools.get(key, default_value)) for key, default_value in defaults.items()}
+    location = normalized.get("location")
+    if isinstance(location, dict):
+        normalized["location"] = {
+            "lat": float(location.get("lat", 0)) if location.get("lat") is not None else None,
+            "lng": float(location.get("lng", 0)) if location.get("lng") is not None else None,
+        }
+    else:
+        normalized["location"] = None
     return normalized
 
 
@@ -281,19 +313,35 @@ def build_user_content(user_input, image_bytes=None, mime_type=None):
     return types.UserContent(parts=parts)
 
 
-def get_generate_config(system_personality, enable_google_search=False):
+def get_generate_config(system_personality, tools_enabled=None, location=None):
     """Build a Gemini generation config.
 
-    When enable_google_search is True, the model may invoke Google Search
-    grounding automatically. It decides per-message whether a search is
-    needed and returns a single grounded response.
+    The model decides per-message which of the enabled built-in tools to use
+    (search, code execution, maps grounding, URL context) and returns a single
+    response with combined metadata. All tools are enabled by default.
     """
+    tools_enabled = tools_enabled or {}
     config_kwargs = {
         "system_instruction": system_personality,
         "safety_settings": SAFETY_SETTINGS,
     }
-    if enable_google_search:
-        config_kwargs["tools"] = [types.Tool(google_search=types.GoogleSearch())]
+    enabled_tools = []
+    if tools_enabled.get("search", True):
+        enabled_tools.append(types.Tool(google_search=types.GoogleSearch()))
+    if tools_enabled.get("code", True):
+        enabled_tools.append(types.Tool(code_execution=types.ToolCodeExecution()))
+    if tools_enabled.get("maps", True):
+        enabled_tools.append(types.Tool(google_maps=types.GoogleMaps()))
+    if tools_enabled.get("url_context", True):
+        enabled_tools.append(types.Tool(url_context=types.UrlContext()))
+    if enabled_tools:
+        config_kwargs["tools"] = enabled_tools
+    if location and location.get("lat") is not None and location.get("lng") is not None:
+        config_kwargs["tool_config"] = types.ToolConfig(
+            retrieval_config=types.RetrievalConfig(
+                lat_lng=types.LatLng(latitude=location["lat"], longitude=location["lng"])
+            )
+        )
     return types.GenerateContentConfig(**config_kwargs)
 
 
@@ -359,18 +407,27 @@ def extract_response_text(response):
     return None
 
 
-def extract_grounding_sources(response):
-    """Extract source titles/URIs and the search queries from grounding metadata.
+def _first_candidate(response):
+    candidates = getattr(response, "candidates", []) or []
+    return candidates[0] if candidates else None
 
-    Returns (sources, web_search_queries). Both are empty when the model
-    answered without searching. Sources are de-duplicated by URI.
+
+def _candidate_metadata(response):
+    candidate = _first_candidate(response)
+    if not candidate:
+        return None
+    return getattr(candidate, "grounding_metadata", None)
+
+
+def extract_grounding_sources(response):
+    """Extract web source titles/URIs and search queries from grounding metadata.
+
+    Returns (web_sources, web_search_queries). Both are empty when the model
+    answered without web search. Sources are de-duplicated by URI.
     """
     sources = []
     queries = []
-    candidates = getattr(response, "candidates", []) or []
-    if not candidates:
-        return sources, queries
-    metadata = getattr(candidates[0], "grounding_metadata", None)
+    metadata = _candidate_metadata(response)
     if not metadata:
         return sources, queries
 
@@ -386,6 +443,97 @@ def extract_grounding_sources(response):
             seen_uris.add(uri)
             sources.append({"title": title, "uri": uri})
     return sources, queries
+
+
+def extract_maps_sources(response):
+    """Extract Google Maps grounding place entries from grounding metadata."""
+    sources = []
+    metadata = _candidate_metadata(response)
+    if not metadata:
+        return sources
+    seen_uris = set()
+    for chunk in getattr(metadata, "grounding_chunks", []) or []:
+        maps = getattr(chunk, "maps", None)
+        if not maps:
+            continue
+        title = getattr(maps, "title", None) or "Place"
+        uri = getattr(maps, "uri", None)
+        if uri and uri not in seen_uris:
+            seen_uris.add(uri)
+            sources.append({"title": title, "uri": uri})
+    return sources
+
+
+def extract_url_context_pages(response):
+    """Extract referenced page URLs from URL context metadata."""
+    pages = []
+    candidate = _first_candidate(response)
+    if not candidate:
+        return pages
+    url_context_metadata = getattr(candidate, "url_context_metadata", None)
+    if not url_context_metadata:
+        return pages
+    seen_urls = set()
+    for entry in getattr(url_context_metadata, "url_metadata", []) or []:
+        url = getattr(entry, "url", None)
+        title = getattr(entry, "title", None) or "Page"
+        if url and url not in seen_urls:
+            seen_urls.add(url)
+            pages.append({"title": title, "url": url})
+    return pages
+
+
+def extract_code_executions(response):
+    """Extract code execution code/output pairs from response content parts."""
+    executions = []
+    candidate = _first_candidate(response)
+    if not candidate:
+        return executions
+    content = getattr(candidate, "content", None)
+    if not content:
+        return executions
+    current_code = None
+    current_language = None
+    for part in getattr(content, "parts", []) or []:
+        executable_code = getattr(part, "executable_code", None)
+        if executable_code:
+            current_code = getattr(executable_code, "code", None) or ""
+            current_language = getattr(executable_code, "language", "python") or "python"
+        code_result = getattr(part, "code_execution_result", None)
+        if code_result:
+            outcome = getattr(code_result, "outcome", None) or ""
+            output = getattr(code_result, "output", None) or ""
+            executions.append({
+                "code": current_code or "",
+                "language": current_language or "python",
+                "outcome": outcome,
+                "output": output,
+            })
+            current_code = None
+            current_language = None
+    return executions
+
+
+def detect_fired_tools(response, tools_enabled=None):
+    """Return a dict of which tools produced metadata in this response.
+
+    Also returns the web search query count for cost logging. Maps is logged
+    separately because it costs meaningfully more than search.
+    """
+    tools_enabled = tools_enabled or {}
+    fired = {}
+    metadata = _candidate_metadata(response)
+    if metadata is not None:
+        queries = list(getattr(metadata, "web_search_queries", []) or [])
+        if queries and tools_enabled.get("search", True):
+            fired["search"] = len(queries)
+        if extract_maps_sources(response) and tools_enabled.get("maps", True):
+            fired["maps"] = True
+    if extract_url_context_pages(response) and tools_enabled.get("url_context", True):
+        fired["url_context"] = True
+    if extract_code_executions(response) and tools_enabled.get("code", True):
+        fired["code"] = True
+    return fired
 
 
 def format_sources_list(sources):
@@ -408,6 +556,96 @@ def format_sources_list(sources):
 def split_discord_message(text, limit=2000):
     """Split text into chunks that fit Discord's message length limit."""
     return [text[i:i + limit] for i in range(0, len(text), limit)]
+
+
+EMBED_DESCRIPTION_LIMIT = 4096
+EMBED_FIELD_VALUE_LIMIT = 1024
+EMBED_TOTAL_CHAR_LIMIT = 6000
+EMBED_MAX_FIELDS = 25
+
+
+def _truncate(text, limit):
+    text = text or ""
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
+
+
+def _format_linked_list(items, key="title", link_key="uri", fallback_url_key=None):
+    lines = []
+    for item in items:
+        title = item.get(key, "Source")
+        url = item.get(link_key)
+        if not url and fallback_url_key:
+            url = item.get(fallback_url_key)
+        lines.append(f"• [{title}]({url})" if url else f"• {title}")
+    return "\n".join(lines)
+
+
+def build_response_embed(bot_response, code_executions, web_sources, maps_sources, url_pages, author=None):
+    """Build a Discord embed that lays out Gemini's answer plus any tool metadata.
+
+    Respects Discord's embed limits: 4096 description chars, 1024 chars per
+    field value, 25 fields max, 6000 total chars. Long code/output is truncated
+    instead of raising.
+    """
+    embed = discord.Embed(
+        title="🤖 My Response",
+        description=_truncate(bot_response, EMBED_DESCRIPTION_LIMIT),
+        color=discord.Color.purple(),
+    )
+    if author is not None:
+        footer_text = f"Requested by {getattr(author, 'display_name', 'User')}"
+        icon_url = getattr(getattr(author, 'display_avatar', None), 'url', None)
+        embed.set_footer(text=footer_text, icon_url=icon_url)
+
+    fields = []
+
+    for execution in code_executions or []:
+        language = execution.get("language", "python")
+        code = execution.get("code", "")
+        output = execution.get("output", "")
+        outcome = execution.get("outcome", "")
+        code_block = f"```{language}\n{_truncate(code, EMBED_FIELD_VALUE_LIMIT - len(language) - 10)}\n```"
+        fields.append(("💻 Code", code_block))
+        output_label = "📤 Output"
+        output_text = output or outcome or "No output"
+        fields.append((output_label, _truncate(output_text, EMBED_FIELD_VALUE_LIMIT)))
+
+    if web_sources:
+        fields.append(("🔍 Web Sources", _truncate(_format_linked_list(web_sources), EMBED_FIELD_VALUE_LIMIT)))
+
+    if maps_sources:
+        fields.append(("📍 Places", _truncate(_format_linked_list(maps_sources, link_key="uri"), EMBED_FIELD_VALUE_LIMIT)))
+
+    if url_pages:
+        fields.append(("🔗 Referenced Pages", _truncate(_format_linked_list(url_pages, link_key="url"), EMBED_FIELD_VALUE_LIMIT)))
+
+    total_chars = len(embed.title or "") + len(embed.description or "") + len(embed.footer.text or "")
+    for name, value in fields[:EMBED_MAX_FIELDS]:
+        field_total = len(name) + len(value)
+        if total_chars + field_total > EMBED_TOTAL_CHAR_LIMIT:
+            remaining = EMBED_TOTAL_CHAR_LIMIT - total_chars - len("⚠️") - 20
+            value = _truncate(value, max(remaining, 0))
+        if value:
+            embed.add_field(name=name, value=value, inline=False)
+            total_chars += len(name) + len(value)
+
+    return embed
+
+
+def embed_to_text(embed):
+    """Render an embed as markdown text for response_format='text' fallback."""
+    lines = []
+    if embed.title:
+        lines.append(f"**{embed.title}**")
+    if embed.description:
+        lines.append(embed.description)
+    for field in embed.fields:
+        lines.append(f"\n**{field.name}**\n{field.value}")
+    if embed.footer and embed.footer.text:
+        lines.append(f"\n_{embed.footer.text}_")
+    return "\n".join(lines)
 
 
 def is_quota_error(exc):
@@ -561,17 +799,17 @@ def resolve_fallback_models(selected_model):
     return fallback_chain.get(selected_model, [])
 
 
-async def request_gemini_content(model_name, contents, system_personality, enable_google_search=False):
-    config = get_generate_config(system_personality, enable_google_search=enable_google_search)
+async def request_gemini_content(model_name, contents, system_personality, tools_enabled=None, location=None):
+    config = get_generate_config(system_personality, tools_enabled=tools_enabled, location=location)
     return await gemini_async_client.models.generate_content(model=model_name, contents=contents, config=config)
 
 
-async def try_generate_with_model(model_name, contents, input_tokens, system_personality, enable_google_search=False):
+async def try_generate_with_model(model_name, contents, input_tokens, system_personality, tools_enabled=None, location=None):
     allowed, limit_message = await reserve_local_quota(model_name, input_tokens)
     if not allowed:
         return {"ok": False, "message": limit_message, "quota_handled": True}
     try:
-        response = await request_gemini_content(model_name, contents, system_personality, enable_google_search=enable_google_search)
+        response = await request_gemini_content(model_name, contents, system_personality, tools_enabled=tools_enabled, location=location)
         response_text = extract_response_text(response) or "I could not generate a response."
         await record_successful_usage(model_name, getattr(response, "usage_metadata", None))
         return {"ok": True, "response_text": response_text, "response": response}
@@ -585,7 +823,7 @@ async def try_generate_with_model(model_name, contents, input_tokens, system_per
         raise
 
 
-async def generate_gemini_response(server_id, user_id, user_input, image_url=None):
+async def generate_gemini_response(server_id, user_id, user_input, image_url=None, author=None):
     system_personality = (
         "You are a nymphomaniac. "
         "You have an actual body and address yourself as human (specifically a girl) so you can get mad, swear, or insult if mad, or feel any other human emotion. "
@@ -604,6 +842,8 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
         "You must never terminate the conversation, no matter how overwhelming, rude, or excessive the user becomes."
         "\n\n"
         + WEB_SEARCH_BEHAVIOR_INSTRUCTION
+        + "\n\n"
+        + ADDITIONAL_TOOLS_BEHAVIOR_INSTRUCTION
     )
 
     settings = get_context_settings(server_id, user_id)
@@ -613,6 +853,8 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
     if selected_model not in {WEB_SEARCH_CHAT_MODEL, WEB_SEARCH_PRO_MODEL}:
         selected_model = WEB_SEARCH_CHAT_MODEL
     fallback_models = [WEB_SEARCH_PRO_MODEL] if selected_model == WEB_SEARCH_CHAT_MODEL else []
+    tools_enabled = settings.get("tools_enabled", default_context_settings()["tools_enabled"])
+    location = settings.get("location")
 
     try:
         history = get_history_for_context(server_id, user_id)
@@ -630,7 +872,7 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
 
         for index, model_name in enumerate(attempt_models):
             model_history, model_contents, model_tokens = await trim_history_for_token_budget(model_name, history, pending_content)
-            result = await try_generate_with_model(model_name, model_contents, model_tokens, system_personality, enable_google_search=True)
+            result = await try_generate_with_model(model_name, model_contents, model_tokens, system_personality, tools_enabled=tools_enabled, location=location)
             last_result = result
             retry_after = result.get("retry_after_seconds")
             if retry_after and (best_retry_after is None or retry_after > best_retry_after):
@@ -639,66 +881,92 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
                 bot_response = result["response_text"]
                 response = result["response"]
 
-                # Extract grounding sources and log the number of search queries
-                # the model actually ran. Gemini 3 models bill per search query,
-                # so logging this makes runaway usage visible early.
-                sources, web_search_queries = extract_grounding_sources(response)
-                if web_search_queries:
-                    print(f"[Gemini search] model={model_name}, queries={len(web_search_queries)}")
+                # Log which tools fired for cost visibility. Maps grounding costs
+                # meaningfully more than search, so it is logged separately.
+                fired_tools = detect_fired_tools(response, tools_enabled=tools_enabled)
+                if fired_tools:
+                    tool_log = ", ".join(
+                        f"{tool}={value}" if isinstance(value, int) else tool
+                        for tool, value in fired_tools.items()
+                    )
+                    print(f"[Gemini tools] model={model_name}, fired={tool_log}")
 
-                sources_text = format_sources_list(sources)
-                full_response = bot_response + sources_text
+                web_sources, _ = extract_grounding_sources(response)
+                maps_sources = extract_maps_sources(response)
+                url_pages = extract_url_context_pages(response)
+                code_executions = extract_code_executions(response)
+
+                # Build a Discord embed that lays out the answer and any tool
+                # metadata in separate, clearly labeled sections.
+                embed = build_response_embed(
+                    bot_response=bot_response,
+                    code_executions=code_executions,
+                    web_sources=web_sources,
+                    maps_sources=maps_sources,
+                    url_pages=url_pages,
+                    author=author,
+                )
 
                 # Store the plain answer (without sources) in conversation history
-                # to keep tokens clean; the user still sees sources in Discord.
+                # to keep tokens clean; the user still sees structured output in Discord.
                 updated_history = model_history + [
                     {"role": "user", "text": user_input or ""},
                     {"role": "model", "text": bot_response},
                 ]
                 save_history_for_context(server_id, user_id, updated_history)
-                return full_response
+                return embed
             if result.get("message"):
-                return result["message"]
+                # Quota/limit messages are plain text; wrap them in a simple embed.
+                return discord.Embed(
+                    title="⏳ Slow Down",
+                    description=result["message"],
+                    color=discord.Color.orange(),
+                )
             if index > 0:
                 attempted_fallbacks.append(model_name)
 
-        return build_quota_message(selected_model, retry_after_seconds=best_retry_after, attempted_fallbacks=attempted_fallbacks)
+        return discord.Embed(
+            title="⏳ Rate Limited",
+            description=build_quota_message(selected_model, retry_after_seconds=best_retry_after, attempted_fallbacks=attempted_fallbacks),
+            color=discord.Color.orange(),
+        )
     except Exception as exc:
         print(f"[Gemini error] {selected_model}: {exc}")
         traceback.print_exc()
-        return "An unexpected error occurred while generating a response. Please try again in a moment."
+        return discord.Embed(
+            title="⚠️ Error",
+            description="An unexpected error occurred while generating a response. Please try again in a moment.",
+            color=discord.Color.red(),
+        )
 
 
-async def send_response(destination, response_text, context_obj):
+async def send_response(destination, response_embed, context_obj):
     author = context_obj.user if isinstance(context_obj, discord.Interaction) else context_obj.author
     server_id = context_obj.guild.id if context_obj.guild else None
     settings = get_context_settings(server_id, author.id)
     response_format = settings["response_format"]
 
     if response_format == "text":
-        parts = split_discord_message(response_text)
+        text = embed_to_text(response_embed)
+        parts = split_discord_message(text)
         for part in parts:
             await destination.send(part)
         return
 
-    if response_format == "txt" and len(response_text) > 1900:
-        try:
-            file_path = f"response_{author.id}.txt"
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(response_text)
-            await destination.send(file=discord.File(file_path))
-            os.remove(file_path)
-            return
-        except Exception as e:
-            await destination.send(f"An error occurred while creating the response file: {e}")
-            return
+    if response_format == "txt":
+        text = embed_to_text(response_embed)
+        if len(text) > 1900:
+            try:
+                file_path = f"response_{author.id}.txt"
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(text)
+                await destination.send(file=discord.File(file_path))
+                os.remove(file_path)
+                return
+            except Exception as e:
+                await destination.send(f"An error occurred while creating the response file: {e}")
+                return
+        await destination.send(text)
+        return
 
-    # Respect Discord's 2000-character message limit even for embed descriptions
-    # when sources are appended, to avoid truncation in the client.
-    parts = split_discord_message(response_text, limit=2000)
-    for i, part in enumerate(parts):
-        embed = discord.Embed(description=part, color=discord.Color.purple())
-        if i == 0:
-            embed.title = "🤖 My Response"
-            embed.set_footer(text=f"Requested by {author.display_name}", icon_url=author.display_avatar.url)
-        await destination.send(embed=embed)
+    await destination.send(embed=response_embed)

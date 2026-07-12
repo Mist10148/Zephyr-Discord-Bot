@@ -21,6 +21,7 @@ from zephyr.services.gemini import (
     get_context_settings,
     set_context_settings,
     save_user_settings,
+    default_context_settings,
     resolve_fallback_models,
     get_model_usage_snapshot,
     build_progress_bar,
@@ -128,6 +129,62 @@ class ChatCog(commands.Cog):
         embed.add_field(name="Response Format", value=response_format.name)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+    @app_commands.command(name="aittools", description="Enable or disable the AI tools Gemini can use in this server/DM.")
+    @app_commands.describe(
+        web_search="Let Gemini search the web for current info.",
+        code_execution="Let Gemini run code for math, data, or verification.",
+        maps_grounding="Let Gemini use Google Maps for places, directions, and local info.",
+        url_context="Let Gemini read URLs the user pastes or references.",
+    )
+    async def aittools(
+        self,
+        interaction: discord.Interaction,
+        web_search: bool | None = None,
+        code_execution: bool | None = None,
+        maps_grounding: bool | None = None,
+        url_context: bool | None = None,
+    ):
+        server_id = interaction.guild.id if interaction.guild else None
+        current = get_context_settings(server_id, interaction.user.id)
+        tools = dict(current.get("tools_enabled", default_context_settings()["tools_enabled"]))
+
+        toggles = {
+            "search": web_search,
+            "code": code_execution,
+            "maps": maps_grounding,
+            "url_context": url_context,
+        }
+        changed = []
+        for key, value in toggles.items():
+            if value is not None:
+                tools[key] = value
+                changed.append(f"{'Enabled' if value else 'Disabled'} {key.replace('_', ' ').title()}")
+
+        current["tools_enabled"] = tools
+        set_context_settings(server_id=server_id, user_id=interaction.user.id, settings=current)
+        save_user_settings()
+
+        emoji_map = {
+            "search": "🔍",
+            "code": "💻",
+            "maps": "📍",
+            "url_context": "🔗",
+        }
+        status_lines = []
+        for key, value in tools.items():
+            status = "✅ On" if value else "❌ Off"
+            status_lines.append(f"{emoji_map.get(key, '•')} **{key.replace('_', ' ').title()}** — {status}")
+
+        embed = discord.Embed(
+            title="🛠️ AI Tools",
+            description="Control which built-in tools Gemini can invoke per message.\n" + "\n".join(status_lines),
+            color=discord.Color.green() if changed else discord.Color.blurple(),
+        )
+        if changed:
+            embed.add_field(name="Changes", value="\n".join(changed), inline=False)
+        embed.set_footer(text="All tools are enabled by default.")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
     @app_commands.command(name="output", description="Quickly switch the chatbot response format between embed and normal text.")
     @app_commands.describe(format="Choose embed or normal text")
     @app_commands.choices(
@@ -211,7 +268,7 @@ class ChatCog(commands.Cog):
         if not final_message and not image_url:
             await interaction.followup.send("Please provide a message, an image, or a text file.", ephemeral=True)
             return
-        response = await generate_gemini_response(server_id, user_id, final_message, image_url)
+        response = await generate_gemini_response(server_id, user_id, final_message, image_url, author=interaction.user)
         await send_response(interaction.followup, response, interaction)
 
     @app_commands.command(name="generate", description="Generate an image")
