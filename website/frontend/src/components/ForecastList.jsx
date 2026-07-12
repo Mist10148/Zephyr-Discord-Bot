@@ -1,7 +1,7 @@
 import ForecastCard from './ForecastCard';
 import { Calendar } from 'lucide-react';
 
-export default function ForecastList({ forecast }) {
+export default function ForecastList({ forecast, unit }) {
   if (!forecast || forecast.length === 0) return null;
 
   return (
@@ -13,7 +13,7 @@ export default function ForecastList({ forecast }) {
       <div className="flex gap-4 overflow-x-auto pb-4 hide-scrollbar snap-x snap-mandatory">
         {forecast.map((day, index) => (
           <div key={`${day.date}-${index}`} className="snap-start">
-            <ForecastCard day={day} />
+            <ForecastCard day={day} unit={unit} />
           </div>
         ))}
       </div>
