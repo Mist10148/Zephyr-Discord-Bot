@@ -19,8 +19,8 @@
       "dest": "/assets/$1"
     },
     {
-      "src": "/vite.svg",
-      "dest": "/vite.svg"
+      "src": "/favicon.svg",
+      "dest": "/favicon.svg"
     },
     {
       "src": "/weather",
