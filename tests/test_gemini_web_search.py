@@ -9,7 +9,7 @@ These tests mock the Gemini API so they perform no network calls. They verify:
 - Tool-specific metadata is extracted into the correct embed fields.
 - Cost logging covers all four tools, not just search.
 - Chat history stores the plain answer without formatted tool output.
-- Tool toggles default to enabled (except paid-tier maps) and are persisted.
+- Tool toggles default to disabled and are persisted.
 """
 
 import pytest
@@ -23,6 +23,7 @@ from zephyr.services.gemini import (
     SECONDARY_CHAT_MODEL,
     TERTIARY_CHAT_MODEL,
     QUATERNARY_CHAT_MODEL,
+    QUINARY_CHAT_MODEL,
     resolve_fallback_models,
     build_location_instruction,
     WEB_SEARCH_BEHAVIOR_INSTRUCTION,
@@ -319,9 +320,9 @@ class TestToolVariants:
         assert variants[0] == frozenset({"code", "url_context"})
         assert variants[-1] == frozenset()
 
-    def test_maps_off_by_default(self):
+    def test_all_tools_off_by_default(self):
         variants = resolve_tool_variants(DEFAULT_CHAT_MODEL, {})
-        assert variants[0] == frozenset({"search", "code", "url_context"})
+        assert variants == [frozenset()]
 
     @pytest.mark.asyncio
     async def test_system_instruction_includes_search_and_additional_tools(self):
@@ -398,6 +399,13 @@ class TestBuildResponseEmbed:
 class TestGenerateGeminiResponse:
     @pytest.mark.asyncio
     async def test_uses_selected_model_and_all_legal_tools(self):
+        # Explicitly enable all tools so the generation config includes the full
+        # legal set. By default all tools are now disabled.
+        gemini.set_context_settings(None, 12345, {
+            "ai_model": DEFAULT_CHAT_MODEL,
+            "response_format": "embed",
+            "tools_enabled": {"search": True, "code": True, "maps": True, "url_context": True},
+        })
         response = _make_response_no_tools("Hello there!")
         with patch.object(
             gemini.gemini_async_client.models,
@@ -412,16 +420,20 @@ class TestGenerateGeminiResponse:
         call_kwargs = mock_generate.call_args.kwargs
         assert call_kwargs["model"] == DEFAULT_CHAT_MODEL
         config = call_kwargs["config"]
-        # Every message gets the full legal tool set; Gemini decides whether to
-        # actually use anything. Maps stays off by default (paid tier).
         assert any(tool.google_search is not None for tool in config.tools)
         assert any(tool.code_execution is not None for tool in config.tools)
         assert any(tool.url_context is not None for tool in config.tools)
-        assert not any(tool.google_maps is not None for tool in config.tools)
+        assert any(tool.google_maps is not None for tool in config.tools)
 
     @pytest.mark.asyncio
     async def test_tool_config_error_degrades_on_same_model(self):
-        gemini.set_context_settings(None, 22345, {"ai_model": SECONDARY_CHAT_MODEL, "response_format": "embed"})
+        # Enable incompatible tools so the 2.5 model rejects the config and
+        # retries with a degraded (empty) tool set.
+        gemini.set_context_settings(None, 22345, {
+            "ai_model": SECONDARY_CHAT_MODEL,
+            "response_format": "embed",
+            "tools_enabled": {"search": True, "code": True, "maps": False, "url_context": True},
+        })
         response = _make_response_no_tools("Recovered answer.")
         error = Exception("400 INVALID_ARGUMENT: Multiple tools are supported only when they are all search tools")
         with patch.object(
@@ -520,6 +532,11 @@ class TestGenerateGeminiResponse:
 
     @pytest.mark.asyncio
     async def test_code_execution_shown_as_code_and_output_fields(self):
+        gemini.set_context_settings(None, 12345, {
+            "ai_model": DEFAULT_CHAT_MODEL,
+            "response_format": "embed",
+            "tools_enabled": {"search": False, "code": True, "maps": False, "url_context": False},
+        })
         response = _make_response(
             "The result is 4.",
             code_executions=[{"code": "2 + 2", "output": "4", "outcome": "OUTCOME_OK"}],
@@ -541,6 +558,11 @@ class TestGenerateGeminiResponse:
 
     @pytest.mark.asyncio
     async def test_maps_grounding_shown_as_places_field(self):
+        gemini.set_context_settings(None, 12345, {
+            "ai_model": DEFAULT_CHAT_MODEL,
+            "response_format": "embed",
+            "tools_enabled": {"search": False, "code": False, "maps": True, "url_context": False},
+        })
         response = _make_response(
             "Here are some restaurants.",
             maps_sources=[{"title": "Tasty Bistro", "uri": "https://maps.google.com/?q=tasty"}],
@@ -560,6 +582,11 @@ class TestGenerateGeminiResponse:
 
     @pytest.mark.asyncio
     async def test_url_context_shown_as_referenced_pages_field(self):
+        gemini.set_context_settings(None, 12345, {
+            "ai_model": DEFAULT_CHAT_MODEL,
+            "response_format": "embed",
+            "tools_enabled": {"search": False, "code": False, "maps": False, "url_context": True},
+        })
         response = _make_response(
             "Summary of the page.",
             url_pages=[{"url": "https://blog.example.com/post", "title": "Cool Post"}],
@@ -579,6 +606,11 @@ class TestGenerateGeminiResponse:
 
     @pytest.mark.asyncio
     async def test_combined_search_and_url_context(self):
+        gemini.set_context_settings(None, 12345, {
+            "ai_model": DEFAULT_CHAT_MODEL,
+            "response_format": "embed",
+            "tools_enabled": {"search": True, "code": False, "maps": False, "url_context": True},
+        })
         response = _make_response(
             "Here is what I found.",
             web_sources=[{"title": "Search Result", "uri": "https://search.example.com"}],
@@ -620,7 +652,7 @@ class TestGenerateGeminiResponse:
 
     @pytest.mark.asyncio
     async def test_logs_all_fired_tools(self):
-        # Maps is off by default, so explicitly enable it for this context.
+        # All tools are off by default, so explicitly enable them for this context.
         gemini.set_context_settings(None, 52345, {
             "ai_model": DEFAULT_CHAT_MODEL,
             "response_format": "embed",
@@ -731,8 +763,13 @@ class TestGenerateGeminiResponse:
     )
     @pytest.mark.asyncio
     async def test_domain_prompts(self, prompt, expected_answer, web_sources, queries, user_id):
-        """All chat prompts go through the multi-tool path; only current-data
-        prompts (mocked here with grounding metadata) receive a Web Sources field."""
+        """Chat prompts with search enabled show Web Sources when the response
+        includes grounding metadata; otherwise the embed has no tool fields."""
+        gemini.set_context_settings(None, user_id, {
+            "ai_model": DEFAULT_CHAT_MODEL,
+            "response_format": "embed",
+            "tools_enabled": {"search": True, "code": False, "maps": False, "url_context": False},
+        })
         if web_sources:
             response = _make_response(expected_answer, web_sources=web_sources, queries=queries)
         else:
@@ -760,11 +797,11 @@ class TestGenerateGeminiResponse:
 class TestToolToggles:
     def test_default_tools_enabled(self):
         defaults = gemini.default_context_settings()
-        assert defaults["tools_enabled"] == {"search": True, "code": True, "maps": False, "url_context": True}
+        assert defaults["tools_enabled"] == {"search": False, "code": False, "maps": False, "url_context": False}
 
     def test_normalize_settings_fills_missing_tools_from_defaults(self):
         normalized = gemini.normalize_context_settings({"ai_model": "gemini-3.5-flash", "response_format": "text"})
-        assert normalized["tools_enabled"] == {"search": True, "code": True, "maps": False, "url_context": True}
+        assert normalized["tools_enabled"] == {"search": False, "code": False, "maps": False, "url_context": False}
 
     def test_normalize_settings_respects_disabled_tool(self):
         normalized = gemini.normalize_context_settings({
@@ -777,18 +814,18 @@ class TestToolToggles:
 class TestFallbackChain:
     def test_default_model_chain(self):
         assert resolve_fallback_models(DEFAULT_CHAT_MODEL) == [
-            SECONDARY_CHAT_MODEL, TERTIARY_CHAT_MODEL, QUATERNARY_CHAT_MODEL,
+            SECONDARY_CHAT_MODEL, TERTIARY_CHAT_MODEL, QUATERNARY_CHAT_MODEL, QUINARY_CHAT_MODEL,
         ]
 
     def test_tertiary_model_reaches_high_quota_lite_models(self):
         # Regression: a server with 2.5-flash selected must be able to fall
         # back to the big-quota lite models, not only to 2.5-pro.
         assert resolve_fallback_models(TERTIARY_CHAT_MODEL) == [
-            DEFAULT_CHAT_MODEL, SECONDARY_CHAT_MODEL, QUATERNARY_CHAT_MODEL,
+            DEFAULT_CHAT_MODEL, SECONDARY_CHAT_MODEL, QUATERNARY_CHAT_MODEL, QUINARY_CHAT_MODEL,
         ]
 
     def test_selected_model_never_in_own_chain(self):
-        for model in [DEFAULT_CHAT_MODEL, SECONDARY_CHAT_MODEL, TERTIARY_CHAT_MODEL, QUATERNARY_CHAT_MODEL]:
+        for model in [DEFAULT_CHAT_MODEL, SECONDARY_CHAT_MODEL, TERTIARY_CHAT_MODEL, QUATERNARY_CHAT_MODEL, QUINARY_CHAT_MODEL]:
             assert model not in resolve_fallback_models(model)
 
 
@@ -797,7 +834,7 @@ class TestChainRetryWait:
     async def test_short_retry_hint_waits_and_retries_chain(self):
         response = _make_response_no_tools("Answer after waiting.")
         error = Exception("429 RESOURCE_EXHAUSTED: rate limited. retry in 3s")
-        # Four models fail on pass 1, then the first model succeeds on pass 2.
+        # Five models fail on pass 1, then the first model succeeds on pass 2.
         # Cooldown storage is disabled: sleep is mocked, so real cooldowns
         # would still be active on pass 2 (in production the sleep outlasts them).
         with patch.object(gemini.asyncio, "sleep", new_callable=AsyncMock) as mock_sleep:
@@ -806,7 +843,7 @@ class TestChainRetryWait:
                     gemini.gemini_async_client.models,
                     "generate_content",
                     new_callable=AsyncMock,
-                    side_effect=[error, error, error, error, response],
+                    side_effect=[error, error, error, error, error, response],
                 ):
                     with patch.object(gemini, "count_input_tokens", new_callable=AsyncMock, return_value=10):
                         result = await generate_gemini_response(None, 72345, "Hi", author=_fake_author())
@@ -848,9 +885,9 @@ class TestChainRetryWait:
                     with patch.object(gemini, "count_input_tokens", new_callable=AsyncMock, return_value=10):
                         result = await generate_gemini_response(None, 92345, "Hi", author=_fake_author())
 
-        # Exactly two chain passes (4 models each) and one wait between them.
+        # Exactly two chain passes (5 models each) and one wait between them.
         assert mock_sleep.call_count == 1
-        assert mock_generate.call_count == 8
+        assert mock_generate.call_count == 10
         assert "temporarily unavailable" in result.description
 
 

@@ -71,6 +71,10 @@ DEFAULT_CHAT_MODEL = "gemini-3.1-flash-lite"
 SECONDARY_CHAT_MODEL = "gemini-2.5-flash-lite"
 TERTIARY_CHAT_MODEL = "gemini-2.5-flash"
 QUATERNARY_CHAT_MODEL = "gemini-2.5-pro"
+QUINARY_CHAT_MODEL = "gemini-3.5-flash"
+
+# Image generation model used by /image-gen.
+IMAGE_GENERATION_MODEL = "gemini-3.1-flash-lite-image"
 
 # Legacy names kept for backwards compatibility with old settings files.
 WEB_SEARCH_CHAT_MODEL = DEFAULT_CHAT_MODEL

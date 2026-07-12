@@ -32,6 +32,7 @@ from zephyr.services.gemini import (
     MODEL_LIMITS,
     DEFAULT_CHAT_MODEL,
 )
+from zephyr.config import IMAGE_GENERATION_MODEL
 from zephyr.utils.weather_utils import geocode_city
 
 # ---------------------------------------------------------------------------
@@ -369,7 +370,7 @@ class ChatCog(commands.Cog):
 
         try:
             response = await gemini_async_client.models.generate_content(
-                model="gemini-3.1-flash-image-preview",
+                model=IMAGE_GENERATION_MODEL,
                 contents=[types.UserContent(parts=[types.Part.from_text(text=prompt)])],
                 config=types.GenerateContentConfig(response_modalities=["TEXT", "IMAGE"]),
             )

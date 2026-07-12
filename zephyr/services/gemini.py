@@ -26,6 +26,7 @@ from zephyr.config import (
     SECONDARY_CHAT_MODEL,
     TERTIARY_CHAT_MODEL,
     QUATERNARY_CHAT_MODEL,
+    QUINARY_CHAT_MODEL,
 )
 from zephyr.services.storage import storage
 
@@ -41,6 +42,7 @@ MODEL_ALIASES = {
     "gemini-2.0-flash": TERTIARY_CHAT_MODEL,
     "gemini-2.5-flash-preview-04-17": TERTIARY_CHAT_MODEL,
     "gemini-2.5-pro": QUATERNARY_CHAT_MODEL,
+    "gemini-3.5-flash": QUINARY_CHAT_MODEL,
 }
 SAFETY_SETTINGS = [
     types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
@@ -53,6 +55,7 @@ MODEL_LIMITS = {
     SECONDARY_CHAT_MODEL: {"rpm": 15, "tpm": 250000, "rpd": 1000},
     TERTIARY_CHAT_MODEL: {"rpm": 10, "tpm": 250000, "rpd": 250},
     QUATERNARY_CHAT_MODEL: {"rpm": 5, "tpm": 250000, "rpd": 100},
+    QUINARY_CHAT_MODEL: {"rpm": 10, "tpm": 250000, "rpd": 500},
 }
 
 # ---------------------------------------------------------------------------
@@ -143,7 +146,7 @@ def default_context_settings():
         "ai_model": DEFAULT_CHAT_MODEL,
         "response_format": "embed",
         # Maps grounding is a paid-tier Gemini feature, so it is off by default.
-        "tools_enabled": {"search": True, "code": True, "maps": False, "url_context": True},
+        "tools_enabled": {"search": False, "code": False, "maps": False, "url_context": False},
     }
 
 
@@ -878,7 +881,7 @@ async def trim_history_for_token_budget(model_name, history, pending_content):
 # Every context should be able to reach the high-quota lite models, so the
 # fallback chain is "all other known models" in fixed priority order rather
 # than a downward-only ladder.
-FALLBACK_PRIORITY = [DEFAULT_CHAT_MODEL, SECONDARY_CHAT_MODEL, TERTIARY_CHAT_MODEL, QUATERNARY_CHAT_MODEL]
+FALLBACK_PRIORITY = [DEFAULT_CHAT_MODEL, SECONDARY_CHAT_MODEL, TERTIARY_CHAT_MODEL, QUATERNARY_CHAT_MODEL, QUINARY_CHAT_MODEL]
 
 
 def resolve_fallback_models(selected_model):
