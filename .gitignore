@@ -30,3 +30,8 @@ Thumbs.db
 build/
 dist/
 *.spec
+
+# Node / frontend
+node_modules/
+website/frontend/node_modules/
+website/static/
