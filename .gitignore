@@ -17,7 +17,6 @@ env/
 node_modules/
 website/frontend/node_modules/
 website/static/
-package-lock.json
 
 # Bot runtime artifacts
 settings.json
