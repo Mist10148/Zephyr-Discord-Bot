@@ -11,19 +11,16 @@ import asyncio
 import discord
 from discord.ext import commands
 
+from zephyr.config import ENABLED_COGS
 from zephyr.core.opus_loader import load_opus
 from zephyr.core.ffmpeg import FFMPEG_PATH
 from zephyr.services.gemini import generate_gemini_response, send_response
 from zephyr.services.storage import storage
 
-# Cog extensions to load (every command lives in one of these)
-EXTENSIONS = [
-    "zephyr.cogs.weather",
-    "zephyr.cogs.music",
-    "zephyr.cogs.voice_tts",
-    "zephyr.cogs.chat",
-    "zephyr.cogs.help",
-]
+# Cog extensions to load (every command lives in one of these).  The names come
+# from config so the web tier can report the same list without importing this
+# module -- importing it would drag in the storage singleton.
+EXTENSIONS = [f"zephyr.cogs.{name}" for name in ENABLED_COGS]
 
 
 async def type_print(text, delay=0.03):
