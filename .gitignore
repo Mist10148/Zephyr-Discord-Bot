@@ -15,6 +15,7 @@ env/
 
 # Bot runtime artifacts
 settings.json
+data/
 tts.mp3
 response_*.txt
 generated_output.png
