@@ -215,6 +215,31 @@ Render will create the website, the bot worker, and a Redis instance automatical
 
 ---
 
+## 🗺️ In development — web dashboard
+
+> **Status: planning.** Nothing in this section is built yet. The current website is the
+> Flask weather page described above.
+
+A React web dashboard is planned, replacing the Jinja weather page with a Discord-authenticated
+control panel for the bot:
+
+- **Frontend** — React 19 + **TypeScript** + Vite + Tailwind v4 + shadcn/ui, with an
+  iOS-style design system: layered materials, stacked shadows, spring physics, sheets with
+  detents, a Dynamic Island, and a rearrangeable widget grid. Installable as a PWA.
+- **Auth** — Discord OAuth2; you see and manage only the guilds you already administer.
+- **Live music remote** — view the queue and control playback from the browser, bridged to
+  the bot over Redis. The bot re-validates every permission before acting.
+- **Weather subscriptions** — daily digests, severe-weather alerts, and class-suspension
+  auto-announcements posted to a channel on a schedule.
+- **AI** — `/summarize`, per-channel conversation memory, per-guild personas, and a
+  token/quota dashboard.
+- **Postgres** replaces `settings.json`, so per-guild settings survive cloud deploys.
+
+Full architecture, data model, API surface, and the 7-phase delivery plan:
+[`docs/WEB_DASHBOARD_PLAN.md`](docs/WEB_DASHBOARD_PLAN.md).
+
+---
+
 ## ⚙️ Configuration (`.env`)
 
 | Variable | Required | Description |
