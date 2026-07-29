@@ -100,7 +100,73 @@ docker compose down
 - `web` — Flask website on port 5000
 - `bot` — Discord bot worker
 
-Both services automatically receive `REDIS_URL=redis://redis:6379/0`, so AI settings are shared.
+Both services automatically receive `REDIS_URL=redis://redis:6379/0`, so AI settings are shared —
+and, for the `web` service, so dashboard sessions work at all. Both now wait for Redis to pass a
+healthcheck rather than merely start.
+
+---
+
+## Discord OAuth setup
+
+Needed only for the dashboard. Skip it to serve the public weather site alone.
+
+1. Open the [Discord Developer Portal](https://discord.com/developers/applications) and select the
+   same application the bot uses. Go to **OAuth2**.
+2. Under **Redirects**, add the callback for every origin you will sign in from:
+   - production: `https://<your-host>/api/v1/auth/callback`
+   - local Flask: `http://127.0.0.1:5000/api/v1/auth/callback`
+   - local Vite dev server: `http://localhost:5173/api/v1/auth/callback`
+3. Copy the **Client ID**, and **Reset Secret** to get a **Client Secret**.
+4. Set `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET` and `REDIS_URL`.
+
+The redirect URI must **byte-match** a registered entry. A mismatch produces Discord's own
+`invalid_redirect_uri` error page, not an application error — so if sign-in fails before ever
+reaching Zephyr, check this first. By default the value is derived from `WEB_PUBLIC_URL` (or
+Render's `RENDER_EXTERNAL_URL`); set `DISCORD_REDIRECT_URI` explicitly for a custom domain.
+
+`WEB_APP_URL` is **not** used for OAuth. It is only the link `/use` prints, and its default is a
+hardcoded ngrok host, so inheriting it would silently produce a redirect URI Discord rejects.
+
+Startup validation is deliberately lenient in one direction and strict in the other: leaving all
+three dashboard variables unset is a supported deployment, but setting only some of them raises at
+boot with the list of what is missing.
+
+### Two-terminal local development
+
+The Vite dev server proxies `/api` to Flask, so run both and use `http://localhost:5173`:
+
+```bash
+python run_web.py                              # Flask on :5000
+npm --prefix website/frontend run dev          # Vite on :5173
+```
+
+Set `DISCORD_REDIRECT_URI=http://localhost:5173/api/v1/auth/callback` for this setup, so the session
+cookie lands on the origin the app is actually served from.
+
+---
+
+## Database migrations
+
+Alembic is available and correct, but **not automatic**. Nothing runs `alembic upgrade head` on
+deploy: the web service runs two gunicorn workers that would race each other, and Render's free tier
+has no release phase. Automating it is a hardening task.
+
+Development and container startup still create tables via `create_all()` (`DB_AUTO_CREATE=1`), so a
+fresh deployment needs no manual step. Migrations matter when the schema *changes*.
+
+```bash
+# Fresh database — build it from migrations alone
+alembic upgrade head
+
+# Existing deployed database, where ai_settings and app_state already exist
+# because create_all() made them: adopt the baseline without re-creating anything
+alembic stamp 0001
+```
+
+The `0001` baseline covers all four tables (`ai_settings`, `app_state`, `web_users`, `guilds`), so
+`alembic downgrade base` is meaningful. Because `create_all()` and Alembic can drift, a
+model-vs-migration check is on the hardening list; `tests/test_web_schema.py` currently asserts the
+baseline matches the models.
 
 ---
 
@@ -122,8 +188,12 @@ Render is the easiest cloud option because the repo already includes `render.yam
    - `GEMINI_API_KEY`
    - `SPOTIFY_CLIENT_ID`
    - `SPOTIFY_CLIENT_SECRET`
+   - `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET` — on the **web** service, for the dashboard
+     (leave blank to deploy the public weather site only)
 
-The website's live URL is automatically passed to the bot as `WEB_APP_URL`.
+The website's live URL is automatically passed to the bot as `WEB_APP_URL`, and `REDIS_URL` is wired
+into both the worker and the web service. The OAuth redirect URI derives from Render's own
+`RENDER_EXTERNAL_URL`, so it needs no manual value unless you use a custom domain.
 
 > **Note:** Render background workers require a paid plan (the Blueprint uses `plan: starter`).
 > The web service can use Render's free tier, but it will spin down after inactivity.
@@ -138,7 +208,9 @@ If you prefer not to use the Blueprint:
 2. Create a **Background Worker** for the bot:
    - Build command: `pip install -r requirements.txt`
    - Start command: `python run_bot.py`
-3. Create a **Redis** instance and set `REDIS_URL` on the worker (optional but recommended).
+3. Create a **Redis** instance and set `REDIS_URL` on **both** services. It is optional but
+   recommended for the worker (shared AI settings) and **required** on the web service for
+   dashboard sessions.
 
 ---
 

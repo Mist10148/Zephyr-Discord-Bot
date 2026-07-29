@@ -11,19 +11,17 @@ import asyncio
 import discord
 from discord.ext import commands
 
+from zephyr.config import ENABLED_COGS, REDIS_URL
 from zephyr.core.opus_loader import load_opus
 from zephyr.core.ffmpeg import FFMPEG_PATH
+from zephyr.services.bridge import write_guild_snapshot
 from zephyr.services.gemini import generate_gemini_response, send_response
 from zephyr.services.storage import storage
 
-# Cog extensions to load (every command lives in one of these)
-EXTENSIONS = [
-    "zephyr.cogs.weather",
-    "zephyr.cogs.music",
-    "zephyr.cogs.voice_tts",
-    "zephyr.cogs.chat",
-    "zephyr.cogs.help",
-]
+# Cog extensions to load (every command lives in one of these).  The names come
+# from config so the web tier can report the same list without importing this
+# module -- importing it would drag in the storage singleton.
+EXTENSIONS = [f"zephyr.cogs.{name}" for name in ENABLED_COGS]
 
 
 async def type_print(text, delay=0.03):
@@ -69,14 +67,38 @@ class ZephyrBot(commands.Bot):
         storage.close()
         await super().close()
 
+    async def _publish_guilds(self):
+        """Publish the guild list for the web dashboard.
+
+        Off the event loop via to_thread because redis-py is synchronous; a
+        blocking call in a coroutine is the bug 625c4ba already fixed once for
+        settings persistence.  A snapshot failure must never break the bot, so
+        every error is logged and swallowed.
+        """
+        if not REDIS_URL:
+            return
+        try:
+            snapshot = [
+                {"id": str(guild.id), "name": guild.name, "icon": guild.icon.key if guild.icon else None}
+                for guild in self.guilds
+            ]
+            await asyncio.to_thread(write_guild_snapshot, snapshot)
+        except Exception as e:
+            print(f"⚠️ Failed to publish the guild snapshot: {e}")
+
     async def on_ready(self):
         await type_print(f"{self.user} has connected to Discord!")
         await type_print(f"🔹 Synced {self._synced_count} slash command(s)")
         await type_print(f"🔹 Total prefix commands: {len(self.commands)}")
         activity = discord.Activity(type=discord.ActivityType.listening, name="/help")
         await self.change_presence(status=discord.Status.online, activity=activity)
+        await self._publish_guilds()
+
+    async def on_guild_remove(self, guild):
+        await self._publish_guilds()
 
     async def on_guild_join(self, guild):
+        await self._publish_guilds()
         welcome_embed = discord.Embed(title="Hello! I am your Weather Bot 🌦️", color=discord.Color.gold())
         welcome_embed.description = "Here are some commands you can use:"
         welcome_embed.add_field(name="/weather <city>", value="Current weather", inline=False)

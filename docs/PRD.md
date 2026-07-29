@@ -217,12 +217,24 @@ All secrets live in `.env` (see `.env.example`).
 | `SPOTIFY_CLIENT_ID` | Bot | Spotify app client ID |
 | `SPOTIFY_CLIENT_SECRET` | Bot | Spotify app client secret |
 | `FFMPEG_PATH` | Optional | Path to FFmpeg |
-| `WEB_APP_URL` | Optional | URL shown by `/use` |
+| `WEB_APP_URL` | Optional | URL shown by `/use`. Not the OAuth origin |
 | `FLASK_HOST` / `FLASK_PORT` | Optional | Website bind address |
 | `PORT` | Optional | Cloud-platform port override |
-| `REDIS_URL` | Optional | Shared AI settings storage |
+| `REDIS_URL` | Optional + **Dashboard** | Shared AI settings storage, and dashboard sessions |
 | `SETTINGS_PATH` | Optional | Custom `settings.json` path |
 | `FLASK_DEBUG` | Optional | Enable Flask debug mode |
+| `DATABASE_URL` | Optional | Postgres/SQLite URL (defaults to `data/zephyr.db`) |
+| `DISCORD_CLIENT_ID` | Dashboard | OAuth2 client ID (same application as the bot) |
+| `DISCORD_CLIENT_SECRET` | Dashboard | OAuth2 client secret |
+| `WEB_PUBLIC_URL` | Optional | Public dashboard origin; Render supplies `RENDER_EXTERNAL_URL` |
+| `DISCORD_REDIRECT_URI` | Optional | Defaults to `<WEB_PUBLIC_URL>/api/v1/auth/callback` |
+| `SESSION_TTL_SECONDS` / `SESSION_MAX_AGE_SECONDS` | Optional | Sliding lifetime and hard cap |
+| `AUTH_COOKIE_SECURE` | Optional | Auto-on for `https://` origins |
+| `GUILDS_FRESH_SECONDS` | Optional | Guild-list freshness window |
+| `TRUST_PROXY_HEADERS` | Optional | Trust `X-Forwarded-*`; auto-on under Render |
+
+Leaving all three dashboard variables unset serves the public weather site only. Setting some but not
+all of them raises at startup.
 
 `settings.json` stores per-server/DM AI preferences locally; when `REDIS_URL` is set, the same JSON payload is stored in Redis for shared cloud state.
 
@@ -266,6 +278,9 @@ Detailed scope per phase: [`WEB_DASHBOARD_PLAN.md`](WEB_DASHBOARD_PLAN.md) §6.
 - [ ] **Phase 2** — Versioned JSON API (`/api/v1/*`), migrate the website to Open-Meteo,
       ship the public weather PWA with a ⌘K palette over all 64 commands.
 - [ ] **Phase 3** — Discord OAuth2 login, Redis sessions, per-guild settings dashboard.
+      *Backend landed: OAuth flow, Redis sessions, CSRF, `/me`, read-only guild overview,
+      Alembic. The dashboard UI is the remaining half. `audit_log` and Fernet token storage are
+      deliberately deferred — see [`WEB_DASHBOARD_PLAN.md`](WEB_DASHBOARD_PLAN.md) §8.*
 - [ ] **Phase 4** — Redis bot↔web bridge; persistent playlists, Spotify import, autoplay,
       now-playing buttons, and a web music remote.
 - [ ] **Phase 5** — Weather subscriptions: daily digests, severe-weather watcher, and
@@ -286,6 +301,22 @@ Detailed scope per phase: [`WEB_DASHBOARD_PLAN.md`](WEB_DASHBOARD_PLAN.md) §6.
 ---
 
 ## 13. Changelog
+
+### 1.3 — Phase 3 auth backend
+- Discord OAuth2 authorization-code flow at `/api/v1/auth/{login,callback,logout}`, with the
+  `state` bound to both Redis and an `HttpOnly` cookie so login-CSRF is closed.
+- Redis-backed server-side sessions: opaque ids, `HttpOnly` + `SameSite=Lax` cookies, a sliding
+  TTL renewed with a single `GETEX`, and a hard `created_at` cap. No `SECRET_KEY` required.
+- Synchronizer-token CSRF enforced across the whole `/api/v1` blueprint, plus `no-store` and
+  `Vary: Cookie` on authenticated responses.
+- `GET /api/v1/me` and a read-only `GET /api/v1/guilds/<id>`.
+- New `web_users` and `guilds` tables, a lazy engine that keeps Flask away from the storage
+  singleton, and an Alembic baseline covering all four tables.
+- The bot publishes a `zephyr:guilds` membership snapshot so the dashboard can tell which servers
+  it is actually in.
+- `REDIS_URL` and the OAuth secrets wired into the Render web service, which previously had none.
+- Deliberate deferrals and departures from the plan are recorded in
+  [`WEB_DASHBOARD_PLAN.md`](WEB_DASHBOARD_PLAN.md) §8.
 
 ### 1.2 — Web dashboard planning *(docs only; no code changes)*
 - Added [`WEB_DASHBOARD_PLAN.md`](WEB_DASHBOARD_PLAN.md): architecture, data model, API

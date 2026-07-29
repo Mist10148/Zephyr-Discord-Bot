@@ -21,4 +21,6 @@ def api_method_not_allowed(_error):
 
 
 # Register endpoint modules after the blueprint and shared helpers exist.
-from website.api import commands, weather  # noqa: E402,F401
+# `guard` belongs in this list too: its before_request/after_request hooks only
+# attach when the module is imported.
+from website.api import auth, commands, guard, guilds, me, weather  # noqa: E402,F401

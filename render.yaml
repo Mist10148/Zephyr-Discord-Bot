@@ -12,6 +12,24 @@ services:
         fromDatabase:
           name: zephyr-db
           property: connectionString
+      # Dashboard sessions are server-side and shared across the two workers
+      # above, so the web service needs Redis just as much as the bot does.
+      # Without this the dashboard boots with auth silently disabled.
+      - key: REDIS_URL
+        fromService:
+          name: zephyr-redis
+          type: redis
+          property: connectionString
+      # Discord OAuth2 credentials, from the same application as the bot.
+      # Register https://<your-host>/api/v1/auth/callback under OAuth2 -> Redirects.
+      - key: DISCORD_CLIENT_ID
+        sync: false
+      - key: DISCORD_CLIENT_SECRET
+        sync: false
+      # Only needed for a custom domain. Otherwise the redirect URI is derived
+      # from RENDER_EXTERNAL_URL, which Render injects automatically.
+      - key: DISCORD_REDIRECT_URI
+        sync: false
       - key: PYTHON_VERSION
         value: 3.13.0
       - key: NODE_VERSION

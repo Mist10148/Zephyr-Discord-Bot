@@ -217,8 +217,9 @@ Render will create the website, the bot worker, and a Redis instance automatical
 
 ## 🗺️ In development — web dashboard
 
-> **Status: planning.** Nothing in this section is built yet. The current website is the
-> Flask weather page described above.
+> **Status: in progress.** The data layer, the React frontend, the public weather PWA and the
+> Discord OAuth **backend** have landed. The dashboard UI itself has not — signing in works,
+> but the guild picker and settings screens are still to come.
 
 A React web dashboard is planned, replacing the Jinja weather page with a Discord-authenticated
 control panel for the bot:
@@ -250,12 +251,31 @@ Full architecture, data model, API surface, and the 7-phase delivery plan:
 | `SPOTIFY_CLIENT_ID` | ✅ | Spotify app client ID |
 | `SPOTIFY_CLIENT_SECRET` | ✅ | Spotify app client secret |
 | `FFMPEG_PATH` | — | Explicit path to FFmpeg (otherwise auto-detected) |
-| `WEB_APP_URL` | — | URL shown by `/use` (defaults to the project's web app) |
+| `WEB_APP_URL` | — | URL shown by `/use`. **Not** the OAuth origin — see `WEB_PUBLIC_URL` |
 | `FLASK_HOST` / `FLASK_PORT` | — | Website host/port (default `0.0.0.0:5000`) |
 | `PORT` | — | Cloud-platform port override (overrides `FLASK_PORT`) |
-| `REDIS_URL` | — | Optional Redis connection for shared AI settings |
+| `REDIS_URL` | — | Shared AI settings, and **required for dashboard sessions** |
 | `SETTINGS_PATH` | — | Custom path for `settings.json` |
 | `FLASK_DEBUG` | — | Set to `1` to enable Flask debug mode |
+| `DATABASE_URL` | — | Postgres/SQLite URL (defaults to `data/zephyr.db`) |
+
+### Dashboard (Discord OAuth)
+
+Leave all of these unset to serve only the public weather site. Setting some but not all
+of `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET` and `REDIS_URL` fails fast at startup.
+
+| Variable | Required | Description |
+|----------|:--------:|-------------|
+| `DISCORD_CLIENT_ID` | dashboard | OAuth2 client ID (same Discord application as the bot) |
+| `DISCORD_CLIENT_SECRET` | dashboard | OAuth2 client secret |
+| `REDIS_URL` | dashboard | Sessions are server-side and shared across gunicorn workers |
+| `WEB_PUBLIC_URL` | — | Public origin of the dashboard. Render supplies `RENDER_EXTERNAL_URL` |
+| `DISCORD_REDIRECT_URI` | — | Defaults to `<WEB_PUBLIC_URL>/api/v1/auth/callback` |
+| `SESSION_TTL_SECONDS` | — | Sliding session lifetime (default 7 days) |
+| `SESSION_MAX_AGE_SECONDS` | — | Hard cap no activity extends (default 30 days) |
+| `AUTH_COOKIE_SECURE` | — | Auto-on for `https://` origins |
+| `GUILDS_FRESH_SECONDS` | — | How long a session's guild list is trusted (default 1 hour) |
+| `TRUST_PROXY_HEADERS` | — | Trust `X-Forwarded-*`. Auto-on under Render |
 
 `.env` is git-ignored and never committed. `settings.json` (per-context AI preferences) is also
 kept local unless you set `REDIS_URL`.

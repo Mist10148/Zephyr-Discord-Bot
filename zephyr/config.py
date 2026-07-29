@@ -64,6 +64,65 @@ DB_AUTO_CREATE = os.getenv("DB_AUTO_CREATE", "1").lower() in {"1", "true", "yes"
 SETTINGS_PATH = os.getenv("SETTINGS_PATH") or str(PROJECT_ROOT / "settings.json")
 
 # ---------------------------------------------------------------------------
+# Web dashboard (Discord OAuth)
+# ---------------------------------------------------------------------------
+DISCORD_CLIENT_ID = os.getenv("DISCORD_CLIENT_ID") or None
+DISCORD_CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET") or None
+
+# Public origin of the dashboard.  Render injects RENDER_EXTERNAL_URL for us.
+# WEB_APP_URL is deliberately NOT consulted here: its default is a hardcoded
+# ngrok host, so inheriting it would silently build a redirect_uri that does not
+# match the Discord application and fail with an opaque invalid_redirect_uri.
+WEB_PUBLIC_URL = (
+    os.getenv("WEB_PUBLIC_URL") or os.getenv("RENDER_EXTERNAL_URL") or f"http://127.0.0.1:{PORT}"
+).rstrip("/")
+
+# Must byte-match a redirect registered in the Discord Developer Portal, so it is
+# never derived from request headers (no url_for(_external=True)).
+OAUTH_CALLBACK_PATH = "/api/v1/auth/callback"
+DISCORD_REDIRECT_URI = os.getenv("DISCORD_REDIRECT_URI") or f"{WEB_PUBLIC_URL}{OAUTH_CALLBACK_PATH}"
+DISCORD_OAUTH_SCOPES = "identify guilds"
+
+# Session cookie.  AUTH_COOKIE_* rather than Flask's own SESSION_COOKIE_*: this
+# is a bespoke server-side store and flask.session stays unused.
+AUTH_COOKIE_NAME = os.getenv("AUTH_COOKIE_NAME", "zephyr_session")
+CSRF_COOKIE_NAME = os.getenv("CSRF_COOKIE_NAME", "zephyr_csrf")
+OAUTH_STATE_COOKIE_NAME = "zephyr_oauth_state"
+AUTH_COOKIE_SECURE = (
+    os.getenv("AUTH_COOKIE_SECURE") or ("1" if WEB_PUBLIC_URL.startswith("https://") else "0")
+).lower() in {"1", "true", "yes"}
+
+# Sliding session lifetime, plus a hard cap that no amount of activity extends.
+AUTH_SESSION_TTL = int(os.getenv("SESSION_TTL_SECONDS", str(7 * 24 * 3600)))
+AUTH_SESSION_MAX_AGE = int(os.getenv("SESSION_MAX_AGE_SECONDS", str(30 * 24 * 3600)))
+OAUTH_STATE_TTL = 600
+
+# How long a session's cached guild list is trusted before /me flags it stale.
+GUILDS_FRESH_SECONDS = int(os.getenv("GUILDS_FRESH_SECONDS", "3600"))
+
+# SPA paths the OAuth endpoints redirect back into.
+SPA_LOGIN_PATH = "/login"
+SPA_DEFAULT_PATH = "/g"
+
+# Only trust X-Forwarded-* when something is actually proxying us; Render sets RENDER.
+TRUST_PROXY = (os.getenv("TRUST_PROXY_HEADERS") or ("1" if os.getenv("RENDER") else "0")).lower() in {
+    "1",
+    "true",
+    "yes",
+}
+
+# Permissions bitfield used to build the "Add Zephyr" invite link.
+DISCORD_INVITE_PERMISSIONS = os.getenv("DISCORD_INVITE_PERMISSIONS", "3197952")
+
+# Single source of truth for the cog list: the bot loads these, and the web tier
+# reports them as a guild's default enabled_cogs without importing the client.
+ENABLED_COGS = ("weather", "music", "voice_tts", "chat", "help")
+
+# The dashboard needs an OAuth application *and* Redis (sessions are shared
+# across gunicorn workers).  Without all three, only the public weather site runs.
+AUTH_ENABLED = bool(DISCORD_CLIENT_ID and DISCORD_CLIENT_SECRET and REDIS_URL)
+
+# ---------------------------------------------------------------------------
 # Weather API endpoints & coordinates
 # ---------------------------------------------------------------------------
 CURRENT_URL = "http://api.openweathermap.org/data/2.5/weather"
@@ -119,5 +178,40 @@ def validate_bot_config():
 
 
 def validate_web_config():
-    """Validate web-only requirements (none before OAuth lands in Phase 3)."""
-    return None
+    """Validate the dashboard's OAuth wiring; a weather-only deployment needs nothing.
+
+    Only *partial* configuration raises.  Leaving the dashboard unconfigured is a
+    supported deployment (the public weather site), but half-configuring it is
+    always a mistake -- a typo'd variable name, or credentials with nowhere to keep
+    the sessions.
+
+    REDIS_URL is deliberately not treated as a signal of intent.  It predates the
+    dashboard and still has an independent job (shared AI settings), so a Redis
+    instance attached to the web service must not by itself demand OAuth
+    credentials -- otherwise wiring up Redis takes the whole site down until
+    somebody fills in two secrets.
+    """
+    credentials = {"DISCORD_CLIENT_ID": DISCORD_CLIENT_ID, "DISCORD_CLIENT_SECRET": DISCORD_CLIENT_SECRET}
+    provided = [name for name, value in credentials.items() if value]
+    missing = [name for name, value in credentials.items() if not value]
+    if provided and missing:
+        raise RuntimeError(
+            "The web dashboard is only partially configured. Missing: "
+            + ", ".join(missing)
+            + f".\nAdd it to {PROJECT_ROOT / '.env'} (see .env.example), or unset "
+            + ", ".join(provided)
+            + " to serve the public weather site only."
+        )
+    if provided and not REDIS_URL:
+        raise RuntimeError(
+            "The web dashboard needs REDIS_URL: sessions are server-side and shared "
+            "across workers, so they cannot be held in process memory.\n"
+            f"Add it to {PROJECT_ROOT / '.env'} (see .env.example), or unset "
+            "DISCORD_CLIENT_ID and DISCORD_CLIENT_SECRET to serve the public weather site only."
+        )
+    if AUTH_ENABLED and not DISCORD_REDIRECT_URI.startswith(("http://", "https://")):
+        raise RuntimeError(f"DISCORD_REDIRECT_URI must be an absolute URL (got {DISCORD_REDIRECT_URI}).")
+    if AUTH_ENABLED and not DISCORD_REDIRECT_URI.endswith(OAUTH_CALLBACK_PATH):
+        raise RuntimeError(
+            f"DISCORD_REDIRECT_URI must end with {OAUTH_CALLBACK_PATH} (got {DISCORD_REDIRECT_URI})."
+        )

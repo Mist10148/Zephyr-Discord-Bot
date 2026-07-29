@@ -19,6 +19,11 @@ services:
     restart: unless-stopped
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
     volumes:
       - redis_data:/data
 
@@ -33,9 +38,15 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql+psycopg://zephyr:zephyr@postgres:5432/zephyr
+      # OAuth redirect base for local runs. DISCORD_CLIENT_ID and
+      # DISCORD_CLIENT_SECRET arrive via env_file above.
+      - WEB_PUBLIC_URL=http://localhost:5000
+      - AUTH_COOKIE_SECURE=0
     depends_on:
+      # service_healthy, not service_started: Redis now holds dashboard sessions,
+      # and a started-but-not-yet-listening Redis would fail the first sign-in.
       redis:
-        condition: service_started
+        condition: service_healthy
       postgres:
         condition: service_healthy
 
@@ -50,7 +61,7 @@ services:
       - DATABASE_URL=postgresql+psycopg://zephyr:zephyr@postgres:5432/zephyr
     depends_on:
       redis:
-        condition: service_started
+        condition: service_healthy
       postgres:
         condition: service_healthy
 
