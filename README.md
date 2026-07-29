@@ -217,9 +217,10 @@ Render will create the website, the bot worker, and a Redis instance automatical
 
 ## 🗺️ In development — web dashboard
 
-> **Status: in progress.** The data layer, the React frontend, the public weather PWA and the
-> Discord OAuth **backend** have landed. The dashboard UI itself has not — signing in works,
-> but the guild picker and settings screens are still to come.
+> **Status: in progress.** The data layer, the React frontend, the public weather PWA and
+> Discord sign-in have all landed. You can sign in with Discord, pick a server you administer,
+> and view its settings — **read-only** for now. Editing, the music remote, weather
+> subscriptions and the AI features are still to come.
 
 A React web dashboard is planned, replacing the Jinja weather page with a Discord-authenticated
 control panel for the bot:
