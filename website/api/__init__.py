@@ -18,3 +18,7 @@ def api_not_found(_error):
 @api.app_errorhandler(405)
 def api_method_not_allowed(_error):
     return error("method_not_allowed", "Method not allowed", 405)
+
+
+# Register endpoint modules after the blueprint and shared helpers exist.
+from website.api import commands, weather  # noqa: E402,F401
