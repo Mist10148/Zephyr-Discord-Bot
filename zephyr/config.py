@@ -119,9 +119,5 @@ def validate_bot_config():
 
 
 def validate_web_config():
-    """Ensure the website has the OpenWeather key it needs."""
-    if not API_KEY:
-        raise RuntimeError(
-            "Missing required environment variable: OPENWEATHER_API_KEY.\n"
-            f"Add it to {PROJECT_ROOT / '.env'} (see .env.example)."
-        )
+    """Validate web-only requirements (none before OAuth lands in Phase 3)."""
+    return None
