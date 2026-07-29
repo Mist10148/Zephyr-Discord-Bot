@@ -52,6 +52,14 @@ PORT = int(os.getenv("PORT") or FLASK_PORT)
 # Optional Redis URL for shared settings/history across cloud instances.
 REDIS_URL = os.getenv("REDIS_URL") or os.getenv("REDISCLOUD_URL") or None
 
+# Database-backed settings are preferred when explicitly configured.  A local
+# SQLite database remains the zero-configuration default for development.
+DATABASE_URL = os.getenv("DATABASE_URL") or None
+DEFAULT_DATABASE_URL = f"sqlite:///{(PROJECT_ROOT / 'data' / 'zephyr.db').as_posix()}"
+STORAGE_BACKEND = (os.getenv("STORAGE_BACKEND") or "auto").lower()
+DB_ECHO = os.getenv("DB_ECHO", "0").lower() in {"1", "true", "yes"}
+DB_AUTO_CREATE = os.getenv("DB_AUTO_CREATE", "1").lower() in {"1", "true", "yes"}
+
 # Optional custom path for the local settings file (useful for mounted volumes).
 SETTINGS_PATH = os.getenv("SETTINGS_PATH") or str(PROJECT_ROOT / "settings.json")
 
@@ -76,6 +84,17 @@ TERTIARY_CHAT_MODEL = "gemini-2.5-flash"
 # ---------------------------------------------------------------------------
 # Kept for backwards compatibility; new code should use SETTINGS_PATH.
 SETTINGS_FILE = SETTINGS_PATH
+
+
+def _normalize_database_url(url: str | None) -> str | None:
+    """Return a SQLAlchemy 2 compatible URL for the configured database."""
+    if not url:
+        return None
+    if url.startswith("postgres://"):
+        return "postgresql+psycopg://" + url.removeprefix("postgres://")
+    if url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + url.removeprefix("postgresql://")
+    return url
 
 
 def validate_bot_config():
