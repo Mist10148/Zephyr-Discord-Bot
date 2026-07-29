@@ -15,7 +15,9 @@ this without pulling the gateway library into a Flask worker.
 import json
 import time
 
-from zephyr.services.redis_client import get_client
+# Imported as a module, not `from ... import get_client`, so that patching
+# redis_client.get_client redirects every call site at once.
+from zephyr.services import redis_client
 
 GUILDS_KEY = "zephyr:guilds"
 GUILDS_UPDATED_KEY = "zephyr:guilds:updated_at"
@@ -32,7 +34,7 @@ def write_guild_snapshot(guilds: list[dict], *, url: str | None = None) -> None:
     bot start rewrites it, which bounds the staleness in practice, and
     ``zephyr:guilds:updated_at`` exposes that bound to the UI.
     """
-    client = get_client(url)
+    client = redis_client.get_client(url)
     payload = {str(guild["id"]): guild for guild in guilds}
     pipeline = client.pipeline()
     pipeline.set(GUILDS_KEY, json.dumps(payload))
@@ -46,7 +48,7 @@ def read_guild_snapshot(*, url: str | None = None) -> tuple[dict[str, dict] | No
     ``None`` means "the bot has never published" -- a distinct state from "the bot
     is in no guilds", and the caller must not present it as an empty list.
     """
-    client = get_client(url)
+    client = redis_client.get_client(url)
     raw, updated = client.mget(GUILDS_KEY, GUILDS_UPDATED_KEY)
     if not raw:
         return None, None

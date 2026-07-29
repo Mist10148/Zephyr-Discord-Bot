@@ -152,10 +152,13 @@ def inert_env(monkeypatch):
 
 @pytest.fixture
 def fake_redis(monkeypatch):
-    """Route every get_client() call at one shared FakeRedis."""
+    """Route every get_client() call at one shared FakeRedis.
+
+    A single patch is enough because callers reach it as
+    ``redis_client.get_client(...)`` rather than importing the function itself.
+    """
     client = FakeRedis()
     monkeypatch.setattr("zephyr.services.redis_client.get_client", lambda url=None: client)
-    monkeypatch.setattr("zephyr.services.bridge.get_client", lambda url=None: client)
     return client
 
 
@@ -168,3 +171,65 @@ def db_url(tmp_path):
     would vanish between statements.
     """
     return f"sqlite:///{(tmp_path / 'test.db').as_posix()}"
+
+
+CLIENT_ID = "111111111111111111"
+REDIRECT_URI = "http://localhost/api/v1/auth/callback"
+
+
+@pytest.fixture
+def app(db_url, fake_redis):
+    """A fully configured app with auth switched on.
+
+    Imported from ``website`` rather than ``wsgi`` (which validates config at
+    import) or ``website.app`` (which builds an app at import).
+    """
+    from website import create_app
+
+    return create_app(
+        {
+            "TESTING": True,
+            "AUTH_ENABLED": True,
+            "DISCORD_CLIENT_ID": CLIENT_ID,
+            "DISCORD_CLIENT_SECRET": "client-secret",
+            "DISCORD_REDIRECT_URI": REDIRECT_URI,
+            "WEB_PUBLIC_URL": "http://localhost",
+            "REDIS_URL": "redis://localhost:6379/0",
+            "DATABASE_URL": db_url,
+            "AUTH_COOKIE_SECURE": False,
+            "TRUST_PROXY": False,
+        }
+    )
+
+
+@pytest.fixture
+def public_app(db_url, fake_redis):
+    """An app with no OAuth application configured -- the weather-only deploy."""
+    from website import create_app
+
+    return create_app({"TESTING": True, "AUTH_ENABLED": False, "DATABASE_URL": db_url})
+
+
+@pytest.fixture
+def client(app):
+    return app.test_client()
+
+
+@pytest.fixture
+def logged_in(app, client, fake_redis):
+    """Write a session straight into Redis and attach its cookies to the client.
+
+    Returns the Session so tests can assert against its csrf token and guilds.
+    """
+    from website.session import create_session
+
+    with app.app_context():
+        session = create_session(
+            {"id": "900000000000000001", "username": "tester", "global_name": "Tester", "avatar": "av"},
+            [{"id": "1", "name": "Managed Guild", "icon": "icon1", "owner": True}],
+            ttl=app.config["AUTH_SESSION_TTL"],
+            redis_url=app.config["REDIS_URL"],
+        )
+    client.set_cookie(app.config["AUTH_COOKIE_NAME"], session.sid, domain="localhost")
+    client.set_cookie(app.config["CSRF_COOKIE_NAME"], session.csrf, domain="localhost")
+    return session
