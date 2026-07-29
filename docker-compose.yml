@@ -1,4 +1,19 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: zephyr
+      POSTGRES_USER: zephyr
+      POSTGRES_PASSWORD: zephyr
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zephyr -d zephyr"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
   redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -17,8 +32,12 @@ services:
       - .env
     environment:
       - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql+psycopg://zephyr:zephyr@postgres:5432/zephyr
     depends_on:
-      - redis
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
 
   bot:
     build: .
@@ -28,8 +47,13 @@ services:
       - .env
     environment:
       - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql+psycopg://zephyr:zephyr@postgres:5432/zephyr
     depends_on:
-      - redis
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
 
 volumes:
   redis_data:
+  postgres_data:

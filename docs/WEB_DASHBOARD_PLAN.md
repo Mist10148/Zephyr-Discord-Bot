@@ -14,7 +14,7 @@
 | Frontend location | `website/frontend/` → builds to `website/static/` | Flask serves the built SPA; keeps one deployable |
 | API style | Versioned JSON under `/api/v1/*` | Current `POST /weather` takes **form data** — not consumable by a typed client |
 | Weather provider (web) | **Migrate to Open-Meteo** | Keyless, one call gives hourly + daily + AQI + apparent temp, unifies bot/web behavior, removes the fragile `day_data[4]` "daytime" indexing |
-| Database | **Postgres** + SQLAlchemy 2.0 + Alembic | `settings.json` does not survive an ephemeral filesystem — see §7 |
+| Database | **Postgres** + sync SQLAlchemy 2.0 | `settings.json` does not survive an ephemeral filesystem — see §7 |
 | Bot ↔ web transport | **Redis** (pub/sub + snapshot keys) | `redis` is already a dependency; keeps the bot process authoritative |
 | Live updates to browser | **Polling first** (TanStack `refetchInterval: 3000`), SSE later | SSE under gunicorn needs gevent workers; not worth the deploy complexity in v1 |
 | Hosting | Flask web service + bot **worker** + Postgres + Redis | Vercel/Lambda cannot hold long-lived connections; see §7 |
@@ -73,8 +73,8 @@ Discord cache before executing. Web-side permission checks are UX, not security.
 ```
 guilds              (id PK, prefix, locale, timezone, default_volume,
                      dj_role_id, music_channel_ids[], enabled_cogs[], created_at)
-ai_settings         (context_key PK, model, output_format, persona_id, temperature)
-                    -- context_key = "guild:{id}" | "dm:{user_id}"  (mirrors settings.json today)
+ai_settings         (context_key PK, data JSON, updated_at)
+                    -- opaque legacy keys: SERVER-{id}, DM-{id}, bare IDs, and older shapes
 web_users           (discord_id PK, username, avatar_hash,
                      refresh_token_enc, token_expires_at, last_login_at)
 bot_users           (discord_id PK, default_city, lat, lon, units, timezone)
@@ -98,7 +98,7 @@ audit_log           (id PK, guild_id, actor_id, action, payload JSONB,
 
 Migration: a one-shot importer reads existing `settings.json` (and Redis, if
 `REDIS_URL` was set) into `ai_settings`. **`zephyr/services/storage.py` keeps its
-current interface** so no cog changes in Phase 0 — only its backend swaps.
+current interface**; two chat handlers defer and move database writes off the event loop.
 
 ---
 
@@ -237,8 +237,8 @@ Tracked as tasks #1–#8 in the session task list. Dependency graph:
 parallel. #5, #6 and #7 are also mutually independent once auth lands.
 
 **Phase 0 — Data layer** *(blocks everything)*
-Postgres + SQLAlchemy 2.0 (async engine for the bot, sync for Flask, shared models) +
-Alembic. `settings.json` → `ai_settings` importer. `storage.py` interface unchanged.
+Postgres + sync SQLAlchemy 2.0 with `create_all()` (Alembic is deferred to Phase 3).
+`settings.json`/Redis → `ai_settings` importer. `storage.py` interface remains sync.
 Fixes the live persistence bug.
 
 **Phase 1 — Frontend foundation**
@@ -247,7 +247,7 @@ primitive, `/kitchen-sink` review route. No features yet.
 
 **Phase 2 — Public weather PWA** *(first shippable slice)*
 `/api/v1/{weather,geocode,commands,status}`, Open-Meteo migration, widget grid,
-⌘K command palette over all 64 commands, PWA manifest + service worker.
+⌘K command palette over 62 unique commands, PWA manifest + service worker.
 
 **Phase 3 — Auth**
 Discord OAuth, Redis sessions, `/me`, guild picker, read-only guild overview.
