@@ -11,6 +11,7 @@ def _static_dir() -> Path:
     return Path(current_app.root_path) / "static"
 
 
+@spa.route("/", defaults={"path": ""})
 @spa.route("/<path:path>")
 def serve_spa(path: str):
     if path.startswith("api/"):
