@@ -9,8 +9,7 @@ __pycache__/
 # Secrets / local state
 .env
 settings.json
-*.txt
-!requirements.txt
+response_*.txt
 
 # Git
 .git/
@@ -28,6 +27,9 @@ Thumbs.db
 tts.mp3
 response_*.txt
 generated_output.png
+node_modules/
+website/frontend/node_modules/
+website/static/
 
 # Windows-only bundled binaries (Linux containers install their own)
 ffmpeg/*.exe

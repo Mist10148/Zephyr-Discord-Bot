@@ -3,6 +3,14 @@
 # Run web: docker run -p 5000:5000 --env-file .env zephyr
 # Run bot: docker run --env-file .env zephyr python run_bot.py
 
+FROM node:22-slim AS frontend
+
+WORKDIR /app/website/frontend
+COPY website/frontend/package*.json ./
+RUN npm ci
+COPY website/frontend ./
+RUN npm run build
+
 FROM python:3.13-slim
 
 # Install system dependencies required by the bot and website.
@@ -17,8 +25,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application.
+# Copy the application first so the freshly built bundle always wins over a
+# stale local website/static directory.
 COPY . .
+COPY --from=frontend /app/website/static ./website/static
 
 # Cloud platforms provide PORT; default to 5000 for local Docker runs.
 EXPOSE 5000
