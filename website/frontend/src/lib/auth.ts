@@ -14,6 +14,10 @@ import type { Me } from '../types/api'
 // --max-warnings=0.
 export function useMe() { return useQuery({ queryKey: ['me'], queryFn: () => api<Me>('/me') }) }
 export function isUnauthorized(error: unknown) { return error instanceof ApiError && error.status === 401 }
+// A server with no OAuth application configured answers 503 auth_not_configured.
+// That is a deployment state, not an outage, so it belongs on the sign-in screen
+// where it can be explained -- not behind a "Try again" button that will never work.
+export function isUnconfigured(error: unknown) { return error instanceof ApiError && error.code === 'auth_not_configured' }
 // Path-only, always leading-slash. The backend re-validates it anyway (rejecting
 // //evil.com, backslash tricks and absolute URLs) and falls back to /g.
 export function loginUrl(next: string) { return `/api/v1/auth/login?next=${encodeURIComponent(next)}` }
