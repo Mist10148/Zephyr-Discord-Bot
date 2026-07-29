@@ -177,31 +177,37 @@ def validate_bot_config():
         )
 
 
-_WEB_REQUIRED = ("DISCORD_CLIENT_ID", "DISCORD_CLIENT_SECRET", "REDIS_URL")
-
-
 def validate_web_config():
     """Validate the dashboard's OAuth wiring; a weather-only deployment needs nothing.
 
-    Only *partial* configuration raises.  Leaving all of it unset is a supported
-    deployment (the public weather site), but setting two of the three is always a
-    mistake -- a typo'd variable name, or forgetting REDIS_URL on the web service.
+    Only *partial* configuration raises.  Leaving the dashboard unconfigured is a
+    supported deployment (the public weather site), but half-configuring it is
+    always a mistake -- a typo'd variable name, or credentials with nowhere to keep
+    the sessions.
+
+    REDIS_URL is deliberately not treated as a signal of intent.  It predates the
+    dashboard and still has an independent job (shared AI settings), so a Redis
+    instance attached to the web service must not by itself demand OAuth
+    credentials -- otherwise wiring up Redis takes the whole site down until
+    somebody fills in two secrets.
     """
-    values = dict(
-        zip(
-            _WEB_REQUIRED,
-            (DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET, REDIS_URL),
-        )
-    )
-    provided = [name for name, value in values.items() if value]
-    missing = [name for name, value in values.items() if not value]
+    credentials = {"DISCORD_CLIENT_ID": DISCORD_CLIENT_ID, "DISCORD_CLIENT_SECRET": DISCORD_CLIENT_SECRET}
+    provided = [name for name, value in credentials.items() if value]
+    missing = [name for name, value in credentials.items() if not value]
     if provided and missing:
         raise RuntimeError(
             "The web dashboard is only partially configured. Missing: "
             + ", ".join(missing)
-            + f".\nAdd them to {PROJECT_ROOT / '.env'} (see .env.example), or unset "
+            + f".\nAdd it to {PROJECT_ROOT / '.env'} (see .env.example), or unset "
             + ", ".join(provided)
             + " to serve the public weather site only."
+        )
+    if provided and not REDIS_URL:
+        raise RuntimeError(
+            "The web dashboard needs REDIS_URL: sessions are server-side and shared "
+            "across workers, so they cannot be held in process memory.\n"
+            f"Add it to {PROJECT_ROOT / '.env'} (see .env.example), or unset "
+            "DISCORD_CLIENT_ID and DISCORD_CLIENT_SECRET to serve the public weather site only."
         )
     if AUTH_ENABLED and not DISCORD_REDIRECT_URI.startswith(("http://", "https://")):
         raise RuntimeError(f"DISCORD_REDIRECT_URI must be an absolute URL (got {DISCORD_REDIRECT_URI}).")
