@@ -1,8 +1,14 @@
 # Zephyr — Product Requirements Document (PRD)
 
-**Version:** 1.0  
-**Last updated:** 2026-06-25  
+**Version:** 1.2  
+**Last updated:** 2026-07-30  
 **Owner:** Zephyr Discord Bot project  
+
+> **In planning:** a React web dashboard with Discord OAuth, plus four bot feature tracks
+> (weather subscriptions, persistent playlists, AI summarization, database-backed settings).
+> Architecture, data model, API surface, and phased delivery live in
+> [`WEB_DASHBOARD_PLAN.md`](WEB_DASHBOARD_PLAN.md). Sections 6–11 below describe the
+> **currently shipped** product.
 
 ---
 
@@ -247,17 +253,46 @@ Additional permissions needed at invite time:
 
 ## 12. Roadmap / TODO
 
+Detailed scope per phase: [`WEB_DASHBOARD_PLAN.md`](WEB_DASHBOARD_PLAN.md) §6.
+
+**Committed — phased build (tracked as tasks #1–#8)**
+
 - [x] Support local and cloud deployment (Docker, Render, Vercel, AWS).
-- [ ] Add persistent music playlists.
+- [ ] **Phase 0** — Move `settings.json` to Postgres (SQLAlchemy 2.0 + Alembic). *Fixes a live
+      bug: the file does not survive an ephemeral filesystem, so per-guild settings are lost on
+      every cloud deploy.*
+- [ ] **Phase 1** — React + Vite + TypeScript + Tailwind v4 + shadcn frontend with an
+      iOS-style design system (materials, stacked shadows, spring physics, widget grid).
+- [ ] **Phase 2** — Versioned JSON API (`/api/v1/*`), migrate the website to Open-Meteo,
+      ship the public weather PWA with a ⌘K palette over all 64 commands.
+- [ ] **Phase 3** — Discord OAuth2 login, Redis sessions, per-guild settings dashboard.
+- [ ] **Phase 4** — Redis bot↔web bridge; persistent playlists, Spotify import, autoplay,
+      now-playing buttons, and a web music remote.
+- [ ] **Phase 5** — Weather subscriptions: daily digests, severe-weather watcher, and
+      class-suspension auto-announce; `/setlocation` per-user default city.
+- [ ] **Phase 6** — `/summarize`, per-channel conversation memory, per-guild personas,
+      `/translate`.
+- [ ] **Phase 7** — Accessibility, performance, rate limiting, audit log, tests,
+      deployment cleanup.
+
+**Backlog (not scheduled)**
+
 - [ ] Support more music sources (SoundCloud, Bandcamp).
-- [ ] Add server-specific settings for default AI model and music volume.
-- [ ] Migrate the website to Open-Meteo for consistency with the bot.
-- [ ] Add admin/moderation utilities (optional cog).
-- [ ] Add unit/integration tests for cogs and helpers.
+- [ ] Admin/moderation utilities: automod, reaction roles, starboard, leveling + web
+      leaderboard, reminders, polls, welcome cards, giveaways.
+- [ ] Sharding readiness and metrics.
+- [ ] i18n.
 
 ---
 
 ## 13. Changelog
+
+### 1.2 — Web dashboard planning *(docs only; no code changes)*
+- Added [`WEB_DASHBOARD_PLAN.md`](WEB_DASHBOARD_PLAN.md): architecture, data model, API
+  surface, iOS design-token spec, and a 7-phase delivery plan.
+- Chose TypeScript, Vite, Tailwind v4, shadcn/ui, Motion, TanStack Query.
+- Chose Postgres over `settings.json`, and Redis pub/sub as the bot↔web bridge.
+- Rewrote the roadmap (§12) around the phased build.
 
 ### 1.1 — Cloud-ready deployment
 - Added cross-platform FFmpeg/Opus detection for Linux, macOS, and Windows.
