@@ -7,6 +7,7 @@ Gemini engine lives in ``zephyr.services.gemini``; the message-event handler
 lives on the bot in ``zephyr.client``.
 """
 
+import asyncio
 import io
 from collections import deque
 from datetime import datetime, timezone
@@ -29,6 +30,10 @@ from zephyr.services.gemini import (
     send_response,
     MODEL_LIMITS,
 )
+
+
+# Persistence runs in a worker thread; serialize the state mutation and write.
+settings_write_lock = asyncio.Lock()
 
 # ---------------------------------------------------------------------------
 # Image Generation Rate Limiting (original 2477-2488)
@@ -108,13 +113,15 @@ class ChatCog(commands.Cog):
         ]
     )
     async def settings(self, interaction: discord.Interaction, ai_model: app_commands.Choice[str], response_format: app_commands.Choice[str]):
+        await interaction.response.defer(ephemeral=True)
         server_id = interaction.guild.id if interaction.guild else None
-        set_context_settings(
-            server_id=server_id,
-            user_id=interaction.user.id,
-            settings={"ai_model": ai_model.value, "response_format": response_format.value},
-        )
-        save_user_settings()
+        async with settings_write_lock:
+            set_context_settings(
+                server_id=server_id,
+                user_id=interaction.user.id,
+                settings={"ai_model": ai_model.value, "response_format": response_format.value},
+            )
+            await asyncio.to_thread(save_user_settings)
         embed = discord.Embed(
             title="✅ Settings Updated!",
             description="Your preferences have been saved for this context (Server or DM).",
@@ -122,7 +129,7 @@ class ChatCog(commands.Cog):
         )
         embed.add_field(name="AI Model", value=ai_model.name)
         embed.add_field(name="Response Format", value=response_format.name)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="output", description="Quickly switch the chatbot response format between embed and normal text.")
     @app_commands.describe(format="Choose embed or normal text")
@@ -134,12 +141,14 @@ class ChatCog(commands.Cog):
     )
     async def output_command(self, interaction: discord.Interaction, format: app_commands.Choice[str]):
         """Quick command to toggle chatbot output format without changing the AI model."""
+        await interaction.response.defer(ephemeral=True)
         server_id = interaction.guild.id if interaction.guild else None
-        current = get_context_settings(server_id, interaction.user.id)
-        current["response_format"] = format.value
-        set_context_settings(server_id=server_id, user_id=interaction.user.id, settings=current)
-        save_user_settings()
-        await interaction.response.send_message(
+        async with settings_write_lock:
+            current = get_context_settings(server_id, interaction.user.id)
+            current["response_format"] = format.value
+            set_context_settings(server_id=server_id, user_id=interaction.user.id, settings=current)
+            await asyncio.to_thread(save_user_settings)
+        await interaction.followup.send(
             embed=discord.Embed(
                 title="✅ Output Format Updated",
                 description=f"Responses will now be sent as **{format.name}**.",

@@ -14,6 +14,7 @@ from discord.ext import commands
 from zephyr.core.opus_loader import load_opus
 from zephyr.core.ffmpeg import FFMPEG_PATH
 from zephyr.services.gemini import generate_gemini_response, send_response
+from zephyr.services.storage import storage
 
 # Cog extensions to load (every command lives in one of these)
 EXTENSIONS = [
@@ -62,6 +63,11 @@ class ZephyrBot(commands.Bot):
             self._synced_count = len(synced)
         except Exception as e:
             print(f"⚠️ Failed to sync commands: {e}")
+
+    async def close(self):
+        """Dispose persistent storage before Discord tears down the loop."""
+        storage.close()
+        await super().close()
 
     async def on_ready(self):
         await type_print(f"{self.user} has connected to Discord!")
