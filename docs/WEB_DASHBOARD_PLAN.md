@@ -362,3 +362,34 @@ code differs and why. It is appended to as phases land, and §§1–7 are not re
     `img-src 'self' https://cdn.discordapp.com data:` or the guild picker renders blank. And
     `runtimeCaching` must never be added for authenticated endpoints — Cache Storage is readable by
     any script on the origin and survives logout.
+
+### Phase 3 — Auth (frontend)
+
+15. **§5's `routes/g/$guildId/` and `routes/dashboard/` → flat `src/routes/*.tsx`.** `$guildId` is a
+    file-based-router convention (TanStack Router, Remix). This app uses react-router's declarative
+    `<Routes>`, where there is no file routing, so those directories would each hold one file of
+    pure ceremony.
+16. **§5's `store/{layout,prefs}.ts` (Zustand) → not introduced.** Auth is server state and the
+    session cookie is `HttpOnly`, so "am I signed in?" is literally a server query — which is what
+    TanStack Query already is here. `zustand` stays an unused dependency.
+17. **§5's `TabBar`, large-title scroll-collapse, `DynamicIsland`, `PullToRefresh` → still
+    unwired,** and no layout route or `<Outlet>`. Each page renders its own `<main className="app">`,
+    so a shell means rewriting all of them, and `.tab-bar` is currently a malformed padding
+    shorthand with no item styling and no icon set. That is a design-system change, not an auth one.
+18. **§1's "Polling first (`refetchInterval: 3000`)" → not applied** to `/me` or the guild overview.
+    Both are static; polling belongs to the player snapshot.
+19. **A live PWA bug was fixed here, not introduced.** The shipped service worker registered
+    `NavigationRoute` with no `navigateFallbackDenylist`, so every same-origin navigation — including
+    `/api/v1/auth/login` and Discord's callback — was answered from the cached shell and never
+    reached Flask. OAuth would have silently failed for anyone whose worker had activated. `scope`
+    is now explicit too: in an installed PWA the callback must be inside scope, or the redirect
+    leaves the standalone window for the system browser, where the cookie lands in a different jar.
+20. **`react-refresh/only-export-components` is handled by file placement, not config.** The rule
+    only scans `.jsx`/`.tsx`, so hooks live in `lib/auth.ts` and helper functions stay module-local
+    inside `.tsx` files. CI treats warnings as failures.
+21. **A 503 `auth_not_configured` is treated as a deployment state, not an outage.** `RequireAuth`
+    sends it to `/login?error=not_configured` rather than to a retry button that can never succeed —
+    the first thing a self-hoster hits before setting up an OAuth application.
+22. **No frontend test runner was added.** Vitest plus testing-library plus jsdom is four dev
+    dependencies, lockfile churn, a CI step and a tsconfig reference. It belongs with the hardening
+    phase, which already promises tests.

@@ -277,10 +277,10 @@ Detailed scope per phase: [`WEB_DASHBOARD_PLAN.md`](WEB_DASHBOARD_PLAN.md) §6.
       iOS-style design system (materials, stacked shadows, spring physics, widget grid).
 - [ ] **Phase 2** — Versioned JSON API (`/api/v1/*`), migrate the website to Open-Meteo,
       ship the public weather PWA with a ⌘K palette over all 64 commands.
-- [ ] **Phase 3** — Discord OAuth2 login, Redis sessions, per-guild settings dashboard.
-      *Backend landed: OAuth flow, Redis sessions, CSRF, `/me`, read-only guild overview,
-      Alembic. The dashboard UI is the remaining half. `audit_log` and Fernet token storage are
-      deliberately deferred — see [`WEB_DASHBOARD_PLAN.md`](WEB_DASHBOARD_PLAN.md) §8.*
+- [x] **Phase 3** — Discord OAuth2 login, Redis sessions, per-guild settings dashboard.
+      *Ships sign-in, the guild picker and a **read-only** guild overview. Editing settings
+      (`PATCH /guilds/:id/settings`), `audit_log` and Fernet token storage are deliberately
+      deferred — see [`WEB_DASHBOARD_PLAN.md`](WEB_DASHBOARD_PLAN.md) §8.*
 - [ ] **Phase 4** — Redis bot↔web bridge; persistent playlists, Spotify import, autoplay,
       now-playing buttons, and a web music remote.
 - [ ] **Phase 5** — Weather subscriptions: daily digests, severe-weather watcher, and
@@ -301,6 +301,18 @@ Detailed scope per phase: [`WEB_DASHBOARD_PLAN.md`](WEB_DASHBOARD_PLAN.md) §6.
 ---
 
 ## 13. Changelog
+
+### 1.4 — Phase 3 dashboard UI
+- Sign-in screen, guild picker, and a read-only per-guild overview at `/login`, `/g`, `/g/:id`.
+- `RequireAuth` distinguishes pending, 401, unconfigured, and network failure — a connection blip
+  never presents as a sign-out.
+- API client gains methods, CSRF headers and a typed `ApiError` carrying status and code, so 401
+  and 403 can be told apart; 4xx responses are no longer retried.
+- **Fixed a live PWA bug:** the service worker answered every same-origin navigation from the
+  cached shell, including `/api/v1/auth/login` and Discord's callback, so signing in would have
+  silently done nothing once the worker activated.
+- `ListRow` and `PressableButton` gained optional props for navigable rows; `Skeleton` added and
+  `CapsuleToast` given an error tone, establishing the loading and error conventions.
 
 ### 1.3 — Phase 3 auth backend
 - Discord OAuth2 authorization-code flow at `/api/v1/auth/{login,callback,logout}`, with the

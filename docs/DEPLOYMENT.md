@@ -143,6 +143,29 @@ npm --prefix website/frontend run dev          # Vite on :5173
 Set `DISCORD_REDIRECT_URI=http://localhost:5173/api/v1/auth/callback` for this setup, so the session
 cookie lands on the origin the app is actually served from.
 
+Only `/api` is proxied, which is why the OAuth endpoints live under `/api/v1/auth/*` — a top-level
+`/auth/*` would 404 against the dev server and be swallowed by the SPA catch-all in production.
+
+The service worker is not registered by the Vite dev server, so testing PWA behaviour means building
+and serving through Flask instead:
+
+```bash
+npm --prefix website/frontend run build
+python run_web.py                              # then use http://127.0.0.1:5000
+```
+
+### Dashboard routes
+
+| Route | |
+|---|---|
+| `/login` | Sign in with Discord. Shows `?error=` codes from the callback in plain language |
+| `/g` | Servers you administer, plus sign-out |
+| `/g/:guildId` | Read-only settings overview for one server |
+
+Signed-out visits to `/g` or `/g/:id` redirect to `/login?next=…` and return there afterwards. If no
+OAuth application is configured, they redirect to `/login?error=not_configured` instead — a
+deployment state rather than an error worth retrying.
+
 ---
 
 ## Database migrations
