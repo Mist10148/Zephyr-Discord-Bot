@@ -296,3 +296,69 @@ audit log surfacing, tests for the bridge and the scheduler.
   the Open-Meteo migration.
 - **yt-dlp fragility is unchanged** by any of this. Playlist persistence stores URLs, so
   saved playlists will rot as videos are removed — plan a re-resolve path.
+
+---
+
+## 8. Implementation notes & deviations
+
+§§1–7 above are the specification. This section is the changelog *against* it: where the shipped
+code differs and why. It is appended to as phases land, and §§1–7 are not rewritten.
+
+### Phase 3 — Auth (backend)
+
+1. **§4 "manageable guilds where the bot is present" → annotate, don't filter.** `/me` returns
+   every manageable guild with `bot_present: true | false | null` plus an `invite_url`. Silently
+   hiding a server the user administers is an unexplainable dead end, and filtering is outright
+   wrong when no snapshot has been published — it would hide everything. `null` (never published)
+   is kept distinct from `false` (published, bot absent).
+2. **§4 "Discord tokens are Fernet-encrypted at rest" → no tokens are stored at all.** Nothing
+   through Phase 6 calls Discord as the user while the user is absent; the access token's whole
+   lifetime is two calls inside `/auth/callback`. `web_users.refresh_token_enc` and
+   `token_expires_at` ship per §3 and stay `NULL`, so the table shape is final. The second clause
+   of the spec ("never reach the browser") holds strictly; the first holds vacuously, which is a
+   stronger property than encryption. `cryptography` is therefore not a dependency yet. The
+   consequence — a session's guild list can only be refreshed by re-running OAuth — is handled by
+   `guilds_stale` in `/me` plus `prompt=none`, making the refresh a silent redirect round trip.
+3. **§4 CSRF → synchronizer token, delivered by cookie *and* payload.** The token is minted with
+   the session and stored in Redis. It is mirrored into a readable `zephyr_csrf` cookie and also
+   returned as `csrf_token` from `/me`; the client echoes it in `X-Zephyr-CSRF`. Validation always
+   compares the header against the *session's* stored value, never against the cookie, so the
+   cookie needs no signing and **no `SECRET_KEY` is required anywhere**. Leaving `app.secret_key`
+   unset is deliberate: any future accidental `flask.session` use then fails loudly.
+4. **§4 `SameSite=Lax` is mandatory, not preferential.** `Strict` is dropped on the cross-site
+   top-level redirect back from `discord.com`, so the session would vanish exactly once, in a way
+   that looks like a random bug.
+5. **§3 `audit_log` → omitted.** No writer exists until the first mutating guild endpoint, and its
+   exact shape (does `payload` need before/after? an index on `(guild_id, created_at)`?) would be
+   relitigated the moment that arrives.
+6. **§3 array columns → `JSON`, not `postgresql.ARRAY`.** `ARRAY` is Postgres-only and
+   `DEFAULT_DATABASE_URL` is SQLite, so it would break local development and every test.
+7. **§3 snowflake columns → `String`, not `BigInteger`.** They exceed JavaScript's
+   `Number.MAX_SAFE_INTEGER`, so the API must emit strings regardless; storing strings removes a
+   conversion at every boundary and matches `ai_settings.context_key`.
+8. **§6 "Alembic is deferred to Phase 3" → included, but not automatic.** No `alembic upgrade head`
+   in `render.yaml`'s `startCommand`: two gunicorn workers would race it and the free tier has no
+   release phase. `create_all()` stays as the development path. Documented manual step; automation
+   is a Phase 7 item, as is a model-vs-migration drift check.
+9. **§4 `GET/PATCH /guilds/:id/settings` → this phase ships `GET /api/v1/guilds/<id>`.** A distinct
+   resource, so the editable settings endpoint lands later with no rename and no shadowed route.
+10. **§2's diagram implies Flask↔Redis pub/sub — not in this phase.** Only `SET`/`GETEX`/`GETDEL`/
+    `MGET`. The bot-side `zephyr:guilds` snapshot writer is *not* the Phase 4 bridge: no pub/sub, no
+    `zephyr:cmd` channel, no response correlation. Worth stating because the snapshot touches the
+    bot process and could be mistaken for the bridge landing early.
+11. **`zephyr:guilds` has no TTL**, unlike the presence and player keys. Stale liveness is worse
+    than none, but stale *membership* is far better than none: expiring it while the bot is briefly
+    down would empty the guild picker. Every bot start rewrites it, and `zephyr:guilds:updated_at`
+    exposes the staleness bound.
+12. **Session failures raise; settings failures don't.** `website/session.py` deliberately does not
+    copy `RedisStorage`'s `except Exception: print(...)`. That soft-fail is right for settings and
+    catastrophic for sessions — a Redis blip would look like a silent logout and a failed write like
+    a successful login. `RedisStorage` itself is left untouched: different process, different
+    encoding contract.
+13. **A blueprint-scoped `before_request` does not run for a 405**, because no blueprint matched the
+    request. Harmless (a 405 executes no handler) but it means the CSRF guard covers registered
+    routes rather than arbitrary method mismatches.
+14. **For whatever CSP lands in Phase 7:** it must include
+    `img-src 'self' https://cdn.discordapp.com data:` or the guild picker renders blank. And
+    `runtimeCaching` must never be added for authenticated endpoints — Cache Storage is readable by
+    any script on the origin and survives logout.
