@@ -13,9 +13,13 @@ import pytest
 from zephyr.cogs.music import SongQueue, VoiceState
 
 
-def _make_state():
-    """A VoiceState with a mocked bot; touches no voice client and no event loop."""
-    return VoiceState(MagicMock(), MagicMock())
+def _make_state(guild_id=123456789, channel_id=987654321):
+    """A VoiceState with a mocked bot; touches no voice client and no event loop.
+
+    VoiceState takes ids rather than a Context precisely so it can be built like
+    this -- and so the Redis bridge, which has no Context, can reach it.
+    """
+    return VoiceState(MagicMock(), guild_id, channel_id=channel_id)
 
 
 class TestSongQueuePut:
@@ -219,6 +223,19 @@ class TestVoiceStateDefaults:
     def test_is_playing_is_false_without_a_voice_client(self):
         state = _make_state()
         assert not state.is_playing
+
+    def test_constructs_from_ids_with_no_context(self):
+        """What lets the Redis bridge reach a guild's state at all."""
+        state = _make_state(guild_id=42, channel_id=7)
+        assert state.guild_id == 42
+        assert state.np_channel_id == 7
+        assert state.current is None
+        assert state.source is None
+
+    def test_the_sticky_channel_may_be_unset(self):
+        state = VoiceState(MagicMock(), 42)
+        assert state.np_channel_id is None
+        assert state.channel() is None
 
 
 if __name__ == "__main__":

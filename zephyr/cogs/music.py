@@ -8,6 +8,7 @@ Ported 1:1 from the original bot.py (lines 899-2211). Time helpers come from
 import math
 import random
 import asyncio
+import dataclasses
 import functools
 import itertools
 import traceback
@@ -110,6 +111,124 @@ class YTDLError(Exception):
     pass
 
 
+def _format_duration(duration: int) -> str:
+    """Human-readable duration. Formerly YTDLSource.parse_duration."""
+    if not duration:
+        return 'Unknown'
+    minutes, seconds = divmod(int(duration), 60)
+    hours, minutes = divmod(minutes, 60)
+    days, hours = divmod(hours, 24)
+    parts = []
+    if days > 0:
+        parts.append(f'{days} days')
+    if hours > 0:
+        parts.append(f'{hours} hours')
+    if minutes > 0:
+        parts.append(f'{minutes} minutes')
+    if seconds > 0:
+        parts.append(f'{seconds} seconds')
+    return ', '.join(parts) if parts else '0 seconds'
+
+
+@dataclasses.dataclass(slots=True)
+class Track:
+    """A queue entry: metadata only.
+
+    Deliberately holds no FFmpeg process and no discord objects.
+    ``discord.FFmpegPCMAudio.__init__`` spawns its subprocess immediately, so
+    building one per queue entry meant a 200-track playlist became 200 live ffmpeg
+    processes -- all of them leaked, because ``audio_player_task`` re-resolves and
+    re-creates the source at play time anyway.  Keeping the queue as plain data is
+    the only way that arithmetic works out.
+
+    Being plain data also makes a queue entry directly serializable, which is what
+    the player snapshot and persisted playlists both need.
+    """
+
+    title: str
+    url: str                                  # canonical page URL; the re-resolve key
+    duration_seconds: int = 0
+    # The requester is stored by id + mention rather than as a Member, because a
+    # Member is not serializable and '<@id>' renders identically in an embed.
+    requester_id: int = 0
+    requester_mention: str = ''
+    uploader: str = 'Unknown'
+    uploader_url: str | None = None
+    thumbnail: str | None = None
+    upload_date: str = 'Unknown'
+    source: str = 'youtube'                   # youtube | spotify | file | search
+    repaired_from: str | None = None           # set when the original URL died
+
+    @property
+    def duration(self) -> str:
+        return _format_duration(self.duration_seconds)
+
+    def __str__(self):
+        return f'**{self.title}** by **{self.uploader}**'
+
+    @classmethod
+    def from_info(cls, data: dict, *, requester_id: int = 0, requester_mention: str = '',
+                  source: str = 'youtube') -> 'Track':
+        date = data.get('upload_date')
+        return cls(
+            title=data.get('title') or 'Unknown',
+            url=data.get('webpage_url') or data.get('url') or '',
+            duration_seconds=int(data.get('duration') or 0),
+            requester_id=requester_id,
+            requester_mention=requester_mention,
+            uploader=data.get('uploader') or data.get('channel') or 'Unknown',
+            uploader_url=data.get('uploader_url'),
+            thumbnail=data.get('thumbnail'),
+            upload_date=f"{date[6:8]}.{date[4:6]}.{date[0:4]}" if date else 'Unknown',
+            source=source,
+        )
+
+    def absorb(self, data: dict) -> None:
+        """Backfill from a full extraction at play time.
+
+        Flat playlist entries carry only id/title/duration, so thumbnails and
+        uploader URLs are placeholders until the track actually plays.  Filling them
+        in here means the now-playing embed is complete without paying for a full
+        extraction per queue entry up front.
+        """
+        self.title = data.get('title') or self.title
+        self.duration_seconds = int(data.get('duration') or self.duration_seconds or 0)
+        self.uploader = data.get('uploader') or data.get('channel') or self.uploader
+        self.uploader_url = data.get('uploader_url') or self.uploader_url
+        self.thumbnail = data.get('thumbnail') or self.thumbnail
+        date = data.get('upload_date')
+        if date:
+            self.upload_date = f"{date[6:8]}.{date[4:6]}.{date[0:4]}"
+
+    def create_embed(self, elapsed: float = None) -> discord.Embed:
+        embed = discord.Embed(title='🎵 Now playing',
+                              description=f'```css\n{self.title}\n```',
+                              color=discord.Color.blurple())
+        if elapsed is not None and self.duration_seconds > 0:
+            elapsed = max(0.0, min(elapsed, self.duration_seconds))
+            bar = self._progress_bar(elapsed, self.duration_seconds)
+            embed.add_field(name='Progress',
+                            value=f"`{_format_timestamp(elapsed)} / {_format_timestamp(self.duration_seconds)}`\n{bar}",
+                            inline=False)
+        embed.add_field(name='Duration', value=self.duration, inline=True)
+        embed.add_field(name='Requested by', value=self.requester_mention or 'Unknown', inline=True)
+        embed.add_field(name='Uploader', value=f'[{self.uploader}]({self.uploader_url})', inline=True)
+        embed.add_field(name='URL', value=f'[Click]({self.url})', inline=True)
+        if self.thumbnail:
+            embed.set_thumbnail(url=self.thumbnail)
+        if self.repaired_from:
+            embed.set_footer(text='Original video unavailable — playing a re-resolved match.')
+        return embed
+
+    @staticmethod
+    def _progress_bar(elapsed: float, total: int, length: int = 15) -> str:
+        ratio = elapsed / total if total else 0
+        ratio = max(0.0, min(1.0, ratio))
+        filled = int(ratio * (length - 1))
+        bar = '▬' * filled + '🔘' + '▬' * (length - filled - 1)
+        return bar
+
+
 class YTDLSource(discord.PCMVolumeTransformer):
     YTDL_OPTIONS = {
         'format': 'bestaudio/best',
@@ -133,103 +252,90 @@ class YTDLSource(discord.PCMVolumeTransformer):
 
     ytdl = yt_dlp.YoutubeDL(YTDL_OPTIONS)
 
-    def __init__(self, ctx: commands.Context, source: discord.FFmpegPCMAudio, *, data: dict, volume: float = 0.5):
+    def __init__(self, source: discord.FFmpegPCMAudio, *, data: dict, volume: float = 0.5):
         super().__init__(source, volume)
-        self.requester = ctx.author
-        self.channel = ctx.channel
         self.data = data
-        self.uploader = data.get('uploader', 'Unknown')
-        self.uploader_url = data.get('uploader_url')
-        date = data.get('upload_date')
-        self.upload_date = f"{date[6:8]}.{date[4:6]}.{date[0:4]}" if date else "Unknown"
-        self.title = data.get('title', 'Unknown')
-        self.thumbnail = data.get('thumbnail')
-        self.description = data.get('description', '')
-        self.duration = self.parse_duration(int(data.get('duration'))) if data.get('duration') else "Unknown"
-        self.duration_seconds = int(data.get('duration')) if data.get('duration') else 0
-        self.url = data.get('webpage_url', data.get('url'))
-        self.views = data.get('view_count')
-        self.likes = data.get('like_count')
         self.stream_url = data.get('url')
 
-    def __str__(self):
-        return f'**{self.title}** by **{self.uploader}**'
+    # Kept as an alias so nothing that referenced the old classmethod breaks.
+    parse_duration = staticmethod(_format_duration)
+
+    @staticmethod
+    def _entry_url(entry: dict) -> str | None:
+        """Best-effort canonical URL from a flat yt-dlp entry."""
+        if not entry:
+            return None
+        url = entry.get('url') or entry.get('webpage_url')
+        if not url and entry.get('id'):
+            url = f"https://www.youtube.com/watch?v={entry['id']}"
+        return url
 
     @classmethod
-    async def create_source(cls, ctx: commands.Context, search: str, *, loop: asyncio.AbstractEventLoop = None,
-                            ffmpeg_options: dict = None, max_entries: int = 200):
+    async def _extract(cls, query: str, *, loop, process: bool = True, timeout_s: int = 15):
+        partial = functools.partial(cls.ytdl.extract_info, query, download=False, process=process)
+        if process:
+            return await asyncio.wait_for(loop.run_in_executor(None, partial), timeout=timeout_s)
+        return await loop.run_in_executor(None, partial)
+
+    @classmethod
+    async def resolve_tracks(cls, search: str, *, requester_id: int = 0, requester_mention: str = '',
+                             loop: asyncio.AbstractEventLoop = None, max_entries: int = 200) -> list['Track']:
+        """Resolve a query into Track metadata. Always a list, never a bare object.
+
+        The old ``create_source`` returned either one source or a list, so every
+        caller had to branch on the type -- and ``audio_player_task`` did not, which
+        meant a URL yt-dlp re-resolved as a playlist reached ``source.volume = ...``
+        with a list and wedged the guild.
+
+        Nothing here constructs an FFmpeg source; see ``from_track``.
+        """
         loop = loop or asyncio.get_event_loop()
         search = _sanitize_search(search)
         as_url = _is_url(search)
-        # Explicitly route plain-text queries through YouTube search. Recent
-        # yt-dlp/YouTube changes make ``default_search: 'auto'`` unreliable
-        # and can return a generic extractor with no entries.
+
+        # A direct audio file needs no yt-dlp round trip at all: FFmpeg can read the
+        # URL itself. _is_audio_file_url was written for this and had no caller.
+        if _is_audio_file_url(search):
+            name = search.rsplit('/', 1)[-1].split('?')[0] or search
+            return [Track(title=name, url=search, requester_id=requester_id,
+                          requester_mention=requester_mention, source='file')]
+
+        # Route plain text through YouTube search explicitly: recent yt-dlp/YouTube
+        # changes make default_search 'auto' return a generic extractor with no entries.
         query = search if as_url else f"ytsearch10:{search}"
 
-        def _entry_url(entry: dict) -> str | None:
-            """Best-effort URL from a flat yt-dlp entry."""
-            if not entry:
-                return None
-            url = entry.get('url') or entry.get('webpage_url')
-            if not url and entry.get('id'):
-                # Use the extractor's canonical URL when possible.
-                extractor = entry.get('extractor_key', 'youtube')
-                if extractor.startswith('Youtube'):
-                    url = f"https://www.youtube.com/watch?v={entry['id']}"
-                else:
-                    url = f"https://www.youtube.com/watch?v={entry['id']}"
-            return url
-
-        async def _extract_one(url: str):
-            """Extract a single stream URL with a bounded timeout."""
-            partial = functools.partial(cls.ytdl.extract_info, url, download=False)
-            return await asyncio.wait_for(loop.run_in_executor(None, partial), timeout=15)
-
         try:
-            partial = functools.partial(cls.ytdl.extract_info, query, download=False, process=False)
-            data = await loop.run_in_executor(None, partial)
+            data = await cls._extract(query, loop=loop, process=False)
             if data is None:
                 raise YTDLError(f'Could not find anything that matches `{search}`')
 
-            # Plain text search -> only return the top result instead of
-            # enqueueing every search result.
+            entries = list(data.get('entries') or [])
+
+            # Plain-text search: take only the top hit rather than enqueueing ten.
             if not as_url:
-                entries = list(data.get('entries', []))
                 if not entries:
                     raise YTDLError(f'Could not find anything that matches `{search}`')
-                top_url = _entry_url(entries[0])
-                if not top_url:
+                tracks = cls._build_tracks_from_entries(
+                    entries[:1], requester_id=requester_id, requester_mention=requester_mention, source='search')
+                if not tracks:
                     raise YTDLError(f'Could not find anything that matches `{search}`')
-                info = await _extract_one(top_url)
-                if info is None or 'url' not in info:
-                    raise YTDLError(f'Could not fetch `{top_url}`')
-                return cls(ctx,
-                           discord.FFmpegPCMAudio(info['url'], executable=FFMPEG_PATH,
-                                                  **(ffmpeg_options or cls.DEFAULT_FFMPEG_OPTIONS)),
-                           data=info)
+                return tracks
 
-            # Single URL that resolves directly (video, audio file, etc.)
-            if 'entries' not in data:
-                webpage_url = data.get('webpage_url', data.get('url'))
-                if not webpage_url:
-                    raise YTDLError(f'Could not fetch `{search}`')
-                processed_info = await _extract_one(webpage_url)
-                if processed_info is None:
-                    raise YTDLError(f'Could not fetch `{webpage_url}`')
-                if 'entries' in processed_info:
-                    # URL looked like a single item but yt-dlp returned a playlist anyway.
-                    entries = list(processed_info['entries'])[:max_entries] if max_entries else list(processed_info['entries'])
-                    partial = functools.partial(cls._build_sources_from_entries, ctx, entries, ffmpeg_options)
-                    return await loop.run_in_executor(None, partial)
-                return cls(ctx,
-                           discord.FFmpegPCMAudio(processed_info['url'], executable=FFMPEG_PATH,
-                                                  **(ffmpeg_options or cls.DEFAULT_FFMPEG_OPTIONS)),
-                           data=processed_info)
+            # A single URL with no entries: one flat extract is enough for metadata.
+            if not entries:
+                url = data.get('webpage_url') or data.get('url') or search
+                return [Track.from_info({**data, 'webpage_url': url},
+                                        requester_id=requester_id,
+                                        requester_mention=requester_mention)]
 
-            # Playlist / search result with multiple entries
-            entries = list(data['entries'])[:max_entries] if max_entries else list(data['entries'])
-            partial = functools.partial(cls._build_sources_from_entries, ctx, entries, ffmpeg_options)
-            return await loop.run_in_executor(None, partial)
+            if max_entries:
+                entries = entries[:max_entries]
+            tracks = cls._build_tracks_from_entries(
+                entries, requester_id=requester_id, requester_mention=requester_mention)
+            if not tracks:
+                raise YTDLError('Could not resolve any tracks from the playlist. '
+                                'All entries were unavailable or unsupported.')
+            return tracks
 
         except asyncio.TimeoutError:
             raise YTDLError(f'Request timed out while processing `{search}`. Try a shorter query or playlist.')
@@ -240,132 +346,104 @@ class YTDLSource(discord.PCMVolumeTransformer):
             raise YTDLError(f"Failed to process `{search}`: {e}")
 
     @classmethod
-    def _build_sources_from_entries(cls, ctx: commands.Context, entries: list, ffmpeg_options: dict = None):
-        """Build YTDLSource objects from a list of flat entries, skipping failures."""
-        sources = []
+    def _build_tracks_from_entries(cls, entries: list, *, requester_id: int = 0,
+                                   requester_mention: str = '', source: str = 'youtube') -> list['Track']:
+        """Turn flat yt-dlp entries into Tracks with **no** per-entry extraction.
+
+        A flat (``process=False``) extract already carries id, title and duration for
+        every entry, so a 200-track playlist costs one network call instead of 201 --
+        and zero subprocesses instead of 200.  Entries with no usable URL are dropped;
+        anything that turns out to be dead is caught at play time by ``from_track``,
+        which is where the URL is actually used.
+        """
+        tracks = []
         skipped = 0
-
-        def _entry_url(entry: dict) -> str | None:
-            if not entry:
-                return None
-            url = entry.get('url') or entry.get('webpage_url')
-            if not url and entry.get('id'):
-                url = f"https://www.youtube.com/watch?v={entry['id']}"
-            return url
-
         for entry in entries:
-            entry_url = _entry_url(entry)
-            if not entry_url:
+            url = cls._entry_url(entry)
+            if not url:
                 skipped += 1
                 continue
-            try:
-                processed_info = cls.ytdl.extract_info(entry_url, download=False)
-            except Exception as e:
-                print(f"[Playlist Skip] {entry_url}: {e}")
-                skipped += 1
-                continue
-            if processed_info and 'url' in processed_info:
-                sources.append(cls(ctx,
-                                   discord.FFmpegPCMAudio(processed_info['url'], executable=FFMPEG_PATH,
-                                                          **(ffmpeg_options or cls.DEFAULT_FFMPEG_OPTIONS)),
-                                   data=processed_info))
-            else:
-                skipped += 1
-
-        if not sources:
-            raise YTDLError('Could not resolve any tracks from the playlist. All entries were unavailable or unsupported.')
+            tracks.append(Track.from_info({**entry, 'webpage_url': url},
+                                          requester_id=requester_id,
+                                          requester_mention=requester_mention,
+                                          source=source))
         if skipped:
-            print(f"[Playlist] Added {len(sources)} tracks, skipped {skipped}.")
-        return sources
+            print(f"[Playlist] Added {len(tracks)} tracks, skipped {skipped} with no usable URL.")
+        return tracks
 
     @classmethod
-    async def search_sources(cls, ctx: commands.Context, search: str, *, loop: asyncio.AbstractEventLoop = None,
-                             max_results: int = 10):
-        """Return a list of YTDLSource entries for a search query (no FFmpeg source yet)."""
+    async def search_tracks(cls, search: str, *, requester_id: int = 0, requester_mention: str = '',
+                            loop: asyncio.AbstractEventLoop = None, max_results: int = 10) -> list['Track']:
+        """Search results for /msearch.
+
+        Previously this made one extraction *and one FFmpeg process* per result, then
+        threw nine of them away -- so every /msearch leaked nine subprocesses. One
+        flat extract now covers all ten.
+        """
         loop = loop or asyncio.get_event_loop()
         search = _sanitize_search(search)
-        query = f"ytsearch{max_results}:{search}"
-
-        def _entry_url(entry: dict) -> str | None:
-            if not entry:
-                return None
-            url = entry.get('url') or entry.get('webpage_url')
-            if not url and entry.get('id'):
-                url = f"https://www.youtube.com/watch?v={entry['id']}"
-            return url
-
         try:
-            partial = functools.partial(cls.ytdl.extract_info, query, download=False, process=False)
-            data = await loop.run_in_executor(None, partial)
-            if data is None or 'entries' not in data:
+            data = await cls._extract(f"ytsearch{max_results}:{search}", loop=loop, process=False)
+            if data is None or not data.get('entries'):
                 return []
-            entries = []
-            for entry in data['entries']:
-                url = _entry_url(entry)
-                if not url:
-                    continue
-                partial = functools.partial(cls.ytdl.extract_info, url, download=False)
-                processed = await loop.run_in_executor(None, partial)
-                if processed and 'url' in processed:
-                    entries.append(cls(ctx,
-                                       discord.FFmpegPCMAudio(processed['url'], executable=FFMPEG_PATH,
-                                                              **cls.DEFAULT_FFMPEG_OPTIONS),
-                                       data=processed))
-            return entries
+            return cls._build_tracks_from_entries(list(data['entries']),
+                                                  requester_id=requester_id,
+                                                  requester_mention=requester_mention,
+                                                  source='search')
         except Exception as e:
             traceback.print_exc()
             raise YTDLError(f"Failed to search `{search}`: {e}")
 
-    @staticmethod
-    def parse_duration(duration: int):
-        if not duration:
-            return 'Unknown'
-        minutes, seconds = divmod(duration, 60)
-        hours, minutes = divmod(minutes, 60)
-        days, hours = divmod(hours, 24)
-        parts = []
-        if days > 0:
-            parts.append(f'{days} days')
-        if hours > 0:
-            parts.append(f'{hours} hours')
-        if minutes > 0:
-            parts.append(f'{minutes} minutes')
-        if seconds > 0:
-            parts.append(f'{seconds} seconds')
-        return ', '.join(parts) if parts else '0 seconds'
+    @classmethod
+    async def from_track(cls, track: 'Track', *, ffmpeg_options: dict = None, volume: float = 0.5,
+                         seek: float = None, loop: asyncio.AbstractEventLoop = None) -> 'YTDLSource':
+        """Build the playable source for a Track. The only FFmpeg construction site.
 
+        Stream URLs expire, so this always re-extracts -- which the old code did too,
+        immediately after having built a source per queue entry.
 
-class Song:
-    __slots__ = ('source', 'requester')
+        If extraction fails because the video is gone, fall back to searching for the
+        title (the re-resolve path saved playlists need, since stored URLs rot).  A
+        *timeout* is deliberately not retried: a network stall will stall a search too.
+        """
+        loop = loop or asyncio.get_event_loop()
+        options = dict(ffmpeg_options or cls.DEFAULT_FFMPEG_OPTIONS)
+        if seek:
+            before = options.get('before_options', '')
+            options['before_options'] = f"{before} -ss {seek}".strip()
 
-    def __init__(self, source: YTDLSource):
-        self.source = source
-        self.requester = source.requester
+        if track.source == 'file':
+            # Direct media: hand the URL straight to FFmpeg, no extraction.
+            return cls(discord.FFmpegPCMAudio(track.url, executable=FFMPEG_PATH, **options),
+                       data={'url': track.url, 'title': track.title}, volume=volume)
 
-    def create_embed(self, elapsed: float = None):
-        embed = discord.Embed(title='🎵 Now playing',
-                              description=f'```css\n{self.source.title}\n```',
-                              color=discord.Color.blurple())
-        if elapsed is not None and self.source.duration_seconds > 0:
-            elapsed = max(0.0, min(elapsed, self.source.duration_seconds))
-            bar = self._progress_bar(elapsed, self.source.duration_seconds)
-            embed.add_field(name='Progress',
-                            value=f"`{_format_timestamp(elapsed)} / {_format_timestamp(self.source.duration_seconds)}`\n{bar}",
-                            inline=False)
-        embed.add_field(name='Duration', value=self.source.duration, inline=True)
-        embed.add_field(name='Requested by', value=self.requester.mention, inline=True)
-        embed.add_field(name='Uploader', value=f'[{self.source.uploader}]({self.source.uploader_url})', inline=True)
-        embed.add_field(name='URL', value=f'[Click]({self.source.url})', inline=True)
-        embed.set_thumbnail(url=self.source.thumbnail)
-        return embed
+        try:
+            info = await cls._extract(track.url, loop=loop)
+        except asyncio.TimeoutError:
+            raise
+        except Exception as exc:
+            info = None
+            if not track.title or track.title == track.url:
+                raise YTDLError(f'Could not fetch `{track.url}`: {exc}')
+            print(f"[Re-resolve] {track.url} failed ({exc}); searching for '{track.title}'.")
+            found = await cls._extract(f"ytsearch1:{track.title}", loop=loop, process=False)
+            for entry in list((found or {}).get('entries') or []):
+                url = cls._entry_url(entry)
+                if url:
+                    info = await cls._extract(url, loop=loop)
+                    if info and info.get('url'):
+                        track.repaired_from = track.url
+                        track.url = info.get('webpage_url') or url
+                    break
+            if not info or not info.get('url'):
+                raise YTDLError(f'`{track.title}` is no longer available.')
 
-    @staticmethod
-    def _progress_bar(elapsed: float, total: int, length: int = 15) -> str:
-        ratio = elapsed / total if total else 0
-        ratio = max(0.0, min(1.0, ratio))
-        filled = int(ratio * (length - 1))
-        bar = '▬' * filled + '🔘' + '▬' * (length - filled - 1)
-        return bar
+        if not info or 'url' not in info:
+            raise YTDLError(f'Could not fetch `{track.url}`')
+        # A flat entry's title/duration are placeholders until now.
+        track.absorb(info)
+        return cls(discord.FFmpegPCMAudio(info['url'], executable=FFMPEG_PATH, **options),
+                   data=info, volume=volume)
 
 
 class SongQueue:
@@ -426,10 +504,25 @@ class SongQueue:
 
 
 class VoiceState:
-    def __init__(self, bot: commands.Bot, ctx: commands.Context):
+    """Per-guild playback state.
+
+    Takes a guild id and a channel id rather than a Context: a Context is only
+    available from a slash command, and the state has to be reachable from callers
+    that have neither (the Redis bridge, and any scheduled task).  ``_ctx`` was also
+    captured from whichever command created the state and then used for every later
+    error message, which was wrong once the state outlived that command.
+    """
+
+    def __init__(self, bot: commands.Bot, guild_id: int, *, channel_id: int | None = None):
         self.bot = bot
-        self._ctx = ctx
-        self.current: Song = None
+        self.guild_id = int(guild_id)
+        # Sticky: the channel now-playing and errors go to, updated by each play
+        # command.  Previously messages went to the channel of whoever enqueued the
+        # *current* track, so a queue built from two channels made the now-playing
+        # message hop between them mid-playback.
+        self.np_channel_id = channel_id
+        self.current: Track | None = None      # metadata; always safe to read
+        self.source: YTDLSource | None = None  # live audio; only while playing
         self.voice: discord.VoiceClient = None
         self.next = asyncio.Event()
         self.songs = SongQueue()
@@ -474,8 +567,8 @@ class VoiceState:
     @volume.setter
     def volume(self, value: float):
         self._volume = value
-        if self.is_playing and self.current:
-            self.current.source.volume = value
+        if self.source is not None:
+            self.source.volume = value
 
     @property
     def is_playing(self):
@@ -515,6 +608,22 @@ class VoiceState:
             options['options'] += f' -filter:a "{",".join(filters)}"'
         return options
 
+    def channel(self) -> discord.abc.Messageable | None:
+        """The channel now-playing and errors are posted to, if it is still reachable."""
+        if self.np_channel_id is None:
+            return None
+        return self.bot.get_channel(self.np_channel_id)
+
+    async def _notify(self, **kwargs) -> None:
+        """Best-effort message to the sticky channel. Never raises."""
+        channel = self.channel()
+        if channel is None:
+            return
+        try:
+            await channel.send(**kwargs)
+        except Exception as exc:
+            print(f"[Music] Could not post to channel {self.np_channel_id}: {exc}")
+
     async def audio_player_task(self):
         while True:
             self.next.clear()
@@ -522,37 +631,45 @@ class VoiceState:
 
             try:
                 if self.loop == 'track' and self.current:
-                    # Replay the current song
-                    source = await YTDLSource.create_source(self._ctx, self.current.source.url,
-                                                            loop=self.bot.loop, ffmpeg_options=self.get_ffmpeg_options())
+                    track = self.current            # replay the same track
                 else:
                     async with timeout(180 if not self._247_enabled else None):
-                        self.current = await self.songs.get()
-                    if self.loop == 'queue' and self.current:
-                        # Put the song back at the end so it plays again after the queue
-                        self.songs.put_nowait(self.current)
-                    source = await YTDLSource.create_source(self._ctx, self.current.source.url,
-                                                            loop=self.bot.loop, ffmpeg_options=self.get_ffmpeg_options())
+                        track = await self.songs.get()
+                    self.current = track
+                    if self.loop == 'queue' and track:
+                        # Re-queue it so it plays again after everything else.
+                        self.songs.put_nowait(track)
+                source = await YTDLSource.from_track(track, ffmpeg_options=self.get_ffmpeg_options(),
+                                                     volume=self._volume, loop=self.bot.loop)
             except asyncio.TimeoutError:
-                await self.stop()
+                # Idle timeout. cancel_player=False because we are *inside* the player
+                # task: cancelling and awaiting ourselves only works by accident.
+                await self.stop(cancel_player=False)
                 self.exists = False
                 return
             except Exception as e:
-                await self._ctx.send(embed=discord.Embed(description=f'❌ Failed to load next track: {e}',
-                                                         color=discord.Color.red()))
+                await self._notify(embed=discord.Embed(description=f'❌ Failed to load next track: {e}',
+                                                       color=discord.Color.red()))
                 traceback.print_exc()
                 self.current = None
                 continue
 
             try:
-                source.volume = self._volume
-                self.current = Song(source)
+                self.source = source
                 self._current_start_time = time.time()
                 self._current_position = 0.0
-                self.voice.play(self.current.source, after=self.play_next_song)
-                await self.current.source.channel.send(embed=self.current.create_embed())
+                self.voice.play(source, after=self.play_next_song)
+                await self._notify(embed=track.create_embed())
             except Exception as e:
-                await self._ctx.send(f'An error occurred while playing: {e}')
+                # The source owns a live ffmpeg process; if play() never took ownership
+                # of it, nothing else will ever clean it up.
+                if self.source is source:
+                    self.source = None
+                try:
+                    source.cleanup()
+                except Exception:
+                    pass
+                await self._notify(content=f'An error occurred while playing: {e}')
                 traceback.print_exc()
                 self.play_next_song()
 
@@ -586,11 +703,20 @@ class VoiceState:
         if self.is_playing:
             self.voice.stop()
 
-    async def stop(self):
+    async def stop(self, *, cancel_player: bool = True):
+        """Clear the queue and disconnect.
+
+        ``cancel_player=False`` is for callers running *inside* audio_player_task --
+        the idle-timeout path did this and ended up cancelling and awaiting its own
+        task, which only worked because the CancelledError happened to be delivered
+        at that await and swallowed below.
+        """
         self.songs.clear()
         self._loop_mode = 'off'
         self.manual_stop = False
-        if self.audio_player and not self.audio_player.done():
+        self.current = None
+        self.source = None
+        if cancel_player and self.audio_player and not self.audio_player.done():
             self.audio_player.cancel()
             try:
                 await self.audio_player
@@ -611,17 +737,21 @@ class VoiceState:
         if not self.is_playing:
             return
         elapsed = self.elapsed if preserve_position else 0.0
+        track = self.current
+        # manual_stop must be set *before* voice.stop(), or the after-callback fires
+        # first and advances the queue instead of letting us replace the source.
         self.manual_stop = True
         self.voice.stop()
         try:
-            source = await YTDLSource.create_source(self._ctx, self.current.source.url,
-                                                    loop=self.bot.loop,
-                                                    ffmpeg_options=self.get_ffmpeg_options(seek_position=elapsed))
-            source.volume = self._volume
-            self.current = Song(source)
+            # The old source is reaped by discord.py: AudioPlayer.run cleans it up in a
+            # finally block once voice.stop() ends the player thread.
+            source = await YTDLSource.from_track(track,
+                                                 ffmpeg_options=self.get_ffmpeg_options(seek_position=elapsed),
+                                                 volume=self._volume, loop=self.bot.loop)
+            self.source = source
             self._current_position = elapsed
             self._current_start_time = time.time()
-            self.voice.play(self.current.source, after=self.play_next_song)
+            self.voice.play(source, after=self.play_next_song)
             self.manual_stop = False
         except Exception as e:
             self.manual_stop = False
@@ -639,12 +769,29 @@ class MusicCog(commands.Cog):
     def _get_voice_lock(self, guild_id: int) -> asyncio.Lock:
         return self._voice_connect_locks.setdefault(guild_id, asyncio.Lock())
 
-    def get_voice_state(self, ctx: commands.Context):
-        state = self.voice_states.get(ctx.guild.id)
+    def peek_voice_state(self, guild_id: int) -> VoiceState | None:
+        """The live state for a guild, or None. Never creates one.
+
+        Callers with no Context (the Redis bridge) need to be able to answer
+        "nothing is playing" rather than silently spinning up a state.
+        """
+        state = self.voice_states.get(int(guild_id))
+        return state if state and state.exists else None
+
+    def ensure_voice_state(self, guild_id: int, *, channel_id: int | None = None) -> VoiceState:
+        """Get or create the state for a guild, refreshing the sticky channel."""
+        state = self.voice_states.get(int(guild_id))
         if not state or not state.exists:
-            state = VoiceState(self.bot, ctx)
-            self.voice_states[ctx.guild.id] = state
+            state = VoiceState(self.bot, guild_id, channel_id=channel_id)
+            self.voice_states[int(guild_id)] = state
+        elif channel_id is not None:
+            state.np_channel_id = channel_id
         return state
+
+    def get_voice_state(self, ctx: commands.Context):
+        """Context-flavoured wrapper, so the existing command call sites are unchanged."""
+        channel_id = ctx.channel.id if getattr(ctx, 'channel', None) else None
+        return self.ensure_voice_state(ctx.guild.id, channel_id=channel_id)
 
     def cog_unload(self):
         for state in self.voice_states.values():
@@ -806,8 +953,12 @@ class MusicCog(commands.Cog):
                 await interaction.followup.send(embed=embed)
 
         songs = []
+        requester_id = interaction.user.id
+        requester_mention = interaction.user.mention
         try:
-            ffmpeg_options = state.get_ffmpeg_options()
+            # No ffmpeg_options here any more: the filter chain is applied when the
+            # source is built at play time, so effects toggled while a track sits in
+            # the queue now take effect on it rather than being baked in at enqueue.
             search = _sanitize_search(search)
             is_playlist_input = _is_youtube_playlist(search) or _is_spotify_playlist_input(search)
 
@@ -828,11 +979,9 @@ class MusicCog(commands.Cog):
                         )
                         youtube_url = await self._search_youtube(track_info)
                         if youtube_url:
-                            source = await YTDLSource.create_source(ctx, youtube_url, loop=self.bot.loop, ffmpeg_options=ffmpeg_options, max_entries=1)
-                            if isinstance(source, list):
-                                songs.extend(Song(s) for s in source)
-                            else:
-                                songs.append(Song(source))
+                            songs.extend(await YTDLSource.resolve_tracks(
+                                youtube_url, requester_id=requester_id, requester_mention=requester_mention,
+                                loop=self.bot.loop, max_entries=1))
                     except Exception as e:
                         print(f"[Spotify Track Error] {e}")
                         continue
@@ -842,16 +991,17 @@ class MusicCog(commands.Cog):
                         await _edit_status(f'🔎 Resolved **{len(songs)} / {len(track_ids)}** Spotify tracks...')
                         last_update = time.time()
 
+                for track in songs:
+                    track.source = 'spotify'
+
                 if not songs:
                     await _edit_status('❌ No tracks could be processed from Spotify.')
                     return
             else:
                 if is_playlist_input:
                     await _edit_status('🔎 Resolving playlist, this may take a moment...')
-                sources = await YTDLSource.create_source(ctx, search, loop=self.bot.loop, ffmpeg_options=ffmpeg_options)
-                if not isinstance(sources, list):
-                    sources = [sources]
-                songs = [Song(s) for s in sources]
+                songs = await YTDLSource.resolve_tracks(
+                    search, requester_id=requester_id, requester_mention=requester_mention, loop=self.bot.loop)
 
             if not songs:
                 await _edit_status('❌ No tracks found.')
@@ -861,14 +1011,14 @@ class MusicCog(commands.Cog):
                 for song in reversed(songs):
                     state.songs.add_to_front(song)
                 state.skip()
-                await _edit_status(f'⏭️ Playing **{songs[0].source.title}** now.')
+                await _edit_status(f'⏭️ Playing **{songs[0].title}** now.')
             elif mode == 'next':
                 for song in reversed(songs):
                     state.songs.add_to_front(song)
                 if len(songs) > 1:
                     await _edit_status(f'🎶 Added **{len(songs)}** songs to the top of the queue.')
                 else:
-                    await _edit_status(f'🎶 Added to top: {songs[0].source}')
+                    await _edit_status(f'🎶 Added to top: {songs[0]}')
             else:
                 if len(songs) > 1:
                     for song in songs:
@@ -876,7 +1026,7 @@ class MusicCog(commands.Cog):
                     await _edit_status(f'🎶 Enqueued **{len(songs)}** songs.')
                 else:
                     state.songs.put_nowait(songs[0])
-                    await _edit_status(f'🎶 Enqueued {songs[0].source}')
+                    await _edit_status(f'🎶 Enqueued {songs[0]}')
 
         except YTDLError as e:
             await _edit_status(f'❌ Error processing request: {e}')
@@ -891,10 +1041,11 @@ class MusicCog(commands.Cog):
             await interaction.response.send_message("❌ You need to be in a voice channel to play music.", ephemeral=True)
             return
         await interaction.response.defer()
-        ctx = await self._interaction_ctx(interaction)
 
         try:
-            results = await YTDLSource.search_sources(ctx, query, loop=self.bot.loop, max_results=10)
+            results = await YTDLSource.search_tracks(query, requester_id=interaction.user.id,
+                                                     requester_mention=interaction.user.mention,
+                                                     loop=self.bot.loop, max_results=10)
         except YTDLError as e:
             await interaction.followup.send(embed=discord.Embed(description=f'❌ {e}', color=discord.Color.red()))
             return
@@ -904,26 +1055,25 @@ class MusicCog(commands.Cog):
             return
 
         options = []
-        for i, src in enumerate(results[:10], start=1):
-            label = f"{i}. {src.title}"[:100]
-            description = f"{src.uploader} • {src.duration}"[:100]
+        for i, track in enumerate(results[:10], start=1):
+            label = f"{i}. {track.title}"[:100]
+            description = f"{track.uploader} • {track.duration}"[:100]
             options.append(discord.SelectOption(label=label, description=description, value=str(i - 1)))
 
         select = Select(placeholder="Choose a track...", options=options)
 
         async def select_callback(interaction2: discord.Interaction):
             await interaction2.response.defer()
-            index = int(select.values[0])
-            source = results[index]
-            await self._enqueue_source(interaction2, source)
-            await interaction2.followup.send(embed=discord.Embed(description=f'🎶 Selected: {source}', color=discord.Color.green()), ephemeral=True)
+            track = results[int(select.values[0])]
+            await self._enqueue_track(interaction2, track)
+            await interaction2.followup.send(embed=discord.Embed(description=f'🎶 Selected: {track}', color=discord.Color.green()), ephemeral=True)
 
         select.callback = select_callback
         view = View(timeout=60)
         view.add_item(select)
         await interaction.followup.send("🔎 Search results:", view=view)
 
-    async def _enqueue_source(self, interaction: discord.Interaction, source: YTDLSource):
+    async def _enqueue_track(self, interaction: discord.Interaction, track: Track):
         if not interaction.user.voice or not interaction.user.voice.channel:
             await interaction.followup.send("❌ You need to be in a voice channel.", ephemeral=True)
             return
@@ -939,7 +1089,7 @@ class MusicCog(commands.Cog):
                 else:
                     state.voice = await interaction.user.voice.channel.connect(self_deaf=True)
         state.start_player()
-        state.songs.put_nowait(Song(source))
+        state.songs.put_nowait(track)
 
     @app_commands.command(name='now', description='Displays the currently playing song.')
     async def now(self, interaction: discord.Interaction):
@@ -1037,7 +1187,7 @@ class MusicCog(commands.Cog):
         except ValueError as e:
             await interaction.response.send_message(str(e), ephemeral=True)
             return
-        if state.current.source.duration_seconds and pos > state.current.source.duration_seconds:
+        if state.current.duration_seconds and pos > state.current.duration_seconds:
             await interaction.response.send_message("That position is beyond the song length.", ephemeral=True)
             return
         await interaction.response.defer()
@@ -1063,8 +1213,8 @@ class MusicCog(commands.Cog):
             await interaction.response.send_message(str(e), ephemeral=True)
             return
         new_pos = state.elapsed + delta
-        if state.current.source.duration_seconds:
-            new_pos = min(new_pos, state.current.source.duration_seconds)
+        if state.current.duration_seconds:
+            new_pos = min(new_pos, state.current.duration_seconds)
         await interaction.response.defer()
         try:
             state._current_position = new_pos
@@ -1117,8 +1267,8 @@ class MusicCog(commands.Cog):
         embed = discord.Embed(title='🎶 Music Queue', color=discord.Color.blurple())
         if state.is_playing:
             embed.add_field(name='Currently Playing',
-                            value=f"[{state.current.source.title}]({state.current.source.url})\n"
-                                  f"Requested by {state.current.requester.mention} • `{state.current.source.duration}`",
+                            value=f"[{state.current.title}]({state.current.url})\n"
+                                  f"Requested by {state.current.requester_mention} • `{state.current.duration}`",
                             inline=False)
             embed.add_field(name='Loop Mode', value=state.loop.capitalize(), inline=True)
             embed.add_field(name='Volume', value=f"{int(state.volume * 100)}%", inline=True)
@@ -1126,16 +1276,16 @@ class MusicCog(commands.Cog):
         upcoming = list(state.songs)[start:end]
         if upcoming:
             queue_text = '\n'.join(
-                f'`{i + 1}.` [{song.source.title}]({song.source.url}) • {song.source.duration} • {song.requester.mention}'
+                f'`{i + 1}.` [{song.title}]({song.url}) • {song.duration} • {song.requester_mention}'
                 for i, song in enumerate(upcoming, start=start)
             )
             embed.add_field(name=f'Up Next ({total} total)', value=queue_text, inline=False)
         elif total == 0:
             embed.add_field(name='Up Next', value='No more songs in queue.', inline=False)
 
-        total_duration = state.current.source.duration_seconds if state.is_playing else 0
+        total_duration = state.current.duration_seconds if state.is_playing else 0
         for song in state.songs:
-            total_duration += song.source.duration_seconds or 0
+            total_duration += song.duration_seconds or 0
         embed.set_footer(text=f'Page {page}/{pages} • Total duration: {_format_timestamp(total_duration)}')
         await interaction.response.send_message(embed=embed)
 
@@ -1163,7 +1313,7 @@ class MusicCog(commands.Cog):
         removed = []
         for _ in range(count):
             song = state.songs[index - 1]
-            removed.append(song.source.title)
+            removed.append(song.title)
             state.songs.remove(index - 1)
         await interaction.response.send_message(embed=discord.Embed(description=f'🗑️ Removed **{len(removed)}** track(s):\n' + '\n'.join(f'• {t}' for t in removed), color=discord.Color.orange()))
 
@@ -1493,7 +1643,7 @@ class MusicCog(commands.Cog):
             if not state.is_playing:
                 await interaction.response.send_message("Nothing is playing. Provide a song name to search for lyrics.", ephemeral=True)
                 return
-            title = state.current.source.title
+            title = state.current.title
         else:
             title = query
 
