@@ -125,6 +125,10 @@ AUTOPLAY_FETCH = 30
 AUTOPLAY_ADD = 5
 AUTOPLAY_MEMORY = 50
 
+# How often the now-playing progress bar is redrawn.  Each tick is a message
+# edit, so this is a rate-limit budget, not a smoothness setting.
+NOW_PLAYING_REFRESH_SECONDS = 10
+
 _VIDEO_ID_RE = re.compile(r'(?:v=|youtu\.be/|/shorts/|/embed/)([A-Za-z0-9_-]{11})')
 
 
@@ -590,6 +594,66 @@ class YTDLSource(discord.PCMVolumeTransformer):
         raise YTDLError(f'`{track.title}` is not available.')
 
 
+class NowPlayingView(View):
+    """Transport controls under the now-playing embed.
+
+    Every button routes through the cog's bridge handler rather than
+    reimplementing the action, so the Discord buttons and the web remote cannot
+    drift apart -- including the permission check, which lives in
+    ``MusicCog._authorize`` and is applied identically to both.
+
+    ``timeout=None`` because the message outlives any interaction, and the view
+    is explicitly disabled when playback ends rather than expiring silently and
+    leaving buttons that look live and do nothing.
+    """
+
+    def __init__(self, cog: 'MusicCog', guild_id: int):
+        super().__init__(timeout=None)
+        self.cog = cog
+        self.guild_id = int(guild_id)
+
+    async def _run(self, interaction: discord.Interaction, action: str, args: dict | None = None):
+        handler = self.cog.bridge_actions().get(action)
+        try:
+            await handler(interaction.guild, interaction.user.id, args or {})
+        except (VoiceError, YTDLError) as exc:
+            await interaction.response.send_message(f'❌ {exc}', ephemeral=True)
+            return
+        except Exception as exc:
+            traceback.print_exc()
+            await interaction.response.send_message(f'❌ {exc}', ephemeral=True)
+            return
+        # The refresh loop redraws the embed within a few seconds; acknowledging
+        # silently keeps the channel free of one message per button press.
+        await interaction.response.defer()
+
+    @discord.ui.button(emoji='⏯️', style=discord.ButtonStyle.secondary)
+    async def toggle(self, interaction: discord.Interaction, button: Button):
+        state = self.cog.peek_voice_state(self.guild_id)
+        paused = bool(state and state.voice and state.voice.is_paused())
+        await self._run(interaction, 'player.resume' if paused else 'player.pause')
+
+    @discord.ui.button(emoji='⏭️', style=discord.ButtonStyle.secondary)
+    async def skip(self, interaction: discord.Interaction, button: Button):
+        await self._run(interaction, 'player.skip')
+
+    @discord.ui.button(emoji='🔁', style=discord.ButtonStyle.secondary)
+    async def loop_mode(self, interaction: discord.Interaction, button: Button):
+        state = self.cog.peek_voice_state(self.guild_id)
+        order = ['off', 'track', 'queue']
+        current = state.loop if state else 'off'
+        following = order[(order.index(current) + 1) % len(order)] if current in order else 'off'
+        await self._run(interaction, 'player.loop', {'mode': following})
+
+    @discord.ui.button(emoji='🔀', style=discord.ButtonStyle.secondary)
+    async def shuffle(self, interaction: discord.Interaction, button: Button):
+        await self._run(interaction, 'player.shuffle')
+
+    @discord.ui.button(emoji='⏹️', style=discord.ButtonStyle.danger)
+    async def stop_playback(self, interaction: discord.Interaction, button: Button):
+        await self._run(interaction, 'player.stop')
+
+
 class SongQueue:
     """Async-friendly queue that supports inserting items at the front."""
 
@@ -694,9 +758,12 @@ class VoiceState:
         # Bounded history of what autoplay has already served, so a Mix -- which
         # always leads with its seed video -- cannot put one song on repeat.
         self._recent_ids = deque(maxlen=AUTOPLAY_MEMORY)
-        # Set by MusicCog.ensure_voice_state.  A callback rather than a back
-        # reference to the cog, so this class still knows nothing about Redis.
+        # Set by MusicCog.ensure_voice_state.  Callbacks rather than a back
+        # reference to the cog, so this class still knows nothing about Redis
+        # and nothing about the button view's permission model.
         self.on_change = None
+        self.np_view_factory = None
+        self.np_message: discord.Message | None = None
 
     def start_player(self):
         """Start the audio player task lazily; safe to call multiple times."""
@@ -824,15 +891,60 @@ class VoiceState:
             return None
         return self.bot.get_channel(self.np_channel_id)
 
-    async def _notify(self, **kwargs) -> None:
+    async def _notify(self, **kwargs) -> discord.Message | None:
         """Best-effort message to the sticky channel. Never raises."""
         channel = self.channel()
         if channel is None:
-            return
+            return None
         try:
-            await channel.send(**kwargs)
+            return await channel.send(**kwargs)
         except Exception as exc:
             print(f"[Music] Could not post to channel {self.np_channel_id}: {exc}")
+            return None
+
+    async def announce_now_playing(self, track: 'Track') -> None:
+        """Replace the now-playing message with one for ``track``.
+
+        The previous message is deleted rather than left behind: it is a live
+        control surface, and a channel accumulating one stale set of buttons per
+        track is both noise and a trap.  A bot may always delete its own
+        messages, so this needs no extra permission.
+        """
+        await self.retire_now_playing(delete=True)
+        view = self.np_view_factory() if self.np_view_factory else None
+        self.np_message = await self._notify(embed=track.create_embed(elapsed=0.0), view=view)
+
+    async def refresh_now_playing(self) -> None:
+        """Redraw the progress bar.  Called on a slow loop, never per second."""
+        if self.np_message is None or self.current is None:
+            return
+        try:
+            await self.np_message.edit(embed=self.current.create_embed(elapsed=self.elapsed))
+        except discord.NotFound:
+            # Somebody deleted it; stop trying to edit a message that is gone.
+            self.np_message = None
+        except Exception as exc:
+            print(f"[Music] Could not refresh the now-playing message: {exc}")
+
+    async def retire_now_playing(self, *, delete: bool = False) -> None:
+        """Delete the now-playing message, or leave it with dead buttons disabled.
+
+        Disabling matters on the way out: a view with ``timeout=None`` never
+        expires by itself, so without this the last message of a session keeps
+        buttons that look live and silently do nothing.
+        """
+        message, self.np_message = self.np_message, None
+        if message is None:
+            return
+        try:
+            if delete:
+                await message.delete()
+            else:
+                await message.edit(view=None)
+        except discord.NotFound:
+            pass
+        except Exception as exc:
+            print(f"[Music] Could not retire the now-playing message: {exc}")
 
     async def _extend_with_radio(self) -> int:
         """Top the queue up from YouTube's Mix for the last track played.
@@ -919,7 +1031,7 @@ class VoiceState:
                 self.voice.play(source, after=self.play_next_song)
                 self._remember(track)
                 self.changed()
-                await self._notify(embed=track.create_embed())
+                await self.announce_now_playing(track)
             except Exception as e:
                 # The source owns a live ffmpeg process; if play() never took ownership
                 # of it, nothing else will ever clean it up.
@@ -985,6 +1097,7 @@ class VoiceState:
         if self.voice:
             await self.voice.disconnect()
             self.voice = None
+        await self.retire_now_playing()
         self.changed()
 
     def _skip_threshold(self):
@@ -1048,6 +1161,7 @@ class MusicCog(commands.Cog):
         if not state or not state.exists:
             state = VoiceState(self.bot, guild_id, channel_id=channel_id)
             state.on_change = self.publish_state
+            state.np_view_factory = functools.partial(NowPlayingView, self, int(guild_id))
             self.voice_states[int(guild_id)] = state
         elif channel_id is not None:
             state.np_channel_id = channel_id
@@ -1061,6 +1175,7 @@ class MusicCog(commands.Cog):
     def cog_unload(self):
         self._snapshot_loop.cancel()
         self._settings_loop.cancel()
+        self._now_playing_loop.cancel()
         for guild_id in list(self.voice_states):
             self.bot.loop.create_task(self._clear_snapshot(guild_id))
         for state in self.voice_states.values():
@@ -1073,6 +1188,7 @@ class MusicCog(commands.Cog):
         # the in-Discord now-playing buttons too.  Only the snapshot publishing
         # is conditional on there being somewhere to publish to.
         self._settings_loop.start()
+        self._now_playing_loop.start()
         if REDIS_URL:
             self._snapshot_loop.start()
 
@@ -1118,6 +1234,24 @@ class MusicCog(commands.Cog):
 
     @_snapshot_loop.before_loop
     async def _before_snapshot_loop(self):
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(seconds=NOW_PLAYING_REFRESH_SECONDS)
+    async def _now_playing_loop(self):
+        """Advance the progress bar on every live now-playing message.
+
+        Ten seconds, not one: each tick is a message edit, and Discord's
+        per-channel edit budget is small enough that a per-second bar would spend
+        it all on a cosmetic detail.  Paused players are skipped -- the bar is
+        not moving, so an edit would rewrite the message with identical content.
+        """
+        for guild_id in list(self.voice_states):
+            state = self.peek_voice_state(guild_id)
+            if state and state.np_message and state.voice and state.voice.is_playing():
+                await state.refresh_now_playing()
+
+    @_now_playing_loop.before_loop
+    async def _before_now_playing_loop(self):
         await self.bot.wait_until_ready()
 
     def bridge_actions(self) -> dict:
