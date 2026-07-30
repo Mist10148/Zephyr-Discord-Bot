@@ -162,7 +162,10 @@ python run_web.py                              # then use http://127.0.0.1:5000
 |---|---|
 | `/login` | Sign in with Discord. Shows `?error=` codes from the callback in plain language |
 | `/g` | Servers you administer, plus sign-out |
-| `/g/:guildId` | Read-only settings overview for one server |
+| `/g/:guildId` | Overview for one server, linking to the pages below |
+| `/g/:guildId/music` | Now playing, queue, transport controls and the playlist editor |
+| `/g/:guildId/weather-alerts` | Weather subscriptions, with a preview |
+| `/g/:guildId/settings` | Prefix, locale, timezone, default volume, DJ role, music channels |
 
 Signed-out visits to `/g` or `/g/:id` redirect to `/login?next=…` and return there afterwards. If no
 OAuth application is configured, they redirect to `/login?error=not_configured` instead — a
@@ -186,12 +189,45 @@ alembic upgrade head
 # Existing deployed database, where ai_settings and app_state already exist
 # because create_all() made them: adopt the baseline without re-creating anything
 alembic stamp 0001
+
+# ...then bring it up to date with the later revisions
+alembic upgrade head
 ```
 
-The `0001` baseline covers all four tables (`ai_settings`, `app_state`, `web_users`, `guilds`), so
-`alembic downgrade base` is meaningful. Because `create_all()` and Alembic can drift, a
-model-vs-migration check is on the hardening list; `tests/test_web_schema.py` currently asserts the
+Revisions so far:
+
+| Revision | Tables |
+|---|---|
+| `0001` | `ai_settings`, `app_state`, `web_users`, `guilds` |
+| `0002` | `playlists`, `playlist_tracks`, `audit_log` |
+| `0003` | `weather_subs`, `bot_users` |
+
+`alembic downgrade base` is meaningful at every step. Because `create_all()` and Alembic can drift,
+a model-vs-migration check is on the hardening list; `tests/test_web_schema.py` currently asserts the
 baseline matches the models.
+
+### The bot ↔ web bridge
+
+The dashboard's music remote and its channel pickers need **both** processes plus Redis. The bot
+publishes `zephyr:presence` (30s TTL) and `zephyr:player:{guild_id}` (60s TTL) and listens on
+`zephyr:cmd`; the web tier reads the snapshots and sends commands, waiting up to five seconds for a
+reply on `zephyr:res:{id}`.
+
+The TTLs are the design. If the bot is down, the keys expire and the dashboard says so instead of
+showing stale state, and `POST /api/v1/guilds/:id/player/*` answers `504 bot_unreachable` rather
+than hanging. Without `REDIS_URL` the same endpoints answer `503 bridge_not_configured`, `/status`
+reports the bot offline, and everything that does not need the bot keeps working.
+
+Permissions are always re-checked by the bot against its live Discord cache, never trusted from the
+browser: if a DJ role is configured you need it (or Manage Server), and if one is not you need to be
+in the voice channel the bot is in.
+
+### Weather subscriptions
+
+The `weather_alerts` cog runs two loops in the **bot** process, so a website-only deployment posts
+nothing. Digests are claimed transactionally (`FOR UPDATE SKIP LOCKED` on Postgres), so running two
+bot instances will not double-post; severe and class-suspension watches are deduplicated by
+fingerprint instead, and only record a run once something was actually sent.
 
 ---
 

@@ -12,18 +12,21 @@ self-contained cogs.
 Zephyr started life as a single 3,000-line script and was rebuilt into a maintainable package:
 
 - **Weather** — current conditions, forecasts, air quality, typhoon alerts, and a heat-index
-  "class suspension" predictor (powered by OpenWeatherMap). Every weather command works as both
-  a slash command and a classic prefix command.
+  "class suspension" predictor. Every weather command works as both a slash command and a classic
+  prefix command, and `/setlocation` gives each person their own default city.
+- **Weather subscriptions** — daily digests on a schedule you choose, plus severe-weather and
+  class-suspension watches that stay quiet until there is something worth saying.
 - **Music** — a Groovy-style player streaming from **YouTube** and **Spotify**, with a queue,
-  search-and-pick, seeking, loop modes, live audio effects (nightcore, vaporwave, 8D, reverb,
-  bass boost, pitch…), and on-demand lyrics.
+  search-and-pick, seeking, loop modes, live audio effects (nightcore, vaporwave, 16D, reverb,
+  bass boost, pitch…), on-demand lyrics, saved playlists, autoplay, and now-playing buttons.
 - **AI chat** — talk to the bot by mentioning it, replying to it, or DMing it. Backed by Google
   Gemini with a customizable persona, per-server/DM preferences, response-format options, local
   rate-limit tracking, and image generation.
 - **Text-to-speech** — make the bot speak in a voice channel in your chosen language.
-- **Website** — a small Flask app that shows Iloilo City's forecast and lets you search any city.
+- **Dashboard** — a React PWA: a public weather page for anyone, and for server admins a live
+  music remote, weather subscriptions and editable settings, signed in with Discord.
 
-> The bot exposes **64 slash commands** and **13 prefix commands** across these features.
+> The bot exposes **75 slash commands** and **13 prefix commands** across these features.
 
 ---
 
@@ -36,10 +39,12 @@ Zephyr started life as a single 3,000-line script and was rebuilt into a maintai
 | AI | [`google-genai`](https://ai.google.dev/) (Gemini) |
 | Music sources | [`yt-dlp`](https://github.com/yt-dlp/yt-dlp), [`spotipy`](https://spotipy.readthedocs.io/) (Spotify Web API) |
 | Audio | **FFmpeg**, **Opus**, [`gTTS`](https://gtts.readthedocs.io/) |
-| Weather data | [OpenWeatherMap API](https://openweathermap.org/api) |
-| Website | **Flask**, `geopy` (Nominatim), `timezonefinder`, `pytz`, [Swiper.js](https://swiperjs.com/) |
+| Weather data | [Open-Meteo](https://open-meteo.com/) (primary), [OpenWeatherMap](https://openweathermap.org/api) (fallback) |
+| Website | **Flask** + **React 19**, TypeScript, Vite, Tailwind v4, TanStack Query, Motion, dnd-kit |
+| Persistence | **SQLAlchemy 2.0** + **Alembic** (SQLite by default, Postgres in production) |
+| Bot ↔ web | **Redis** snapshots and pub/sub |
 | Config | [`python-dotenv`](https://pypi.org/project/python-dotenv/) |
-| Cloud | **Docker**, **Gunicorn**, optional **Redis** |
+| Cloud | **Docker**, **Gunicorn**, **Redis** |
 
 ---
 
@@ -65,13 +70,13 @@ Zephyr-Discord-Bot/
 │   ├── config.py             # loads .env + constants
 │   ├── client.py             # bot instance, cog loading, events (on_message, on_ready…)
 │   ├── core/                 # opus loader + ffmpeg resolver
-│   ├── db/                   # SQLAlchemy models, engine, Alembic migrations
-│   ├── utils/                # weather/time helpers + pagination
-│   ├── services/             # AI engine, portable storage, Redis client, bot↔web bridge
-│   └── cogs/                 # weather, music, chat, voice_tts, help
+│   ├── db/                   # models, Core repositories, engine, Alembic migrations
+│   ├── utils/                # weather + alert evaluation, time helpers, pagination
+│   ├── services/             # AI engine, storage, Redis client, Spotify, bot↔web bridge
+│   └── cogs/                 # weather, weather_alerts, music, chat, voice_tts, help
 └── website/                  # Flask API + React SPA
     ├── __init__.py           # create_app factory
-    ├── api/                  # /api/v1 blueprint (auth, me, guilds, weather, commands)
+    ├── api/                  # /api/v1 (auth, me, guilds, player, playlists, weather, weather_subs)
     ├── security.py           # CSP + security headers
     ├── session.py            # Redis-backed sessions
     ├── spa.py                # serves the built SPA
@@ -98,18 +103,26 @@ Zephyr-Discord-Bot/
 | `/typhoon` | Latest typhoon alert for Iloilo City |
 | `/class` | Class-suspension forecast based on heat index |
 | `/search <city>` | Quick weather lookup |
+| `/setlocation [city]` | Set your default city (leave empty to clear it) |
+| `/mylocation` | Show your default city |
+| `/weather-subscribe <kind> <location>` | Post weather to a channel on a schedule or a watch |
+| `/weather-subs` | List this server's subscriptions |
+| `/weather-unsubscribe <id>` | Remove one |
+| `/weather-preview <id>` | See what a subscription would post right now |
 | `/use` | Link to the web app |
 | `/helpweather` | Weather command help |
 | `/ping` | Bot latency |
 
 ### 🎵 Music
 **Playback:** `/play` · `/playskip` · `/playnext` · `/msearch` · `/now` (`/np`) · `/pause` · `/resume` · `/stop` · `/seek` · `/forward` · `/rewind`
-**Queue:** `/queue` · `/skip` · `/jump` · `/move` · `/remove` · `/clear` · `/shuffle` · `/loop` · `/loopqueue`
+**Queue:** `/queue` · `/skip` · `/jump` · `/move` · `/remove` · `/clear` · `/shuffle` · `/loop` · `/loopqueue` · `/autoplay`
+**Playlists:** `/save` · `/load` · `/playlists` · `/playlist-delete`
 **Voice:** `/join` · `/summon` · `/leave` · `/disconnect`
 **Audio & effects:** `/volume` · `/bassboost` (`/bass_boost`) · `/pitch` · `/nightcore` · `/vaporwave` · `/slowed` · `/reverb` · `/slownrev` · `/16d` · `/reset_effects` · `/247`
 **Extras:** `/lyrics [query]` · `/helpmusic`
 
 > Supports YouTube links/search, Spotify tracks, playlists, and albums (resolved to YouTube audio).
+> Saved playlists store titles and links, and re-find a track by title if its link stops working.
 
 ### 💬 AI Chat & TTS
 | Command | Description |
@@ -232,30 +245,27 @@ automatically. For the dashboard, also set `DISCORD_CLIENT_ID` and `DISCORD_CLIE
 
 ---
 
-## 🗺️ In development — web dashboard
+## 🗺️ Web dashboard
 
-> **Status: in progress.** The data layer, the React frontend, the public weather PWA and
-> Discord sign-in have all landed. You can sign in with Discord, pick a server you administer,
-> and view its settings — **read-only** for now. Editing, the music remote, weather
-> subscriptions and the AI features are still to come.
+> **Status: phases 0–5 shipped.** Sign-in, the servers you administer, editable settings, a live
+> music remote and weather subscriptions all work today. Still to come: the AI features (phase 6)
+> and hardening (phase 7).
 
-A React web dashboard is planned, replacing the Jinja weather page with a Discord-authenticated
-control panel for the bot:
-
-- **Frontend** — React 19 + **TypeScript** + Vite + Tailwind v4 + shadcn/ui, with an
-  iOS-style design system: layered materials, stacked shadows, spring physics, sheets with
-  detents, a Dynamic Island, and a rearrangeable widget grid. Installable as a PWA.
-- **Auth** — Discord OAuth2; you see and manage only the guilds you already administer.
-- **Live music remote** — view the queue and control playback from the browser, bridged to
-  the bot over Redis. The bot re-validates every permission before acting.
-- **Weather subscriptions** — daily digests, severe-weather alerts, and class-suspension
-  auto-announcements posted to a channel on a schedule.
-- **AI** — `/summarize`, per-channel conversation memory, per-guild personas, and a
-  token/quota dashboard.
+- **Public** — a weather PWA with a ⌘K palette over every command, installable to a home screen.
+- **Auth** — Discord OAuth2; you see and manage only the servers you already administer.
+- **Music remote** — the live queue and full transport control from the browser, bridged to the bot
+  over Redis. The bot re-validates every permission against its own Discord cache before acting, so
+  what the page lets you click is only ever a suggestion.
+- **Playlists** — save a queue from Discord, then reorder it in the browser (with the keyboard, if
+  you prefer), or import one from Spotify.
+- **Weather subscriptions** — daily digests, severe-weather watches and class-suspension
+  advisories, with a preview that runs the same code the scheduler does.
+- **Settings** — prefix, locale, timezone, default volume, DJ role and music channels, with
+  channel and role pickers answered by the bot in real time.
 - **Postgres** replaces `settings.json`, so per-guild settings survive cloud deploys.
 
-Full architecture, data model, API surface, and the 7-phase delivery plan:
-[`docs/WEB_DASHBOARD_PLAN.md`](docs/WEB_DASHBOARD_PLAN.md).
+Full architecture, data model, API surface, the 7-phase delivery plan and a running log of every
+deliberate departure from it: [`docs/WEB_DASHBOARD_PLAN.md`](docs/WEB_DASHBOARD_PLAN.md).
 
 ---
 
@@ -266,13 +276,13 @@ Full architecture, data model, API surface, and the 7-phase delivery plan:
 | `DISCORD_TOKEN` | ✅ | Discord bot token |
 | `OPENWEATHER_API_KEY` | ✅ | OpenWeatherMap key (used by the bot *and* website) |
 | `GEMINI_API_KEY` | ✅ | Google Gemini API key |
-| `SPOTIFY_CLIENT_ID` | ✅ | Spotify app client ID |
+| `SPOTIFY_CLIENT_ID` | ✅ | Spotify app client ID. Also set it on the website for the dashboard's playlist import |
 | `SPOTIFY_CLIENT_SECRET` | ✅ | Spotify app client secret |
 | `FFMPEG_PATH` | — | Explicit path to FFmpeg (otherwise auto-detected) |
 | `WEB_APP_URL` | — | URL shown by `/use`. **Not** the OAuth origin — see `WEB_PUBLIC_URL` |
 | `FLASK_HOST` / `FLASK_PORT` | — | Website host/port (default `0.0.0.0:5000`) |
 | `PORT` | — | Cloud-platform port override (overrides `FLASK_PORT`) |
-| `REDIS_URL` | — | Shared AI settings, and **required for dashboard sessions** |
+| `REDIS_URL` | — | Shared AI settings, **required for dashboard sessions**, and the bot↔web bridge the music remote runs on |
 | `SETTINGS_PATH` | — | Custom path for `settings.json` |
 | `FLASK_DEBUG` | — | Set to `1` to enable Flask debug mode |
 | `DATABASE_URL` | — | Postgres/SQLite URL (defaults to `data/zephyr.db`) |

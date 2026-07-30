@@ -30,6 +30,13 @@ services:
       # from RENDER_EXTERNAL_URL, which Render injects automatically.
       - key: DISCORD_REDIRECT_URI
         sync: false
+      # Only for the dashboard's playlist importer, which reads Spotify metadata
+      # directly. Leave them unset and that one endpoint answers 503; everything
+      # else on the site is unaffected.
+      - key: SPOTIFY_CLIENT_ID
+        sync: false
+      - key: SPOTIFY_CLIENT_SECRET
+        sync: false
       - key: PYTHON_VERSION
         value: 3.13.0
       - key: NODE_VERSION

@@ -228,8 +228,8 @@ Tracked as tasks #1–#8 in the session task list. Dependency graph:
 | 2 | 1 — Frontend foundation | — | `/kitchen-sink` design-system review |
 | 3 | 2 — Public weather PWA | #2 | **First user-visible release** |
 | 4 | 3 — Auth | #1, #3 | Login + guild settings |
-| 5 | 4 — Music | #4 | Web remote + playlists |
-| 6 | 5 — Weather alerts | #4 | Subscriptions + auto-announce |
+| 5 | 4 — Music | #4 | Web remote + playlists — **shipped** |
+| 6 | 5 — Weather alerts | #4 | Subscriptions + auto-announce — **shipped** |
 | 7 | 6 — AI | #4 | `/summarize` + memory |
 | 8 | 7 — Hardening | #5, #6, #7 | Production-ready |
 
@@ -296,8 +296,11 @@ audit log surfacing, tests for the bridge and the scheduler.
 - `TimezoneFinder()` and `Nominatim()` are currently constructed **per request** in
   `website/app.py`; `TimezoneFinder` loads a large dataset each time. Both disappear with
   the Open-Meteo migration.
-- **yt-dlp fragility is unchanged** by any of this. Playlist persistence stores URLs, so
-  saved playlists will rot as videos are removed — plan a re-resolve path.
+- ~~**yt-dlp fragility is unchanged** by any of this. Playlist persistence stores URLs, so
+  saved playlists will rot as videos are removed — plan a re-resolve path.~~ **Resolved in
+  Phase 4:** `playlist_tracks.url` is nullable and `YTDLSource.from_track` resolves by title, so
+  the re-resolve path is the normal path rather than a fallback. yt-dlp itself is of course still
+  yt-dlp.
 
 ---
 
@@ -395,3 +398,97 @@ code differs and why. It is appended to as phases land, and §§1–7 are not re
 22. **No frontend test runner was added.** Vitest plus testing-library plus jsdom is four dev
     dependencies, lockfile churn, a CI step and a tsconfig reference. It belongs with the hardening
     phase, which already promises tests.
+
+### Phase 4 — Music
+
+23. **§2's bridge lives entirely in `zephyr/services/bridge.py`; no `website/bridge_client.py`.**
+    Both sides have to agree on the envelope, the channel names and the timeout, and two files is
+    how they stop agreeing. The module already had the right properties (no `import discord`, plain
+    dicts, `redis_client` imported as a module so one patch redirects every call site).
+24. **`send_command` subscribes to the response channel before publishing the command.** Not a
+    style preference: the other order is a race the bot wins on any fast action. Redis pub/sub keeps
+    no backlog, so the reply would be dropped and the caller would then wait the full timeout for an
+    answer that had already been sent.
+25. **§4's `POST /player/:action` returns 409 for a refusal, not 403.** The bot answers "you are not
+    in the voice channel", "nothing is playing" and "you need the DJ role" through one channel and
+    they are all the same thing to the client: the request was understood, the bot declined, and
+    retrying will not help. Splitting them would mean the bot classifying its own refusals into HTTP
+    semantics, which is the web tier's vocabulary, not its own. 504 (no answer) and 503 (no Redis)
+    stay distinct because they call for genuinely different responses.
+26. **The permission rule is one sentence, and it is not the plan's.** §2 says only that the bot
+    re-validates. The shipped rule: *if a DJ role is configured you need it (or Manage Server); if
+    one is not, you need to be in the voice channel the bot is in.* One sentence, because a rule
+    nobody can state is a rule nobody can predict. `player.play` deliberately uses the actor's own
+    voice channel rather than a channel id from the request, which would otherwise let anyone with a
+    session pull the bot into a channel they cannot see.
+27. **§3's `playlist_tracks.url` is nullable, and that is the point of the table.** A Spotify import
+    stores a title and nothing else; `YTDLSource.from_track` resolves it at play time and writes the
+    URL back. Importing 200 tracks is two Spotify calls instead of 200 yt-dlp extractions, and the
+    plan's §7 risk — *"saved playlists will rot as videos are removed"* — is retired rather than
+    merely noted, because the re-resolve path is now the normal path.
+28. **§4's Spotify import runs in the web tier, not through the bridge.** It reads metadata only, so
+    it finishes inside a request; routing it through the bot would have needed the 5s bridge timeout
+    raised for one action. The cost is `SPOTIFY_CLIENT_ID`/`SECRET` on the web service — optional,
+    with a clear 503 when unset.
+29. **`audit_log` gained writers but no reader.** §8 ¶5 deferred the table until the first mutating
+    guild endpoint; `PATCH /guilds/:id/settings` is that endpoint. `GET /guilds/:id/audit` stays in
+    Phase 7, where the phase table already puts audit surfacing. Only *successful* player actions
+    are logged: recording rejected button presses would fill the log with people who were simply not
+    in the voice channel.
+30. **§4's `GET/PATCH /guilds/:id/settings` ships as specified, and `editable` flips to true.**
+    Phase 3 shipped `GET /guilds/<id>` precisely so this could arrive without a rename.
+31. **Guild channels and roles are asked of the bot over the bridge (`meta.guild`), not mirrored
+    into Redis.** They are read once when a settings page opens, so a round trip is cheaper than
+    keeping every guild's channel list continuously up to date — and never stale. The consequence is
+    that Phase 5's pickers depend on the Phase 4 bridge, which §6 calls independent; in a build that
+    ships both, that is a cost worth paying rather than a second mechanism.
+32. **§5's `/g/:id` does not become an editing surface; `/g/:id/settings` is its own route.** The
+    overview is a summary with links, and a full settings form inside it would have made one file
+    carry two jobs.
+33. **Autoplay uses YouTube's own Mix (`list=RD<video id>`) rather than a recommender.** One flat
+    extraction yields dozens of candidates and there is no ranking logic here to get wrong. A Mix
+    always leads with its seed video, so a bounded played-history filter is required, or autoplay
+    puts the song that just finished straight back on.
+34. **The now-playing buttons call the bridge handlers, not parallel implementations.** It is the
+    only way the Discord controls and the web remote cannot drift apart, and it means the permission
+    check is written once.
+
+### Phase 5 — Weather alerts
+
+35. **§3's `weather_subs` stores `lat`/`lon`, resolved once at subscription time.** The plan lists
+    only `location`. Geocoding on every run would cost a network call per subscription per tick, and
+    would silently start posting about a different place if the geocoder ever changed its mind about
+    the name.
+36. **`schedule_local_time` is text, and due-ness compares local *dates*.** It stores a wall-clock
+    intent — "08:00 in Manila" — which across a DST change is deliberately a different UTC instant.
+    An elapsed-hours rule would skip or double a day where consecutive local days are 23 or 25 hours
+    apart; comparing the local date of the last run does not.
+37. **§6's `FOR UPDATE SKIP LOCKED` is Postgres-only and guarded.** `DEFAULT_DATABASE_URL` is
+    SQLite, which has neither clause and no concurrent writers to need them, so it degrades to a
+    plain select inside the same transaction. Without the guard every test and every local run would
+    break — the same reasoning as §8 ¶6 on `postgresql.ARRAY`.
+38. **Watches are not claimed, only scheduled digests are.** Severe and class-suspension
+    subscriptions deduplicate by fingerprint, so a tick where nothing crosses a threshold must leave
+    the row untouched; recording it as a run would make the next genuine warning look like a
+    duplicate. The fingerprint is recorded only after something was actually posted.
+39. **Fingerprints are coarse on purpose.** Values are bucketed before hashing, so a gust wobbling
+    by 2 km/h is the same alert and does not repost every fifteen minutes, while a real escalation
+    is a new one.
+40. **All alert content is pure functions in `zephyr/utils/weather_alerts.py`.** The bot's scheduler
+    and the dashboard's preview call the same code, because a preview rendered by different code is
+    a preview of something else.
+41. **`/setlocation` covers slash commands only.** The 13 prefix commands still default to Iloilo.
+    They are `ctx`-based module-level functions using blocking `requests.get`, so threading a
+    per-user lookup through them means touching code that is already due a rewrite; the fallback
+    order (asked-for → your default → Iloilo) preserves the previous behaviour exactly for anyone
+    who sets nothing.
+42. **A subscription with an unloadable timezone falls back to UTC rather than being disabled** —
+    posting an hour late beats never posting again because the host is missing a tzdata entry — but
+    the *creation* path refuses an unknown zone outright, since at that moment there is somebody
+    there to be told.
+43. **`/g/:id/weather-alerts` hides channels the bot cannot post in** rather than offering them and
+    rejecting the choice later. A subscription pointed at an unpostable channel does not fail
+    loudly; it fails every day, silently, until somebody notices the digest stopped arriving.
+44. **The Phase 7 a11y item for the widget grid was paid early for the playlist editor.** Its drag
+    handle is a real focusable button carrying dnd-kit's keyboard sensor, so reordering works
+    without a pointer. The widget grid itself is still untouched.

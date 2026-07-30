@@ -1,14 +1,15 @@
 # Zephyr — Product Requirements Document (PRD)
 
-**Version:** 1.2  
+**Version:** 1.5  
 **Last updated:** 2026-07-30  
 **Owner:** Zephyr Discord Bot project  
 
-> **In planning:** a React web dashboard with Discord OAuth, plus four bot feature tracks
-> (weather subscriptions, persistent playlists, AI summarization, database-backed settings).
-> Architecture, data model, API surface, and phased delivery live in
-> [`WEB_DASHBOARD_PLAN.md`](WEB_DASHBOARD_PLAN.md). Sections 6–11 below describe the
-> **currently shipped** product.
+> **Shipped through Phase 5:** database-backed settings, the React dashboard with Discord OAuth,
+> the public weather PWA, the bot↔web bridge with persistent playlists and a music remote, and
+> weather subscriptions. **Remaining:** Phase 6 (AI summarization, memory, personas) and Phase 7
+> (hardening). Architecture, data model, API surface, phased delivery and the running log of
+> deliberate departures live in [`WEB_DASHBOARD_PLAN.md`](WEB_DASHBOARD_PLAN.md).
+> Sections 6–11 below describe the **currently shipped** product.
 
 ---
 
@@ -16,7 +17,7 @@
 
 Zephyr is a modular, multi-purpose Discord bot built for community servers. It bundles a weather service, a Groovy-style music player, a Google Gemini AI chat companion, text-to-speech, and a small Flask companion website — all organized into clean, self-contained cogs.
 
-The bot is written in Python 3.13 using `discord.py`, exposes **64 slash commands** (including aliases) and **13 prefix commands**, and runs on Windows, macOS, or Linux. It can be run locally, in Docker, or deployed to cloud platforms such as Render, Heroku, AWS, and Vercel.
+The bot is written in Python 3.13 using `discord.py`, exposes **75 slash commands** (including aliases) and **13 prefix commands**, and runs on Windows, macOS, or Linux. It can be run locally, in Docker, or deployed to cloud platforms such as Render, Heroku, AWS, and Vercel.
 
 ---
 
@@ -32,8 +33,10 @@ The bot is written in Python 3.13 using `discord.py`, exposes **64 slash command
 
 ### Non-Goals
 - Not a general-purpose bot moderation/admin suite (no ban/kick/role management).
-- Not a persistent music playlist database.
-- Not a replacement for official weather/pagasa alerts; class-suspension forecast is advisory only.
+- Not a music library or a streaming service: playlists persist, but they store references and
+  resolve to YouTube audio at play time. Nothing is downloaded or hosted.
+- Not a replacement for official weather/PAGASA alerts; the class-suspension forecast and the
+  severe-weather watcher are advisory only and say so in every message they post.
 
 ---
 
@@ -56,10 +59,12 @@ The bot is written in Python 3.13 using `discord.py`, exposes **64 slash command
 | Text-to-speech | `gTTS` |
 | Audio codec | FFmpeg, Opus (`libopus-0.x64.dll` on Windows, system libs on Linux/macOS) |
 | Weather data | Open-Meteo (primary), OpenWeatherMap (fallback) |
-| Website | Flask, `geopy`, `timezonefinder`, `pytz`, Swiper.js |
-| Configuration | `python-dotenv` (`.env`) + `settings.json` or Redis |
-| Utilities | `aiohttp`, `requests`, `async-timeout` |
-| Cloud deployment | Docker, Gunicorn, Redis, Render Blueprint, Vercel, AWS Lambda |
+| Website | Flask + React 19, TypeScript, Vite, Tailwind v4, TanStack Query, Motion, dnd-kit |
+| Persistence | SQLAlchemy 2.0 + Alembic (SQLite by default, Postgres in production) |
+| Bot ↔ web | Redis snapshots and pub/sub |
+| Configuration | `python-dotenv` (`.env`), with settings in the database |
+| Utilities | `aiohttp`, `requests`, `async-timeout`, `zoneinfo` (+ `tzdata`) |
+| Cloud deployment | Docker, Gunicorn, Redis, Render Blueprint |
 
 ---
 
@@ -85,22 +90,26 @@ project-root/
 │   ├── config.py           # Loads .env + constants
 │   ├── client.py           # Bot subclass, cog loading, slash sync, events
 │   ├── core/               # opus_loader, ffmpeg resolver
-│   ├── db/                 # SQLAlchemy models, lazy engine, Alembic migrations
+│   ├── db/                 # SQLAlchemy models + Core repositories, lazy engine, Alembic
+│   │                       #   models, guild_settings, playlists, weather_subs, audit
 │   ├── cogs/               # Feature cogs
 │   │   ├── weather.py
+│   │   ├── weather_alerts.py
 │   │   ├── music.py
 │   │   ├── voice_tts.py
 │   │   ├── chat.py
 │   │   └── help.py
-│   ├── services/           # AI engine, storage, Redis client, bot↔web bridge
+│   ├── services/           # AI engine, storage, Redis client, Spotify, bot↔web bridge
 │   └── utils/              # Shared helpers
 │       ├── weather_utils.py
+│       ├── weather_alerts.py   # pure alert evaluation, shared with the API
 │       ├── pagination.py
 │       ├── help_data.py
 │       └── time_utils.py
 └── website/                # Flask API + React SPA
     ├── __init__.py         # create_app factory
     ├── api/                # /api/v1 blueprint
+    │                       #   auth, me, guilds, player, playlists, weather, weather_subs
     ├── security.py         # CSP + security headers
     ├── session.py          # Redis-backed sessions
     ├── spa.py              # Serves the built SPA
@@ -130,8 +139,24 @@ project-root/
 - **Air quality:** AQI and pollutant details.
 - **Typhoon alerts:** one-call alerts for Iloilo City.
 - **Class suspension forecast:** predicts whether classes are likely to be suspended using feels-like/apparent temperature.
+- **Personal default city:** `/setlocation` stores a per-user default, which every slash weather command falls back to before falling back to Iloilo.
 - **Data sources:** Open-Meteo is the primary source; OpenWeatherMap is used as a transparent fallback if Open-Meteo fails.
 - **Command formats:** every weather command works as a slash command; many also work as prefix commands.
+
+### 6.1a Weather subscriptions
+
+Weather that arrives without being asked, configured per channel with `/weather-subscribe` or from
+the dashboard.
+
+- **Daily digest:** today's forecast at a wall-clock time in a timezone you choose. Claimed
+  transactionally, so two bot instances cannot double-post.
+- **Severe weather watch:** posted only when wind, rain probability, apparent temperature or a storm
+  code crosses a threshold. Thresholds are editable, and each can be switched off individually.
+- **Class suspension watch:** posted when the heat index reaches an advisory level.
+- Both watches run every 15 minutes and deduplicate by a coarse fingerprint, so a storm that lasts
+  all afternoon is announced once rather than sixteen times.
+- `/weather-preview` and the dashboard's preview show exactly what a subscription would post right
+  now, using the same code the scheduler uses.
 
 ### 6.2 Music
 - **Playback:** play, playskip, playnext, search-and-pick (`/msearch`), now playing, pause/resume/stop, seek/forward/rewind, lyrics.
@@ -139,6 +164,16 @@ project-root/
 - **Queue management:** view queue, skip (vote-based), jump, move, remove, clear, shuffle, loop modes.
 - **Voice connection:** join, summon, leave, disconnect, 24/7 mode.
 - **Audio effects:** volume, bass boost, pitch, nightcore, vaporwave, slowed, reverb, slowed+reverb, 16D, reset effects.
+- **Playlists:** `/save` stores the current track plus the queue; `/load`, `/playlists` and
+  `/playlist-delete` manage them. A playlist may be shared with the server it was saved in. Entries
+  store a title and, where known, a link — so a saved playlist keeps working after the video it was
+  saved from is taken down.
+- **Autoplay:** when the queue drains, playback continues into YouTube's Mix for the last track,
+  skipping anything played recently.
+- **Now playing controls:** the now-playing message carries pause/resume, skip, loop, shuffle and
+  stop buttons, and its progress bar advances while the track plays.
+- **Web remote:** the dashboard shows the live queue and drives the same actions, with the bot
+  re-checking permissions on every one.
 
 ### 6.3 AI Chat & TTS
 - **Gemini chat:** `/prompt` with text, image, or `.txt` attachments; mention/reply/DM the bot to chat.
@@ -153,22 +188,29 @@ project-root/
 - `/helpmusic`, `/helpchat`, `/helpweather` — filtered category views.
 - Consistent embed formatting across every help command.
 
-### 6.5 Flask Website
-- Home panel shows Iloilo City's current weather and 4-day forecast.
-- City search returns current conditions + day/night forecast entries.
-- Uses OpenWeatherMap + Nominatim geocoding.
+### 6.5 Web dashboard
+- **Public:** a weather PWA with a ⌘K command palette over every command, and a `/status` panel
+  reading the bot's own heartbeat.
+- **Signed in** (Discord OAuth): the servers you administer, and per server a music remote, weather
+  subscriptions, and editable settings (prefix, locale, timezone, default volume, DJ role, music
+  channels).
+- Channel and role pickers are answered by the bot in real time, because the web tier holds no
+  Discord token and has no gateway connection.
+- Every mutating action is written to `audit_log` with its actor and source.
 
 ---
 
 ## 7. Command Inventory
 
-### 7.1 Slash commands (64 total, including aliases)
+### 7.1 Slash commands (75 total, including aliases)
 
 | Category | Commands |
 |----------|----------|
-| **Weather** | `/weather`, `/forecast`, `/temperature`, `/description`, `/humidity`, `/pressure`, `/windspeed`, `/air`, `/precipitation`, `/typhoon`, `/class`, `/search`, `/use`, `/helpweather`, `/ping` |
+| **Weather** | `/weather`, `/forecast`, `/temperature`, `/description`, `/humidity`, `/pressure`, `/windspeed`, `/air`, `/precipitation`, `/typhoon`, `/class`, `/search`, `/setlocation`, `/mylocation`, `/use`, `/helpweather`, `/ping` |
+| **Weather — Alerts** | `/weather-subscribe`, `/weather-subs`, `/weather-unsubscribe`, `/weather-preview` |
 | **Music — Playback** | `/play`, `/playskip`, `/playnext`, `/msearch`, `/now`, `/np`, `/pause`, `/resume`, `/stop`, `/seek`, `/forward`, `/rewind`, `/lyrics` |
-| **Music — Queue** | `/queue`, `/skip`, `/jump`, `/move`, `/remove`, `/clear`, `/shuffle`, `/loop`, `/loopqueue` |
+| **Music — Queue** | `/queue`, `/skip`, `/jump`, `/move`, `/remove`, `/clear`, `/shuffle`, `/loop`, `/loopqueue`, `/autoplay` |
+| **Music — Playlists** | `/save`, `/load`, `/playlists`, `/playlist-delete` |
 | **Music — Effects & Audio** | `/volume`, `/bassboost`, `/bass_boost`, `/pitch`, `/nightcore`, `/vaporwave`, `/slowed`, `/reverb`, `/slownrev`, `/16d`, `/reset_effects` |
 | **Music — Voice & Connection** | `/join`, `/summon`, `/leave`, `/disconnect`, `/247` |
 | **Chat & AI** | `/prompt`, `/settings`, `/output`, `/token`, `/image-gen`, `/generate` |
@@ -202,10 +244,10 @@ project-root/
 | **Open-Meteo** | Daily forecast, current apparent temperature, geocoding | None |
 | **OpenWeatherMap** | Legacy/current weather, forecast fallback, website data, prefix weather commands | API key |
 | **Google Gemini** | AI chat, image generation | API key |
-| **Spotify Web API** | Track/playlist/album metadata lookup | Client ID + Secret |
+| **Spotify Web API** | Track/playlist/album metadata; the dashboard's playlist import | Client ID + Secret |
 | **YouTube** | Audio streaming (via `yt-dlp`) | None |
 | **Discord** | Bot platform | Bot token |
-| **Nominatim** | Website city geocoding | None |
+| **Redis** | Bot↔web bridge (presence, player snapshots, commands) and dashboard sessions | Optional password in the URL |
 
 ---
 
@@ -218,13 +260,13 @@ All secrets live in `.env` (see `.env.example`).
 | `DISCORD_TOKEN` | Bot | Discord bot token |
 | `OPENWEATHER_API_KEY` | Bot fallback + Website | OpenWeatherMap API key |
 | `GEMINI_API_KEY` | Bot | Google Gemini API key |
-| `SPOTIFY_CLIENT_ID` | Bot | Spotify app client ID |
-| `SPOTIFY_CLIENT_SECRET` | Bot | Spotify app client secret |
+| `SPOTIFY_CLIENT_ID` | Bot + Website | Spotify app client ID. The website needs it only for the dashboard's playlist import, which answers 503 without it |
+| `SPOTIFY_CLIENT_SECRET` | Bot + Website | Spotify app client secret |
 | `FFMPEG_PATH` | Optional | Path to FFmpeg |
 | `WEB_APP_URL` | Optional | URL shown by `/use`. Not the OAuth origin |
 | `FLASK_HOST` / `FLASK_PORT` | Optional | Website bind address |
 | `PORT` | Optional | Cloud-platform port override |
-| `REDIS_URL` | Optional + **Dashboard** | Shared AI settings storage, and dashboard sessions |
+| `REDIS_URL` | Optional + **Dashboard** + **Music remote** | Shared AI settings, dashboard sessions, and the bot↔web bridge. Without it the remote answers 503 and `/status` reports the bot offline |
 | `SETTINGS_PATH` | Optional | Custom `settings.json` path |
 | `FLASK_DEBUG` | Optional | Enable Flask debug mode |
 | `DATABASE_URL` | Optional | Postgres/SQLite URL (defaults to `data/zephyr.db`) |
@@ -280,14 +322,15 @@ Detailed scope per phase: [`WEB_DASHBOARD_PLAN.md`](WEB_DASHBOARD_PLAN.md) §6.
 - [ ] **Phase 1** — React + Vite + TypeScript + Tailwind v4 + shadcn frontend with an
       iOS-style design system (materials, stacked shadows, spring physics, widget grid).
 - [ ] **Phase 2** — Versioned JSON API (`/api/v1/*`), migrate the website to Open-Meteo,
-      ship the public weather PWA with a ⌘K palette over all 64 commands.
+      ship the public weather PWA with a ⌘K palette over every command.
 - [x] **Phase 3** — Discord OAuth2 login, Redis sessions, per-guild settings dashboard.
       *Ships sign-in, the guild picker and a **read-only** guild overview. Editing settings
       (`PATCH /guilds/:id/settings`), `audit_log` and Fernet token storage are deliberately
       deferred — see [`WEB_DASHBOARD_PLAN.md`](WEB_DASHBOARD_PLAN.md) §8.*
-- [ ] **Phase 4** — Redis bot↔web bridge; persistent playlists, Spotify import, autoplay,
-      now-playing buttons, and a web music remote.
-- [ ] **Phase 5** — Weather subscriptions: daily digests, severe-weather watcher, and
+- [x] **Phase 4** — Redis bot↔web bridge; persistent playlists, Spotify import, autoplay,
+      now-playing buttons, and a web music remote. *Editable guild settings and the
+      `audit_log` writers deferred from Phase 3 land here too.*
+- [x] **Phase 5** — Weather subscriptions: daily digests, severe-weather watcher, and
       class-suspension auto-announce; `/setlocation` per-user default city.
 - [ ] **Phase 6** — `/summarize`, per-channel conversation memory, per-guild personas,
       `/translate`.
@@ -305,6 +348,37 @@ Detailed scope per phase: [`WEB_DASHBOARD_PLAN.md`](WEB_DASHBOARD_PLAN.md) §6.
 ---
 
 ## 13. Changelog
+
+### 1.5 — Phases 4 and 5
+
+**Bridge.** `zephyr:presence` and `zephyr:player:{guild_id}` snapshots, plus a `zephyr:cmd` →
+`zephyr:res:{id}` command channel. The bot re-validates every actor against its live Discord cache
+before acting; the web tier's checks are UX only. `/api/v1/status` stops returning a hardcoded
+`false`.
+
+**Music.** Persistent playlists (`/save`, `/load`, `/playlists`, `/playlist-delete`) with lazy
+track resolution, so a Spotify import stores titles and matches them to audio at play time — which
+also means saved playlists survive videos being taken down. Autoplay continues into a YouTube Mix
+when the queue drains. The now-playing embed gained transport buttons and a progress bar that moves.
+*Fixed a live `AttributeError`: `/skip` compared against `Track.requester`, which has never existed,
+so every skip by the requester raised instead of skipping.*
+
+**Weather alerts.** A new `weather_alerts` cog with a one-minute digest runner and a fifteen-minute
+severe/class-suspension watcher, deduplicated by fingerprint. `/weather-subscribe`,
+`/weather-subs`, `/weather-unsubscribe`, `/weather-preview`. `/setlocation` and `/mylocation` give
+every slash weather command a per-user default city.
+
+**Dashboard.** `/g/:id/music` (live queue, transport, volume, loop, autoplay, playlist editor with
+keyboard-accessible reordering, Spotify import), `/g/:id/weather-alerts` (CRUD plus preview), and
+`/g/:id/settings` (now editable). Guild channel and role pickers are answered by the bot in real
+time over the bridge.
+
+**Schema.** `playlists`, `playlist_tracks`, `audit_log` (Alembic `0002`); `weather_subs`,
+`bot_users` (Alembic `0003`). Guild settings moved to `zephyr/db/guild_settings.py` now that the bot
+reads `dj_role_id` too.
+
+Deliberate departures from the plan are recorded in
+[`WEB_DASHBOARD_PLAN.md`](WEB_DASHBOARD_PLAN.md) §8.
 
 ### 1.4 — Phase 3 dashboard UI
 - Sign-in screen, guild picker, and a read-only per-guild overview at `/login`, `/g`, `/g/:id`.
@@ -358,8 +432,8 @@ Detailed scope per phase: [`WEB_DASHBOARD_PLAN.md`](WEB_DASHBOARD_PLAN.md) §6.
 
 ## Appendix: Counts at a Glance
 
-- **Slash commands:** 64 (including aliases)
+- **Slash commands:** 75 (including aliases)
 - **Prefix commands:** 13
-- **Cogs:** 5
+- **Cogs:** 6
 - **Entry points:** 2 (`run_bot.py`, `run_web.py`)
 - **External data providers:** 3 (Open-Meteo, OpenWeatherMap, Google Gemini)
