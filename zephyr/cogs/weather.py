@@ -7,6 +7,7 @@ Ported 1:1 from the original bot.py (lines 178-892). Prefix commands are kept as
 ``WeatherCog``.
 """
 
+import asyncio
 from datetime import datetime, timezone, timedelta
 
 import requests
@@ -23,12 +24,15 @@ from zephyr.config import (
     ILOILO_COORDS,
     WEB_APP_URL,
 )
+from zephyr.db.weather_subs import clear_bot_user, read_bot_user, write_bot_user
 from zephyr.utils.weather_utils import (
+    WeatherProviderError,
     get_tcws_description,
     _format_datetime_pht,
     _format_date_label,
     wmo_description,
     geocode_city,
+    geocode_search,
     get_openmeteo_daily_forecast,
     get_openmeteo_current,
 )
@@ -530,11 +534,82 @@ def _owm_current(lat: float, lon: float) -> dict:
 # Weather Slash Cog
 # ---------------------------------------------------------------------------
 class WeatherCog(commands.Cog):
+    #: Used when a caller gives no city and has set no default of their own.
+    #: Iloilo City is the bot's home, and was the hardcoded default before
+    #: /setlocation existed -- keeping it means nobody's behaviour changed.
+    FALLBACK_CITY = "Iloilo"
+
     def __init__(self, bot):
         self.bot = bot
 
+    async def _city_for(self, interaction: discord.Interaction, city: str | None) -> str:
+        """Resolve the city for a command: what was asked for, then the caller's
+        own default, then Iloilo.
+
+        Read per invocation rather than cached: these are user-initiated
+        commands at human rates, and a cache would keep serving the old city
+        for a while after /setlocation, which is precisely the moment somebody
+        checks whether it worked.
+        """
+        if city:
+            return city
+        try:
+            stored = await asyncio.to_thread(read_bot_user, str(interaction.user.id))
+        except Exception as exc:
+            print(f"[Weather] Could not read the default city: {exc}")
+            return self.FALLBACK_CITY
+        return (stored or {}).get("default_city") or self.FALLBACK_CITY
+
+    @app_commands.command(name="setlocation", description="Set your default city for weather commands.")
+    @app_commands.describe(city="Your city, or leave empty to clear it")
+    async def set_location(self, interaction: discord.Interaction, city: str = None):
+        await interaction.response.defer(ephemeral=True)
+        if not city:
+            await asyncio.to_thread(clear_bot_user, str(interaction.user.id))
+            await interaction.followup.send(
+                f"🧹 Cleared your default city. Weather commands will use {self.FALLBACK_CITY} again.",
+                ephemeral=True)
+            return
+
+        try:
+            places = await asyncio.to_thread(geocode_search, city, 1)
+        except WeatherProviderError:
+            await interaction.followup.send("❌ The geocoder is unavailable; try again shortly.", ephemeral=True)
+            return
+        if not places:
+            await interaction.followup.send(f"❌ I could not find **{city}**.", ephemeral=True)
+            return
+
+        place = places[0]
+        # The geocoder's own name and coordinates are stored, not the typed
+        # string: what was resolved is what the weather will be for.
+        await asyncio.to_thread(write_bot_user, str(interaction.user.id), {
+            "default_city": place.get("name") or city,
+            "lat": place["latitude"],
+            "lon": place["longitude"],
+            "timezone": place.get("timezone"),
+        })
+        where = ", ".join(part for part in (place.get("admin1"), place.get("country")) if part)
+        await interaction.followup.send(
+            f"📍 Your default city is now **{place.get('name') or city}**{f' ({where})' if where else ''}.",
+            ephemeral=True)
+
+    @app_commands.command(name="mylocation", description="Show the default city weather commands use for you.")
+    async def my_location(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        stored = await asyncio.to_thread(read_bot_user, str(interaction.user.id))
+        if not stored or not stored.get("default_city"):
+            await interaction.followup.send(
+                f"You have not set one, so commands default to {self.FALLBACK_CITY}. "
+                "Set yours with `/setlocation`.", ephemeral=True)
+            return
+        await interaction.followup.send(
+            f"📍 Your default city is **{stored['default_city']}**. Clear it with `/setlocation` and no city.",
+            ephemeral=True)
+
     @app_commands.command(name="temperature", description="Get the current temperature of a city.")
-    async def slash_temperature(self, interaction: discord.Interaction, city: str = "Iloilo"):
+    async def slash_temperature(self, interaction: discord.Interaction, city: str = None):
+        city = await self._city_for(interaction, city)
         data = requests.get(f"{CURRENT_URL}?appid={API_KEY}&q={city}&units=metric").json()
         if data.get("cod") != "404":
             embed = Embed(title=f"Current Temperature in {city}", description=f"**{data['main'].get('temp', 'N/A')}°C**", color=0x00FF00)
@@ -543,7 +618,8 @@ class WeatherCog(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="description", description="Get the weather description of a city.")
-    async def slash_description(self, interaction: discord.Interaction, city: str = "Iloilo"):
+    async def slash_description(self, interaction: discord.Interaction, city: str = None):
+        city = await self._city_for(interaction, city)
         data = requests.get(f"{CURRENT_URL}?appid={API_KEY}&q={city}&units=metric").json()
         if data.get("cod") != "404":
             desc = data['weather'][0].get('description', 'N/A')
@@ -553,7 +629,8 @@ class WeatherCog(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="humidity", description="Get the humidity of a city.")
-    async def slash_humidity(self, interaction: discord.Interaction, city: str = "Iloilo"):
+    async def slash_humidity(self, interaction: discord.Interaction, city: str = None):
+        city = await self._city_for(interaction, city)
         data = requests.get(f"{CURRENT_URL}?appid={API_KEY}&q={city}&units=metric").json()
         if data.get("cod") != "404":
             embed = Embed(title=f"Current Humidity in {city}", description=f"**{data['main'].get('humidity', 'N/A')}%**", color=0x00FF00)
@@ -562,7 +639,8 @@ class WeatherCog(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="pressure", description="Get the atmospheric pressure of a city.")
-    async def slash_pressure(self, interaction: discord.Interaction, city: str = "Iloilo"):
+    async def slash_pressure(self, interaction: discord.Interaction, city: str = None):
+        city = await self._city_for(interaction, city)
         data = requests.get(f"{CURRENT_URL}?appid={API_KEY}&q={city}&units=metric").json()
         if data.get("cod") != "404":
             embed = Embed(title=f"Current Pressure in {city}", description=f"**{data['main'].get('pressure', 'N/A')} hPa**", color=0x00FF00)
@@ -571,7 +649,8 @@ class WeatherCog(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="windspeed", description="Get the wind speed of a city.")
-    async def slash_windspeed(self, interaction: discord.Interaction, city: str = "Iloilo"):
+    async def slash_windspeed(self, interaction: discord.Interaction, city: str = None):
+        city = await self._city_for(interaction, city)
         data = requests.get(f"{CURRENT_URL}?appid={API_KEY}&q={city}&units=metric").json()
         if data.get("cod") != "404":
             embed = Embed(title=f"Current Wind Speed in {city}", description=f"**{data['wind'].get('speed', 'N/A')} m/s**", color=0x00FF00)
@@ -584,7 +663,8 @@ class WeatherCog(commands.Cog):
         await interaction.response.send_message(embed=_web_app_embed())
 
     @app_commands.command(name="precipitation", description="Get precipitation details for a city.")
-    async def slash_precipitation(self, interaction: discord.Interaction, city: str = "Iloilo"):
+    async def slash_precipitation(self, interaction: discord.Interaction, city: str = None):
+        city = await self._city_for(interaction, city)
         data = requests.get(f"{CURRENT_URL}?appid={API_KEY}&q={city}&units=metric").json()
         embed = Embed(title=f"Precipitation in {city}", color=0x00FFFF)
         if data.get("cod") != "404":
@@ -623,7 +703,8 @@ class WeatherCog(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="air", description="Get the air quality for a specific city.")
-    async def slash_air(self, interaction: discord.Interaction, city: str = "Iloilo"):
+    async def slash_air(self, interaction: discord.Interaction, city: str = None):
+        city = await self._city_for(interaction, city)
         data = requests.get(f"{CURRENT_URL}?appid={API_KEY}&q={city}&units=metric").json()
         if data.get("cod") != "404":
             lat, lon = data['coord']['lat'], data['coord']['lon']
@@ -645,7 +726,8 @@ class WeatherCog(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="weather", description="Get current weather, air quality, and precipitation for a city.")
-    async def slash_weather(self, interaction: discord.Interaction, city: str = "Iloilo"):
+    async def slash_weather(self, interaction: discord.Interaction, city: str = None):
+        city = await self._city_for(interaction, city)
         data = requests.get(f"{CURRENT_URL}?appid={API_KEY}&q={city}&units=metric").json()
         if data.get("cod") != "404":
             desc = data['weather'][0]['description']
@@ -677,7 +759,8 @@ class WeatherCog(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="forecast", description="Get a clean 3-day forecast for a city.")
-    async def slash_forecast(self, interaction: discord.Interaction, city: str = "Iloilo"):
+    async def slash_forecast(self, interaction: discord.Interaction, city: str = None):
+        city = await self._city_for(interaction, city)
         await interaction.response.defer()
 
         days = []
@@ -732,7 +815,8 @@ class WeatherCog(commands.Cog):
         return embed
 
     @app_commands.command(name="search", description="Search for current weather and air quality in a city.")
-    async def slash_search(self, interaction: discord.Interaction, city: str = "Iloilo"):
+    async def slash_search(self, interaction: discord.Interaction, city: str = None):
+        city = await self._city_for(interaction, city)
         data = requests.get(f"{CURRENT_URL}?appid={API_KEY}&q={city}&units=metric").json()
         if data.get("cod") != "404":
             desc = data['weather'][0]['description']

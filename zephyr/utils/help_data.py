@@ -119,9 +119,22 @@ HELP_CATEGORIES = [
             HelpEntry("/windspeed <city>", "Wind speed"),
             HelpEntry("/air <city>", "Air quality"),
             HelpEntry("/precipitation <city>", "Precipitation details"),
+            HelpEntry("/setlocation [city]", "Set your default city (leave empty to clear it)"),
+            HelpEntry("/mylocation", "Show your default city"),
             HelpEntry("/typhoon", "Latest typhoon alert for Iloilo City"),
             HelpEntry("/search <city>", "Search current weather & air quality"),
             HelpEntry("/class", "Class suspension forecast from feels-like temperature"),
+        ],
+    ),
+    HelpCategory(
+        key="weather_alerts",
+        emoji="🔔",
+        title="Weather — Alerts",
+        commands=[
+            HelpEntry("/weather-subscribe <kind> <location>", "Post weather to a channel on a schedule or on a watch"),
+            HelpEntry("/weather-subs", "List this server's weather subscriptions"),
+            HelpEntry("/weather-unsubscribe <id>", "Remove a subscription"),
+            HelpEntry("/weather-preview <id>", "Show what a subscription would post right now"),
         ],
     ),
     HelpCategory(

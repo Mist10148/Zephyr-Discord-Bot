@@ -58,7 +58,7 @@ class HelpCog(commands.Cog):
     async def helpweather(self, interaction: discord.Interaction):
         await _send_categorized_help(
             interaction,
-            categories_by_key("weather"),
+            categories_by_key("weather", "weather_alerts"),
             title="Weather Help",
             color=discord.Color.blue(),
         )

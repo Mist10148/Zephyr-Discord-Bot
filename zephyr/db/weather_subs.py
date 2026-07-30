@@ -63,6 +63,21 @@ def zone(name: str | None):
         return timezone.utc
 
 
+def normalise_zone(name: str | None) -> tuple[str, bool]:
+    """Return ``(zone name, was_accepted)``.
+
+    Two values because the caller usually wants to say so: quietly storing UTC
+    when somebody typed "Manila" would look like the setting had been ignored,
+    which it has.
+    """
+    candidate = (name or "UTC").strip()
+    try:
+        ZoneInfo(candidate)
+        return candidate, True
+    except (ZoneInfoNotFoundError, ValueError, ModuleNotFoundError):
+        return "UTC", False
+
+
 def parse_local_time(value: str | None) -> time:
     """Parse "HH:MM"; raise ``SubscriptionError`` on anything else."""
     try:
