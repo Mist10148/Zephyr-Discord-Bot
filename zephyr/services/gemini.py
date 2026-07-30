@@ -10,6 +10,7 @@ import os
 import re
 import json
 import asyncio
+import threading
 import traceback
 from collections import defaultdict, deque
 from datetime import datetime, timezone, timedelta
@@ -30,9 +31,54 @@ from zephyr.services.storage import storage
 
 # ---------------------------------------------------------------------------
 # Gemini client
+#
+# Built on first use, not at import.  ``genai.Client()`` validates credentials in
+# its constructor, so building it at module scope made *importing* anything that
+# reaches this module -- including ``zephyr.client``, and therefore every test
+# that touches the bot -- require a live Gemini key.  CI has none, so the failure
+# was a config error disguised as a test failure.
+#
+# The same rule the web tier already states for its own reasons: importing a
+# module must not need credentials or touch the network.  Nothing about *when*
+# the key is required changes -- ``validate_bot_config()`` still demands it
+# before the bot starts, and ``genai.Client`` still raises the same error, at the
+# first call rather than at import.
 # ---------------------------------------------------------------------------
-gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-gemini_async_client = gemini_client.aio
+_client_lock = threading.Lock()
+_client = None
+
+
+def get_gemini_client():
+    """The shared Gemini client, constructed on first use."""
+    global _client
+    if _client is None:
+        with _client_lock:
+            if _client is None:
+                # api_key is passed through unchanged, including None: the SDK
+                # then falls back to its own environment lookup exactly as before.
+                _client = genai.Client(api_key=GEMINI_API_KEY)
+    return _client
+
+
+class _LazyClient:
+    """Forwards attribute access to the real client, building it on demand.
+
+    A proxy rather than a function so ``gemini_async_client.models.generate_content``
+    keeps working at every existing call site, including the ``from ... import``
+    in ``cogs/chat.py``, which binds this object once at import.
+    """
+
+    __slots__ = ("_resolve",)
+
+    def __init__(self, resolve):
+        object.__setattr__(self, "_resolve", resolve)
+
+    def __getattr__(self, name):
+        return getattr(object.__getattribute__(self, "_resolve")(), name)
+
+
+gemini_client = _LazyClient(get_gemini_client)
+gemini_async_client = _LazyClient(lambda: get_gemini_client().aio)
 
 MODEL_ALIASES = {
     "gemini-1.5-flash-latest": DEFAULT_CHAT_MODEL,
