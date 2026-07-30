@@ -6,6 +6,7 @@ from sqlalchemy import (
     JSON,
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -180,4 +181,71 @@ class AuditLog(Base):
     source: Mapped[str] = mapped_column(String, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class WeatherSub(Base):
+    """A standing request for weather to arrive without being asked.
+
+    Three kinds, deliberately in one table rather than three: they share a
+    channel, a location, an enabled flag and a runner, and differ only in when
+    they fire.
+
+    * ``daily``            -- a digest at ``schedule_local_time`` in ``tz``.
+    * ``severe``           -- posted when ``thresholds`` are crossed.
+    * ``class_suspension`` -- posted when the heat index reaches an advisory level.
+
+    ``lat``/``lon`` are resolved once, at subscription time, and stored.  A
+    scheduler that geocoded on every run would make an extra network call per
+    subscription per tick, and would silently start posting about a different
+    place if the geocoder ever changed its mind about the name.  ``location`` is
+    kept alongside them for display.
+    """
+
+    __tablename__ = "weather_subs"
+    __table_args__ = (Index("ix_weather_subs_guild_id", "guild_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    guild_id: Mapped[str] = mapped_column(String, nullable=False)
+    channel_id: Mapped[str] = mapped_column(String, nullable=False)
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    location: Mapped[str] = mapped_column(String, nullable=False)
+    lat: Mapped[float] = mapped_column(Float, nullable=False)
+    lon: Mapped[float] = mapped_column(Float, nullable=False)
+    units: Mapped[str] = mapped_column(String, nullable=False, default="metric")
+    # "HH:MM" local wall-clock time, and the zone it is local to.  Stored as text
+    # rather than a Time column because it is a wall-clock intent ("08:00 in
+    # Manila"), not an instant -- across a DST change the same string is a
+    # different UTC moment, which is exactly the desired behaviour.
+    schedule_local_time: Mapped[str | None] = mapped_column(String, nullable=True)
+    tz: Mapped[str] = mapped_column(String, nullable=False, default="UTC")
+    thresholds: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # What was last posted, hashed.  A severe watcher runs every 15 minutes and
+    # the same storm is still there on the next tick; without this the channel
+    # would receive the same warning four times an hour until the weather changed.
+    last_fingerprint: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class BotUser(Base):
+    """A Discord user's own weather defaults, set with /setlocation.
+
+    Separate from ``web_users``: that table records dashboard sign-ins, and most
+    people who set a default city will never open the dashboard at all.
+    """
+
+    __tablename__ = "bot_users"
+
+    discord_id: Mapped[str] = mapped_column(String, primary_key=True)
+    default_city: Mapped[str | None] = mapped_column(String, nullable=True)
+    lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lon: Mapped[float | None] = mapped_column(Float, nullable=True)
+    units: Mapped[str] = mapped_column(String, nullable=False, default="metric")
+    timezone: Mapped[str | None] = mapped_column(String, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
