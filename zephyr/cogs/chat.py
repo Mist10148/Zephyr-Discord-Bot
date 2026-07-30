@@ -30,6 +30,7 @@ from zephyr.services.gemini import (
     generate_utility_response,
     send_response,
     MODEL_LIMITS,
+    DEFAULT_CHAT_MODEL,
 )
 
 
@@ -94,6 +95,15 @@ def _cache_image(prompt: str, files, text):
 class ChatCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+
+    def bridge_actions(self):
+        return {"ai.usage": self._bridge_usage}
+
+    async def _bridge_usage(self, guild, actor_id, args):
+        model = (args or {}).get("model") or DEFAULT_CHAT_MODEL
+        snapshot = await get_model_usage_snapshot(model)
+        cooldown = snapshot.get("cooldown_until")
+        return {"model": model, **snapshot, "cooldown_until": cooldown.isoformat() if cooldown else None}
 
     @app_commands.command(name="settings", description="Customize AI model and response format for this server/DM.")
     @app_commands.describe(
