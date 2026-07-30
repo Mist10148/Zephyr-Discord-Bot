@@ -5,6 +5,7 @@ this and later phases inherits them without opting in.
 """
 
 import hmac
+import time
 from functools import wraps
 from urllib.parse import urlsplit
 
@@ -12,6 +13,7 @@ from flask import current_app, g, request
 
 from website.api import api, error
 from website.session import SessionStoreError, load_session
+from zephyr.services import redis_client
 
 CSRF_HEADER = "X-Zephyr-CSRF"
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
@@ -55,6 +57,60 @@ def require_session(view):
         return view(*args, **kwargs)
 
     return wrapper
+
+
+def guild_scoped(view):
+    """Require a session and a guild the caller administers.
+
+    Wraps ``require_session``, so a single decorator covers the whole preamble
+    every per-guild endpoint was otherwise going to repeat: validate the id,
+    load the session, check membership, hand the view the guild.
+
+    The membership check is UX, not authorization -- the plan is explicit that
+    the bot re-validates the actor against its live Discord cache before doing
+    anything.  A stale session here can only ever over-restrict.
+    """
+
+    @wraps(view)
+    @require_session
+    def wrapper(guild_id, *args, **kwargs):
+        if not str(guild_id).isdigit():
+            return error("invalid_guild_id", "That is not a Discord guild id.", 400)
+        session = current_session()
+        guild = next((entry for entry in session.guilds if str(entry["id"]) == str(guild_id)), None)
+        if guild is None:
+            return error("forbidden", "You do not manage that server.", 403)
+        g.zephyr_guild = guild
+        return view(guild_id, *args, **kwargs)
+
+    return wrapper
+
+
+def rate_limit(bucket: str, *, limit: int, window: int) -> bool:
+    """Fixed-window counter, per session, in Redis.  True when within budget.
+
+    Fixed window rather than a sliding log because it is two commands and no
+    stored history; the worst case is 2x the limit across a window boundary,
+    which for "don't hammer the bot with skips" is entirely acceptable.
+
+    Shared across gunicorn workers by construction -- a per-process counter
+    would give each worker its own full budget and enforce nothing.  Fails open:
+    a Redis blip must not lock the player, and the session store already answers
+    503 for a genuine outage.
+    """
+    session = g.get("zephyr_session")
+    if session is None:
+        return True
+    key = f"zephyr:web:rl:{bucket}:{session.sid}:{int(time.time()) // window}"
+    try:
+        client = redis_client.get_client(current_app.config["REDIS_URL"])
+        used = client.incr(key)
+        if used == 1:
+            client.expire(key, window + 1)
+    except Exception as exc:
+        print(f"[RateLimit] Could not count {bucket}: {exc}")
+        return True
+    return used <= limit
 
 
 @api.before_request

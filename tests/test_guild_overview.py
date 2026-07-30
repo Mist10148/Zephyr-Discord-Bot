@@ -94,9 +94,11 @@ class TestDefaults:
         assert body["icon_url"].endswith("/icons/1/icon1.png?size=128")
         assert body["owner"] is True
 
-    def test_marked_read_only(self, app, client):
+    def test_marked_editable_now_that_patch_exists(self, app, client):
+        """Phase 3 shipped this false because nothing could write. PATCH
+        /guilds/<id>/settings is that writer, so the flag has to follow."""
         _sign_in(app, client)
-        assert client.get("/api/v1/guilds/1").get_json()["editable"] is False
+        assert client.get("/api/v1/guilds/1").get_json()["editable"] is True
 
 
 class TestStoredSettings:

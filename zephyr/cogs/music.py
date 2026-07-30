@@ -40,6 +40,7 @@ from zephyr.db.playlists import (
     save_playlist,
 )
 from zephyr.services import bridge
+from zephyr.services.spotify import is_spotify_url, parse_spotify_id, resolve_short_link
 from zephyr.utils.time_utils import _parse_user_time, _format_timestamp
 
 
@@ -59,10 +60,7 @@ def _is_url(search: str) -> bool:
 
 
 def _is_spotify_url(search: str) -> bool:
-    s = _sanitize_search(search).lower()
-    if s.startswith("spotify:"):
-        return True
-    return ("spotify.com" in s or "spotify.link" in s) and _is_url(s)
+    return is_spotify_url(_sanitize_search(search))
 
 
 def _is_youtube_url(search: str) -> bool:
@@ -80,33 +78,13 @@ def _is_audio_file_url(search: str) -> bool:
     return _is_url(search) and s.endswith((".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac", ".opus", ".wma"))
 
 
-def _resolve_spotify_short_link(url: str) -> str:
-    """Follow spotify.link (or similar) redirects to the real open.spotify.com URL."""
-    try:
-        resp = requests.head(url, allow_redirects=True, timeout=10)
-        resolved = str(resp.url)
-        if 'spotify.com' in resolved or resolved.startswith('spotify:'):
-            return resolved
-    except Exception as e:
-        print(f"[Spotify Resolve Error] {e}")
-    return url
-
-
-def _parse_spotify_id(url: str, kind: str) -> str | None:
-    """Extract a Spotify ID from a web URL, URI, or short link.
-
-    Module-level, next to the other predicates, because ``_play_core`` needs it
-    while classifying the input -- as a ``MusicCog`` staticmethod it was invisible
-    from module scope and every Spotify URL raised NameError there.
-    """
-    if url.startswith('spotify:'):
-        parts = url.split(':')
-        if len(parts) >= 3 and parts[1] == kind:
-            return parts[2].split('?')[0]
-        return None
-    # Web URL: https://open.spotify.com/<kind>/<id>?...
-    match = re.search(rf'/{kind}/([^/?#]+)', url)
-    return match.group(1) if match else None
+# These live in zephyr/services/spotify.py so the dashboard's playlist importer
+# can use them without importing this module -- which would drag discord.py,
+# yt-dlp and a voice stack into a Flask worker to parse a URL.  The module-level
+# aliases are kept because _play_core and the MusicCog staticmethods below both
+# reach them by these names.
+_resolve_spotify_short_link = resolve_short_link
+_parse_spotify_id = parse_spotify_id
 
 
 def _is_spotify_playlist_input(search: str) -> bool:

@@ -3,9 +3,10 @@
 import hashlib
 import json
 
-from flask import jsonify
+from flask import current_app, jsonify
 
 from website.api import api
+from zephyr.services import bridge
 from zephyr.utils.help_data import HELP_CATEGORIES
 
 
@@ -40,4 +41,32 @@ def commands():
 
 @api.get("/status")
 def status():
-    return jsonify({"bot": {"online": False}})
+    """Public liveness, read from the bot's heartbeat.
+
+    Absent means offline, and it means it within 30 seconds: the presence key's
+    TTL is the signal, so there is no stale-but-present state to disambiguate.
+    A deployment with no Redis reports offline too -- which is true, in the only
+    sense the web tier can observe.
+    """
+    redis_url = current_app.config["REDIS_URL"]
+    presence = None
+    if redis_url:
+        try:
+            presence = bridge.read_presence(url=redis_url)
+        except Exception as exc:
+            print(f"[Status] Could not read presence: {exc}")
+
+    if not presence or not presence.get("online"):
+        return jsonify({"bot": {"online": False, "guild_count": None, "latency_ms": None,
+                                "uptime_s": None, "published_at": (presence or {}).get("published_at")}})
+    return jsonify(
+        {
+            "bot": {
+                "online": True,
+                "guild_count": presence.get("guild_count"),
+                "latency_ms": presence.get("latency_ms"),
+                "uptime_s": presence.get("uptime_s"),
+                "published_at": presence.get("published_at"),
+            }
+        }
+    )

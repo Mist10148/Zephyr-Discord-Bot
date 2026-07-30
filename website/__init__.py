@@ -30,6 +30,12 @@ def _defaults() -> dict:
         "WEB_PUBLIC_URL": config.WEB_PUBLIC_URL,
         "REDIS_URL": config.REDIS_URL,
         "DATABASE_URL": config.DATABASE_URL,
+        # The dashboard's Spotify import reads metadata only -- no yt-dlp, no
+        # YouTube -- so it needs the same client-credentials pair the bot uses.
+        # Unset is a supported deployment: the endpoint answers 503 and every
+        # other playlist feature keeps working.
+        "SPOTIFY_CLIENT_ID": config.SPOTIFY_CLIENT_ID,
+        "SPOTIFY_CLIENT_SECRET": config.SPOTIFY_CLIENT_SECRET,
         "AUTH_COOKIE_NAME": config.AUTH_COOKIE_NAME,
         "CSRF_COOKIE_NAME": config.CSRF_COOKIE_NAME,
         "OAUTH_STATE_COOKIE_NAME": config.OAUTH_STATE_COOKIE_NAME,

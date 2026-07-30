@@ -165,6 +165,23 @@ class FakeRedis:
         self._guard()
         return sum(1 for key in keys if self._read(key) is not None)
 
+    def incr(self, key, amount=1):
+        self._guard()
+        value = int(self._read(key) or 0) + amount
+        # Preserves any existing expiry, like redis-py: INCR does not reset a
+        # TTL, which is what makes the rate limiter's fixed window a window.
+        _, expires_at = self.store.get(key, (None, None))
+        self.store[key] = (str(value), expires_at)
+        return value
+
+    def expire(self, key, ttl):
+        self._guard()
+        entry = self.store.get(key)
+        if entry is None:
+            return False
+        self.store[key] = (entry[0], time.monotonic() + ttl)
+        return True
+
     def pipeline(self, *_args, **_kwargs):
         return FakePipeline(self)
 
