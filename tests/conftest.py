@@ -9,8 +9,52 @@ methods, which is not worth a package with its own version drift.
 """
 
 import time
+from collections import deque
 
 import pytest
+
+
+class FakePubSub:
+    """An in-memory subscription with redis-py's ``get_message`` semantics.
+
+    ``get_message(timeout=t)`` blocks for up to ``t`` when the queue is empty,
+    which matters: without it, ``bridge.send_command``'s wait loop would busy-spin
+    for its whole timeout instead of parking.  Sleeping the requested interval
+    also lets a timeout test assert on real elapsed behaviour with a small
+    timeout rather than on a mock.
+    """
+
+    def __init__(self, client, ignore_subscribe_messages=False):
+        self._client = client
+        self._ignore_subscribe = ignore_subscribe_messages
+        self.channels: set[str] = set()
+        self.queue: deque[dict] = deque()
+        self.closed = False
+
+    def subscribe(self, *channels):
+        for channel in channels:
+            self.channels.add(channel)
+            self._client.subscribers.append(self)
+            if not self._ignore_subscribe:
+                self.queue.append({"type": "subscribe", "channel": channel, "data": 1})
+
+    def unsubscribe(self, *channels):
+        for channel in channels or tuple(self.channels):
+            self.channels.discard(channel)
+
+    def get_message(self, timeout=None):
+        if not self.queue and timeout:
+            time.sleep(timeout)
+        return self.queue.popleft() if self.queue else None
+
+    def deliver(self, channel, data):
+        self.queue.append({"type": "message", "channel": channel, "data": data})
+
+    def close(self):
+        self.closed = True
+        self.channels.clear()
+        if self in self._client.subscribers:
+            self._client.subscribers.remove(self)
 
 
 class FakePipeline:
@@ -44,6 +88,12 @@ class FakeRedis:
     def __init__(self):
         self.store: dict[str, tuple[str, float | None]] = {}
         self.raise_on: Exception | None = None
+        self.subscribers: list[FakePubSub] = []
+        # Called synchronously with (channel, data) on every publish. Tests use
+        # it to stand in for the bot: replying from inside publish() is also what
+        # proves send_command subscribed *before* it published -- a reply this
+        # early is dropped entirely if the subscription came second.
+        self.on_publish = None
 
     # -- test affordances ---------------------------------------------------
     def ttl_of(self, key: str) -> float | None:
@@ -117,6 +167,20 @@ class FakeRedis:
 
     def pipeline(self, *_args, **_kwargs):
         return FakePipeline(self)
+
+    def pubsub(self, ignore_subscribe_messages=False, **_kwargs):
+        return FakePubSub(self, ignore_subscribe_messages=ignore_subscribe_messages)
+
+    def publish(self, channel, data):
+        self._guard()
+        delivered = 0
+        for subscriber in list(self.subscribers):
+            if channel in subscriber.channels:
+                subscriber.deliver(channel, data)
+                delivered += 1
+        if self.on_publish is not None:
+            self.on_publish(channel, data)
+        return delivered
 
     def close(self):
         return None
