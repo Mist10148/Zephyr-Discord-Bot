@@ -68,6 +68,40 @@ def _is_audio_file_url(search: str) -> bool:
     return _is_url(search) and s.endswith((".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac", ".opus", ".wma"))
 
 
+def _resolve_spotify_short_link(url: str) -> str:
+    """Follow spotify.link (or similar) redirects to the real open.spotify.com URL."""
+    try:
+        resp = requests.head(url, allow_redirects=True, timeout=10)
+        resolved = str(resp.url)
+        if 'spotify.com' in resolved or resolved.startswith('spotify:'):
+            return resolved
+    except Exception as e:
+        print(f"[Spotify Resolve Error] {e}")
+    return url
+
+
+def _parse_spotify_id(url: str, kind: str) -> str | None:
+    """Extract a Spotify ID from a web URL, URI, or short link.
+
+    Module-level, next to the other predicates, because ``_play_core`` needs it
+    while classifying the input -- as a ``MusicCog`` staticmethod it was invisible
+    from module scope and every Spotify URL raised NameError there.
+    """
+    if url.startswith('spotify:'):
+        parts = url.split(':')
+        if len(parts) >= 3 and parts[1] == kind:
+            return parts[2].split('?')[0]
+        return None
+    # Web URL: https://open.spotify.com/<kind>/<id>?...
+    match = re.search(rf'/{kind}/([^/?#]+)', url)
+    return match.group(1) if match else None
+
+
+def _is_spotify_playlist_input(search: str) -> bool:
+    """A Spotify link that expands to many tracks: an album or a playlist."""
+    return _is_spotify_url(search) and not _parse_spotify_id(_sanitize_search(search), 'track')
+
+
 class VoiceError(Exception):
     pass
 
@@ -371,7 +405,12 @@ class SongQueue:
         self._queue.clear()
 
     def shuffle(self):
-        random.shuffle(self._queue)
+        # Shuffle a list, not the deque: random.shuffle does O(n) random access, which
+        # is O(n) per element on a deque and so O(n^2) overall -- noticeable on a
+        # few hundred tracks.
+        items = list(self._queue)
+        random.shuffle(items)
+        self._queue = deque(items)
 
     def remove(self, index: int):
         del self._queue[index]
@@ -520,12 +559,27 @@ class VoiceState:
             await self.next.wait()
 
     def play_next_song(self, error=None):
+        """Advance the queue once the current track finishes.
+
+        discord.py invokes this from its AudioPlayer *thread* (discord/player.py's
+        ``AudioPlayer.run`` calls ``_call_after`` in a ``finally``), not from the event
+        loop -- and ``asyncio.Event.set`` is not thread-safe, so it has to be
+        marshalled back onto the loop.  Calling it directly happened to work most of
+        the time, which is the worst kind of bug.
+
+        ``manual_stop`` is read cross-thread too; it is safe only because
+        ``restart_current`` sets it *before* calling ``voice.stop()``.
+        """
         if error:
             print(f"[FFmpeg Error] {error}")
         if self.manual_stop:
             self.manual_stop = False
             return
-        self.next.set()
+        try:
+            self.bot.loop.call_soon_threadsafe(self.next.set)
+        except RuntimeError:
+            # The loop is already closed (shutdown); nothing left to advance.
+            pass
 
     def skip(self):
         self.skip_votes.clear()
@@ -622,7 +676,9 @@ class MusicCog(commands.Cog):
         await interaction.response.defer()
         ctx = await self._interaction_ctx(interaction)
         state = self.get_voice_state(ctx)
-        state._247_enabled = True
+        # /join deliberately does NOT enable 24/7: it used to set _247_enabled here,
+        # which disabled the idle timeout permanently for any guild that ever ran the
+        # command, so the bot sat in an empty channel forever.  Use /247 for that.
         destination = interaction.user.voice.channel
         lock = self._get_voice_lock(interaction.guild.id)
 
@@ -753,7 +809,7 @@ class MusicCog(commands.Cog):
         try:
             ffmpeg_options = state.get_ffmpeg_options()
             search = _sanitize_search(search)
-            is_playlist_input = _is_youtube_playlist(search) or (_is_spotify_url(search) and not _parse_spotify_id(search, 'track'))
+            is_playlist_input = _is_youtube_playlist(search) or _is_spotify_playlist_input(search)
 
             if _is_spotify_url(search):
                 track_ids = await self._get_spotify_tracks(search)
@@ -1340,29 +1396,11 @@ class MusicCog(commands.Cog):
 
     # ---------------- Spotify Helpers ----------------
 
-    @staticmethod
-    def _resolve_spotify_short_link(url: str) -> str:
-        """Follow spotify.link (or similar) redirects to the real open.spotify.com URL."""
-        try:
-            resp = requests.head(url, allow_redirects=True, timeout=10)
-            resolved = str(resp.url)
-            if 'spotify.com' in resolved or resolved.startswith('spotify:'):
-                return resolved
-        except Exception as e:
-            print(f"[Spotify Resolve Error] {e}")
-        return url
-
-    @staticmethod
-    def _parse_spotify_id(url: str, kind: str) -> str | None:
-        """Extract a Spotify ID from a web URL, URI, or short link."""
-        if url.startswith('spotify:'):
-            parts = url.split(':')
-            if len(parts) >= 3 and parts[1] == kind:
-                return parts[2].split('?')[0]
-            return None
-        # Web URL: https://open.spotify.com/<kind>/<id>?...
-        match = re.search(rf'/{kind}/([^/?#]+)', url)
-        return match.group(1) if match else None
+    # The two former staticmethods now live at module level (see the predicates at
+    # the top of this file).  These aliases keep the ~4 existing `self.` call sites
+    # working without touching them.
+    _resolve_spotify_short_link = staticmethod(_resolve_spotify_short_link)
+    _parse_spotify_id = staticmethod(_parse_spotify_id)
 
     async def _get_spotify_tracks(self, url: str):
         url = _sanitize_search(url)
