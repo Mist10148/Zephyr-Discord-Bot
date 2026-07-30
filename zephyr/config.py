@@ -41,7 +41,11 @@ SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
 
 # Optional overrides
 FFMPEG_PATH_OVERRIDE = os.getenv("FFMPEG_PATH") or None
-WEB_APP_URL = os.getenv("WEB_APP_URL", "https://severely-musical-mollusk.ngrok-free.app/")
+# The link /use prints. Previously this defaulted to a hardcoded ngrok host belonging
+# to one developer's tunnel, so every fork and every deployment that forgot to set it
+# advertised a stranger's dead URL to its users. No default is better than a wrong
+# one: /use reports that it is unconfigured instead.
+WEB_APP_URL = os.getenv("WEB_APP_URL") or None
 FLASK_HOST = os.getenv("FLASK_HOST", "0.0.0.0")
 FLASK_PORT = int(os.getenv("FLASK_PORT", "5000"))
 
@@ -70,9 +74,10 @@ DISCORD_CLIENT_ID = os.getenv("DISCORD_CLIENT_ID") or None
 DISCORD_CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET") or None
 
 # Public origin of the dashboard.  Render injects RENDER_EXTERNAL_URL for us.
-# WEB_APP_URL is deliberately NOT consulted here: its default is a hardcoded
-# ngrok host, so inheriting it would silently build a redirect_uri that does not
-# match the Discord application and fail with an opaque invalid_redirect_uri.
+# WEB_APP_URL is deliberately NOT consulted here even though it looks similar: it is
+# the /use link, which may legitimately point at a different host (or nowhere), and a
+# redirect_uri that does not byte-match the Discord application fails with an opaque
+# invalid_redirect_uri.  Keep the two independent.
 WEB_PUBLIC_URL = (
     os.getenv("WEB_PUBLIC_URL") or os.getenv("RENDER_EXTERNAL_URL") or f"http://127.0.0.1:{PORT}"
 ).rstrip("/")

@@ -42,6 +42,9 @@ def _defaults() -> dict:
         "SPA_DEFAULT_PATH": config.SPA_DEFAULT_PATH,
         "ENABLED_COGS": list(config.ENABLED_COGS),
         "TRUST_PROXY": config.TRUST_PROXY,
+        # HSTS is only safe to send from an https deployment; pinning localhost to
+        # https in the browser for a year would be a self-inflicted outage.
+        "FORCE_HTTPS_HEADERS": config.WEB_PUBLIC_URL.startswith("https://"),
     }
 
 
@@ -59,9 +62,11 @@ def create_app(overrides: Mapping[str, object] | None = None) -> Flask:
 
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
+    from website import security
     from website.api import api
     from website.spa import spa
 
+    security.install(app)
     app.register_blueprint(api, url_prefix="/api/v1")
     app.register_blueprint(spa)
 

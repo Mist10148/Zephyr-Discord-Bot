@@ -24,13 +24,16 @@ def _reload_config(monkeypatch, **env):
         "WEB_PUBLIC_URL",
         "RENDER_EXTERNAL_URL",
         "DISCORD_REDIRECT_URI",
+        "WEB_APP_URL",
     ):
         monkeypatch.delenv(name, raising=False)
     for name, value in env.items():
         monkeypatch.setenv(name, value)
-    # load_dotenv does not override variables that are already set, but the repo's
-    # real .env could still supply one we deleted, so neutralise it.
-    monkeypatch.setattr("zephyr.config.load_dotenv", lambda *a, **k: None, raising=False)
+    # Neutralise the repo's real .env, which would otherwise re-supply a variable we
+    # just deleted. Patch it on the *dotenv* module, not on zephyr.config: reload
+    # re-executes `from dotenv import load_dotenv`, which rebinds the name and would
+    # discard a patch applied to zephyr.config.
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)
     return importlib.reload(config)
 
 
@@ -103,15 +106,22 @@ class TestFullyConfigured:
         assert config.DISCORD_REDIRECT_URI == "https://zephyr.onrender.com/api/v1/auth/callback"
 
     def test_web_app_url_is_never_used_as_the_oauth_origin(self, monkeypatch):
-        """Its default is a hardcoded ngrok host Discord would reject."""
+        """The /use link may point anywhere; a redirect URI must byte-match Discord."""
         config = _reload_config(
             monkeypatch,
             DISCORD_CLIENT_ID="cid",
             DISCORD_CLIENT_SECRET="secret",
             REDIS_URL="redis://localhost:6379/0",
+            WEB_APP_URL="https://somewhere-else.example.com/",
         )
-        assert "ngrok" not in config.DISCORD_REDIRECT_URI
+        assert "somewhere-else" not in config.DISCORD_REDIRECT_URI
         assert config.DISCORD_REDIRECT_URI.startswith("http://127.0.0.1")
+
+    def test_the_use_link_has_no_default(self, monkeypatch):
+        """It used to default to one developer's ngrok tunnel, so every fork
+        advertised a stranger's dead URL to its users."""
+        config = _reload_config(monkeypatch)
+        assert config.WEB_APP_URL is None
 
     def test_a_local_origin_leaves_the_cookie_insecure(self, monkeypatch):
         config = _reload_config(

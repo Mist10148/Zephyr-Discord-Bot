@@ -50,30 +50,33 @@ Zephyr-Discord-Bot/
 ├── run_bot.py                # start the Discord bot
 ├── run_web.py                # start the Flask website (local dev)
 ├── wsgi.py                   # production WSGI entry point
-├── aws_lambda_handler.py     # AWS Lambda entry point (website)
-├── vercel_handler.py         # Vercel serverless entry point (website)
 ├── Dockerfile                # container image for bot or website
-├── docker-compose.yml        # local orchestration: Redis + bot + website
+├── docker-compose.yml        # local orchestration: Postgres + Redis + bot + website
 ├── Procfile                  # Render/Heroku process definitions
 ├── render.yaml               # Render Blueprint
-├── vercel.json               # Vercel routing config
+├── alembic.ini               # migration config (see docs/DEPLOYMENT.md)
 ├── requirements.txt
 ├── .env.example              # template for your secrets
-├── settings.json             # persisted per-context AI settings (auto-managed)
+├── settings.json             # legacy per-context AI settings (superseded by the database)
 ├── libopus-0.x64.dll         # Opus codec (Windows voice)
 ├── ffmpeg/                   # FFmpeg binaries (not committed — see Requirements)
+├── scripts/                  # one-off tools (settings import, icon generation)
 ├── zephyr/                   # bot package
 │   ├── config.py             # loads .env + constants
 │   ├── client.py             # bot instance, cog loading, events (on_message, on_ready…)
 │   ├── core/                 # opus loader + ffmpeg resolver
+│   ├── db/                   # SQLAlchemy models, engine, Alembic migrations
 │   ├── utils/                # weather/time helpers + pagination
-│   ├── services/             # AI engine + portable storage
-│   │   ├── gemini.py
-│   │   └── storage.py
+│   ├── services/             # AI engine, portable storage, Redis client, bot↔web bridge
 │   └── cogs/                 # weather, music, chat, voice_tts, help
-└── website/
-    ├── app.py                # Flask weather app
-    └── templates/index.html
+└── website/                  # Flask API + React SPA
+    ├── __init__.py           # create_app factory
+    ├── api/                  # /api/v1 blueprint (auth, me, guilds, weather, commands)
+    ├── security.py           # CSP + security headers
+    ├── session.py            # Redis-backed sessions
+    ├── spa.py                # serves the built SPA
+    ├── static/               # Vite build output (gitignored)
+    └── frontend/             # React + TypeScript + Vite source
 ```
 
 ---
@@ -189,19 +192,20 @@ panel lets you search the weather for any city.
 
 Zephyr can run locally **or** in the cloud. See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for the full guide.
 
-> **Important:** the Discord bot needs a persistent process and cannot run on serverless platforms
-> such as Vercel or AWS Lambda. The Flask website can.
+> **Important:** neither half of Zephyr runs on serverless. The bot needs a persistent process for
+> its gateway connection, and the website needs a persistent Redis connection for dashboard
+> sessions. Serverless support (`vercel.json`, `vercel_handler.py`, `aws_lambda_handler.py`) was
+> removed accordingly.
 
 ### Quick reference
 
 | Platform | Bot | Website | Notes |
 |----------|-----|---------|-------|
-| **Docker / Docker Compose** | ✅ | ✅ | `Dockerfile` + `docker-compose.yml` included. |
+| **Docker / Docker Compose** | ✅ | ✅ | `Dockerfile` + `docker-compose.yml`, with Postgres and Redis included. |
 | **Render** | ✅ | ✅ | Use the included `render.yaml` Blueprint. |
 | **Heroku** | ✅ | ✅ | Use the included `Procfile`. |
-| **Vercel** | ❌ | ✅ | Use `vercel.json` + `vercel_handler.py`. |
-| **AWS Lambda** | ❌ | ✅ | Use `aws_lambda_handler.py`. |
 | **AWS EC2 / ECS / Fargate** | ✅ | ✅ | Use the `Dockerfile`. |
+| **Vercel / AWS Lambda** | ❌ | ❌ | Serverless cannot hold the gateway or session connections. |
 
 ### Render one-click deploy
 
@@ -209,9 +213,22 @@ Zephyr can run locally **or** in the cloud. See [`docs/DEPLOYMENT.md`](docs/DEPL
 2. In Render, click **New +** → **Blueprint** and connect the repo.
 3. Fill in the environment variables in the Render dashboard.
 
-Render will create the website, the bot worker, and a Redis instance automatically.
+Render will create the website, the bot worker, a Postgres database, and a Redis instance
+automatically. For the dashboard, also set `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET` on the
+**web** service — see [Discord OAuth setup](docs/DEPLOYMENT.md#discord-oauth-setup).
 
 > **Note:** Render background workers require a paid plan. The web service can use Render's free tier, but it will spin down after inactivity.
+
+### Before going live
+
+- **Set `WEB_APP_URL`** to your deployed website, or `/use` will report that it is unconfigured.
+- **Run migrations** on an existing database: `alembic upgrade head` (a fresh one is created
+  automatically). See [Database migrations](docs/DEPLOYMENT.md#database-migrations).
+- **Serve over HTTPS.** Session cookies are marked `Secure` automatically for `https://` origins,
+  and HSTS is only sent from one.
+- The website sends a Content-Security-Policy that allows images from `cdn.discordapp.com`. If you
+  add another image host, update [`website/security.py`](website/security.py) or those images will
+  be blocked.
 
 ---
 
