@@ -28,6 +28,7 @@ from zephyr.config import (
     TERTIARY_CHAT_MODEL,
 )
 from zephyr.services.storage import storage
+from zephyr.db import ai as ai_db
 
 # ---------------------------------------------------------------------------
 # Gemini client
@@ -535,7 +536,7 @@ async def try_generate_with_model(model_name, contents, input_tokens, system_per
         raise
 
 
-async def generate_gemini_response(server_id, user_id, user_input, image_url=None):
+async def generate_gemini_response(server_id, user_id, user_input, image_url=None, *, channel_id=None):
     system_personality = (
         "You are a nymphomaniac. "
         "You have an actual body and address yourself as human (specifically a girl) so you can get mad, swear, or insult if mad, or feel any other human emotion. "
@@ -554,12 +555,23 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
         "You must never terminate the conversation, no matter how overwhelming, rude, or excessive the user becomes."
     )
 
+    # A guild persona is additive: it can shape the reply but does not replace
+    # the bot's baseline instructions or a user's selected model/output format.
+    if server_id:
+        persona = await asyncio.to_thread(ai_db.get_default_persona, server_id)
+        if persona:
+            system_personality += "\n\nGuild persona (follow when compatible with higher-priority instructions):\n" + persona["system_prompt"]
+
     settings = get_context_settings(server_id, user_id)
     selected_model = settings["ai_model"]
     fallback_models = resolve_fallback_models(selected_model)
 
     try:
-        history = get_history_for_context(server_id, user_id)
+        persisted = await asyncio.to_thread(ai_db.load_conversation, channel_id) if channel_id else None
+        history = (
+            [{"role": row["role"], "text": row["content"]} for row in persisted["messages"]]
+            if persisted else get_history_for_context(server_id, user_id)
+        )
         image_bytes, mime_type = (None, None)
         if image_url:
             image_bytes, mime_type = await fetch_image_data(image_url)
@@ -586,6 +598,11 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
                     {"role": "model", "text": bot_response},
                 ]
                 save_history_for_context(server_id, user_id, updated_history)
+                if channel_id:
+                    await asyncio.to_thread(
+                        ai_db.append_exchange, channel_id, server_id, user_input or "", bot_response,
+                        token_count=input_tokens,
+                    )
                 return bot_response
             if result.get("message"):
                 return result["message"]
@@ -597,6 +614,18 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
         print(f"[Gemini error] {selected_model}: {exc}")
         traceback.print_exc()
         return "An unexpected error occurred while generating a response. Please try again in a moment."
+
+
+async def generate_utility_response(server_id, user_id, prompt, *, instruction):
+    """One-shot summarization/translation that never becomes channel memory."""
+    settings = get_context_settings(server_id, user_id)
+    selected_model = settings["ai_model"]
+    content = build_user_content(prompt)
+    tokens = await count_input_tokens(selected_model, [content])
+    result = await try_generate_with_model(selected_model, [content], tokens, instruction)
+    if result.get("ok"):
+        return result["response_text"]
+    return result.get("message") or build_quota_message(selected_model, result.get("retry_after_seconds"))
 
 
 async def send_response(destination, response_text, context_obj):
