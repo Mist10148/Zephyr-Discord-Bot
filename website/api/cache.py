@@ -49,3 +49,9 @@ class TTLCache:
         finally:
             with self._lock:
                 self._waiters.pop(key, waiter).set()
+
+    def clear(self) -> None:
+        """Drop every entry.  A process-wide cache is otherwise shared between
+        tests, where one test's forecast silently answers the next one's."""
+        with self._lock:
+            self._items.clear()

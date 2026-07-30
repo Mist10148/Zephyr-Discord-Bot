@@ -231,6 +231,21 @@ def inert_env(monkeypatch):
     monkeypatch.setattr("zephyr.config.AUTH_ENABLED", False, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def empty_api_caches():
+    """The API's TTLCaches are module-level singletons, so without this one
+    test's forecast answers the next one's request and a patched loader is
+    never called.  Cheap enough to run everywhere rather than remembering
+    where it matters."""
+    from website.api import weather, weather_subs
+
+    for cache in (weather.cache, weather_subs.cache):
+        cache.clear()
+    yield
+    for cache in (weather.cache, weather_subs.cache):
+        cache.clear()
+
+
 @pytest.fixture
 def fake_redis(monkeypatch):
     """Route every get_client() call at one shared FakeRedis.

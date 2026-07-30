@@ -32,4 +32,5 @@ from website.api import (  # noqa: E402,F401
     player,
     playlists,
     weather,
+    weather_subs,
 )
