@@ -15,9 +15,11 @@ from zephyr.cogs.music import (
     _sanitize_search,
     _is_url,
     _is_spotify_url,
+    _is_spotify_playlist_input,
     _is_youtube_url,
     _is_youtube_playlist,
     _is_audio_file_url,
+    _parse_spotify_id,
 )
 
 
@@ -75,6 +77,56 @@ class TestInputHelpers:
         assert _is_audio_file_url("https://example.com/song.flac") is True
         assert _is_audio_file_url("https://example.com/song.txt") is False
         assert _is_audio_file_url("plain text") is False
+
+
+class TestSpotifyIdParsing:
+    """These are the tests that were impossible before the helpers moved to module
+    scope, and their absence is exactly why /play crashed on every Spotify link."""
+
+    def test_parses_web_urls(self):
+        assert _parse_spotify_id("https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT", "track") == "4cOdK2wGLETKBW3PvgPWqT"
+        assert _parse_spotify_id("https://open.spotify.com/album/1DFixLWuPkv3KT3TnV35m3", "album") == "1DFixLWuPkv3KT3TnV35m3"
+        assert _parse_spotify_id("https://open.spotify.com/playlist/37i9dQZF1DX", "playlist") == "37i9dQZF1DX"
+
+    def test_strips_query_strings(self):
+        assert _parse_spotify_id("https://open.spotify.com/track/abc?si=xyz", "track") == "abc"
+
+    def test_parses_uris(self):
+        assert _parse_spotify_id("spotify:track:abc123", "track") == "abc123"
+        assert _parse_spotify_id("spotify:playlist:def456", "playlist") == "def456"
+        assert _parse_spotify_id("spotify:track:abc?si=x", "track") == "abc"
+
+    def test_returns_none_for_the_wrong_kind(self):
+        assert _parse_spotify_id("spotify:track:abc", "playlist") is None
+        assert _parse_spotify_id("https://open.spotify.com/track/abc", "album") is None
+
+    def test_returns_none_for_a_malformed_uri(self):
+        assert _parse_spotify_id("spotify:track", "track") is None
+        assert _parse_spotify_id("spotify:", "track") is None
+
+    def test_is_spotify_playlist_input(self):
+        """A Spotify link is 'playlist input' when it expands to many tracks."""
+        assert _is_spotify_playlist_input("https://open.spotify.com/album/abc") is True
+        assert _is_spotify_playlist_input("https://open.spotify.com/playlist/abc") is True
+        assert _is_spotify_playlist_input("spotify:album:abc") is True
+        assert _is_spotify_playlist_input("https://open.spotify.com/track/abc") is False
+        assert _is_spotify_playlist_input("spotify:track:abc") is False
+
+    def test_is_spotify_playlist_input_ignores_non_spotify(self):
+        assert _is_spotify_playlist_input("https://www.youtube.com/playlist?list=PLabc") is False
+        assert _is_spotify_playlist_input("plain text") is False
+
+    def test_tolerates_discord_markdown_brackets(self):
+        """Users paste <https://...> to suppress embeds; _play_core sanitises first."""
+        assert _is_spotify_playlist_input("<https://open.spotify.com/album/abc>") is True
+        assert _is_spotify_playlist_input("<https://open.spotify.com/track/abc>") is False
+
+    def test_the_cog_aliases_still_resolve(self):
+        """~4 call sites still say self._parse_spotify_id."""
+        from zephyr.cogs.music import MusicCog
+
+        assert MusicCog._parse_spotify_id("spotify:track:abc", "track") == "abc"
+        assert callable(MusicCog._resolve_spotify_short_link)
 
 
 class TestCreateSource:
