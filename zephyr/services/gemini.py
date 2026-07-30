@@ -118,6 +118,7 @@ model_usage_totals = defaultdict(lambda: {
 
 MAX_HISTORY_MESSAGES = 10
 MAX_HISTORY_INPUT_TOKENS = 8000
+MEMORY_COMPACTION_MESSAGES = 20
 PACIFIC_TZ = ZoneInfo("America/Los_Angeles")
 
 
@@ -568,6 +569,8 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
 
     try:
         persisted = await asyncio.to_thread(ai_db.load_conversation, channel_id) if channel_id else None
+        if persisted and persisted.get("rolling_summary"):
+            system_personality += "\n\nEarlier channel context summary:\n" + persisted["rolling_summary"]
         history = (
             [{"role": row["role"], "text": row["content"]} for row in persisted["messages"]]
             if persisted else get_history_for_context(server_id, user_id)
@@ -603,6 +606,21 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
                         ai_db.append_exchange, channel_id, server_id, user_input or "", bot_response,
                         token_count=input_tokens,
                     )
+                    # Keep durable context bounded. The generated summary retains
+                    # the older discussion without treating ordinary channel chat
+                    # as memory or repeatedly sending an unbounded transcript.
+                    conversation = await asyncio.to_thread(ai_db.load_conversation, channel_id)
+                    if conversation and len(conversation["messages"]) > MEMORY_COMPACTION_MESSAGES:
+                        prior = conversation.get("rolling_summary") or ""
+                        old = conversation["messages"][:-MAX_HISTORY_MESSAGES]
+                        transcript = "\n".join(f"{row['role']}: {row['content']}" for row in old)
+                        summary = await generate_utility_response(
+                            server_id, user_id, transcript,
+                            instruction="Create a concise factual memory summary for a future assistant. Preserve decisions, preferences, names, and open questions. Do not add advice.",
+                        )
+                        if prior:
+                            summary = f"{prior}\n\n{summary}"
+                        await asyncio.to_thread(ai_db.compact_conversation, channel_id, summary)
                 return bot_response
             if result.get("message"):
                 return result["message"]

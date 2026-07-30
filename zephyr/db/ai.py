@@ -92,6 +92,22 @@ def append_exchange(channel_id, guild_id, user_text, model_text, *, token_count=
         conn.execute(update(AIConversation).where(AIConversation.id == conversation_id).values(token_count=max(0, int(token_count))))
 
 
+def compact_conversation(channel_id, summary, *, keep_messages=10, database_url=None):
+    """Atomically retain the recent dialogue and replace older turns by a summary."""
+    engine = get_engine(database_url)
+    with engine.begin() as conn:
+        conversation = conn.execute(select(AIConversation).where(AIConversation.channel_id == str(channel_id))).mappings().first()
+        if not conversation:
+            return False
+        rows = conn.execute(select(AIMessage.id).where(AIMessage.conversation_id == conversation["id"]).order_by(AIMessage.created_at, AIMessage.id)).all()
+        old_ids = [row.id for row in rows[:-keep_messages]]
+        if not old_ids:
+            return False
+        conn.execute(delete(AIMessage).where(AIMessage.id.in_(old_ids)))
+        conn.execute(update(AIConversation).where(AIConversation.id == conversation["id"]).values(rolling_summary=summary, token_count=max(0, len(summary) // 4)))
+        return True
+
+
 def list_conversations(guild_id, *, database_url=None):
     statement = select(AIConversation.channel_id, AIConversation.rolling_summary, AIConversation.token_count, AIConversation.updated_at, func.count(AIMessage.id).label("message_count")).join(AIMessage, AIMessage.conversation_id == AIConversation.id, isouter=True).where(AIConversation.guild_id == str(guild_id)).group_by(AIConversation.id).order_by(AIConversation.updated_at.desc())
     with get_engine(database_url).connect() as conn:
