@@ -51,3 +51,6 @@ export type Alert = { kind: SubKind; title: string; summary: string; fields: Ale
 // response. `duplicate` is why a preview can show an alert the channel will not
 // receive: the same fingerprint was posted last time.
 export type SubPreview = { id: number; kind: SubKind; alert: Alert | null; would_post: boolean; duplicate: boolean }
+export type Persona = { id: number; guild_id: string; name: string; system_prompt: string; is_default: boolean; created_at: string | null; updated_at: string | null }
+export type AIConversation = { channel_id: string; rolling_summary: string | null; token_count: number; updated_at: string | null; message_count: number }
+export type AIUsage = { model: string; rpm: number; tpm: number; rpd: number; cooldown_until: string | null; totals: { prompt_tokens: number; output_tokens: number; total_tokens: number; successful_requests: number; session_requests: number } }

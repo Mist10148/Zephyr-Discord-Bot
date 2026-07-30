@@ -25,6 +25,7 @@ def api_method_not_allowed(_error):
 # attach when the module is imported.
 from website.api import (  # noqa: E402,F401
     auth,
+    ai,
     commands,
     guard,
     guilds,

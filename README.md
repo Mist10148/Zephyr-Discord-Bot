@@ -247,9 +247,9 @@ automatically. For the dashboard, also set `DISCORD_CLIENT_ID` and `DISCORD_CLIE
 
 ## 🗺️ Web dashboard
 
-> **Status: phases 0–5 shipped.** Sign-in, the servers you administer, editable settings, a live
-> music remote and weather subscriptions all work today. Still to come: the AI features (phase 6)
-> and hardening (phase 7).
+> **Status: phases 0–6 shipped.** Sign-in, the servers you administer, editable settings, a live
+> music remote, weather subscriptions, and AI personas/memory all work today. Still to come:
+> hardening (phase 7).
 
 - **Public** — a weather PWA with a ⌘K palette over every command, installable to a home screen.
 - **Auth** — Discord OAuth2; you see and manage only the servers you already administer.

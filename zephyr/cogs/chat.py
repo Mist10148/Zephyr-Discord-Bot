@@ -27,8 +27,10 @@ from zephyr.services.gemini import (
     build_progress_bar,
     format_datetime_for_user,
     generate_gemini_response,
+    generate_utility_response,
     send_response,
     MODEL_LIMITS,
+    DEFAULT_CHAT_MODEL,
 )
 
 
@@ -93,6 +95,15 @@ def _cache_image(prompt: str, files, text):
 class ChatCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+
+    def bridge_actions(self):
+        return {"ai.usage": self._bridge_usage}
+
+    async def _bridge_usage(self, guild, actor_id, args):
+        model = (args or {}).get("model") or DEFAULT_CHAT_MODEL
+        snapshot = await get_model_usage_snapshot(model)
+        cooldown = snapshot.get("cooldown_until")
+        return {"model": model, **snapshot, "cooldown_until": cooldown.isoformat() if cooldown else None}
 
     @app_commands.command(name="settings", description="Customize AI model and response format for this server/DM.")
     @app_commands.describe(
@@ -212,8 +223,39 @@ class ChatCog(commands.Cog):
         if not final_message and not image_url:
             await interaction.followup.send("Please provide a message, an image, or a text file.", ephemeral=True)
             return
-        response = await generate_gemini_response(server_id, user_id, final_message, image_url)
+        response = await generate_gemini_response(server_id, user_id, final_message, image_url, channel_id=interaction.channel_id)
         await send_response(interaction.followup, response, interaction)
+
+    @app_commands.command(name="summarize", description="Privately summarize recent messages in this channel.")
+    @app_commands.describe(messages="How many recent messages to summarize (5-100)")
+    async def summarize(self, interaction: discord.Interaction, messages: app_commands.Range[int, 5, 100] = 20):
+        await interaction.response.defer(ephemeral=True)
+        channel = interaction.channel
+        if not hasattr(channel, "history"):
+            await interaction.followup.send("This channel does not support message history.", ephemeral=True)
+            return
+        lines = []
+        async for message in channel.history(limit=messages, oldest_first=True):
+            if message.content:
+                lines.append(f"{message.author.display_name}: {message.content}")
+        if not lines:
+            await interaction.followup.send("There are no text messages to summarize.", ephemeral=True)
+            return
+        response = await generate_utility_response(
+            interaction.guild_id, interaction.user.id, "\n".join(lines),
+            instruction="Summarize the supplied Discord discussion accurately and concisely. Do not invent details.",
+        )
+        await interaction.followup.send(response[:1900], ephemeral=True)
+
+    @app_commands.command(name="translate", description="Translate text into another language.")
+    @app_commands.describe(text="Text to translate", target_language="Language to translate into")
+    async def translate(self, interaction: discord.Interaction, text: str, target_language: str):
+        await interaction.response.defer()
+        response = await generate_utility_response(
+            interaction.guild_id, interaction.user.id, text,
+            instruction=f"Translate the user's text into {target_language}. Return only the translation and preserve meaning.",
+        )
+        await interaction.followup.send(response[:1900])
 
     @app_commands.command(name="generate", description="Generate an image")
     async def generate(self, interaction: discord.Interaction, prompt: str):

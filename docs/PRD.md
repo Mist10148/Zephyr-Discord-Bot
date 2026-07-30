@@ -6,7 +6,7 @@
 
 > **Shipped through Phase 5:** database-backed settings, the React dashboard with Discord OAuth,
 > the public weather PWA, the bot↔web bridge with persistent playlists and a music remote, and
-> weather subscriptions. **Remaining:** Phase 6 (AI summarization, memory, personas) and Phase 7
+> weather subscriptions, AI summarization, memory, personas, and translation. **Remaining:** Phase 7
 > (hardening). Architecture, data model, API surface, phased delivery and the running log of
 > deliberate departures live in [`WEB_DASHBOARD_PLAN.md`](WEB_DASHBOARD_PLAN.md).
 > Sections 6–11 below describe the **currently shipped** product.
@@ -332,8 +332,9 @@ Detailed scope per phase: [`WEB_DASHBOARD_PLAN.md`](WEB_DASHBOARD_PLAN.md) §6.
       `audit_log` writers deferred from Phase 3 land here too.*
 - [x] **Phase 5** — Weather subscriptions: daily digests, severe-weather watcher, and
       class-suspension auto-announce; `/setlocation` per-user default city.
-- [ ] **Phase 6** — `/summarize`, per-channel conversation memory, per-guild personas,
-      `/translate`.
+- [x] **Phase 6** — `/summarize`, per-channel conversation memory, per-guild personas,
+      `/translate`, dashboard persona management, usage, and memory purge. Only exchanges directed
+      at Zephyr are persisted; summaries are ephemeral to the invoker.
 - [ ] **Phase 7** — Accessibility, performance, rate limiting, audit log, tests,
       deployment cleanup.
 

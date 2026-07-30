@@ -492,3 +492,10 @@ code differs and why. It is appended to as phases land, and §§1–7 are not re
 44. **The Phase 7 a11y item for the widget grid was paid early for the playlist editor.** Its drag
     handle is a real focusable button carrying dnd-kit's keyboard sensor, so reordering works
     without a pointer. The widget grid itself is still untouched.
+
+### Phase 6 — AI
+
+45. **Only directed exchanges become memory.** Zephyr stores messages addressed to it and its
+    replies per channel; ordinary channel chat is never retained. `/summarize` reads recent visible
+    messages on demand and returns an ephemeral result, while `/translate` is one-shot. Guild
+    managers can inspect and irreversibly purge stored exchanges, and select a default persona.
