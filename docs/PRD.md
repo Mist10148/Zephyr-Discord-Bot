@@ -70,39 +70,42 @@ project-root/
 ├── run_bot.py              # Discord bot entry point
 ├── run_web.py              # Flask website entry point (local dev)
 ├── wsgi.py                 # Production WSGI entry point
-├── aws_lambda_handler.py   # AWS Lambda entry point (website)
-├── vercel_handler.py       # Vercel serverless entry point (website)
 ├── Dockerfile              # Container image for bot or website
-├── docker-compose.yml      # Local orchestration: Redis + bot + website
+├── docker-compose.yml      # Local orchestration: Postgres + Redis + bot + website
 ├── Procfile                # Render/Heroku process definitions
 ├── render.yaml             # Render Blueprint
-├── vercel.json             # Vercel routing config
+├── alembic.ini             # Migration config
 ├── requirements.txt
 ├── .env.example            # Secret/template file
-├── settings.json           # Persisted per-context AI settings (local file)
+├── settings.json           # Legacy per-context AI settings (superseded by the database)
 ├── ffmpeg/                 # FFmpeg binaries (not committed)
 ├── libopus-0.x64.dll       # Windows Opus codec
+├── scripts/                # One-off tools (settings import, icon generation)
 ├── zephyr/                 # Bot package
 │   ├── config.py           # Loads .env + constants
 │   ├── client.py           # Bot subclass, cog loading, slash sync, events
 │   ├── core/               # opus_loader, ffmpeg resolver
+│   ├── db/                 # SQLAlchemy models, lazy engine, Alembic migrations
 │   ├── cogs/               # Feature cogs
 │   │   ├── weather.py
 │   │   ├── music.py
 │   │   ├── voice_tts.py
 │   │   ├── chat.py
 │   │   └── help.py
-│   ├── services/           # AI engine + portable storage
-│   │   ├── gemini.py
-│   │   └── storage.py
+│   ├── services/           # AI engine, storage, Redis client, bot↔web bridge
 │   └── utils/              # Shared helpers
 │       ├── weather_utils.py
 │       ├── pagination.py
 │       ├── help_data.py
 │       └── time_utils.py
-└── website/                # Flask app
-    ├── app.py
-    └── templates/index.html
+└── website/                # Flask API + React SPA
+    ├── __init__.py         # create_app factory
+    ├── api/                # /api/v1 blueprint
+    ├── security.py         # CSP + security headers
+    ├── session.py          # Redis-backed sessions
+    ├── spa.py              # Serves the built SPA
+    ├── static/             # Vite build output (gitignored)
+    └── frontend/           # React + TypeScript + Vite source
 ```
 
 ### Cog loading
@@ -112,9 +115,10 @@ project-root/
 - **Bot (local):** `python run_bot.py` → validates config → runs `ZephyrBot`.
 - **Website (local):** `python run_web.py` → validates web config → runs Flask on `FLASK_HOST:FLASK_PORT`.
 - **Website (production WSGI):** `gunicorn wsgi:app`.
-- **Website (Vercel):** `vercel_handler.py` exposes the Flask `app` callable.
-- **Website (AWS Lambda):** `aws_lambda_handler.lambda_handler` proxies requests via `awsgi`.
 - **Container:** `Dockerfile` installs Linux FFmpeg/Opus; default command runs the website; override to run the bot.
+- **Serverless: not supported.** The bot needs a persistent gateway connection and the website needs a
+  persistent Redis connection for sessions, so neither fits a request-scoped function. The former
+  Vercel and Lambda handlers were removed.
 
 ---
 

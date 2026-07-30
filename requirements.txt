@@ -26,8 +26,7 @@ alembic>=1.13.0              # schema migrations (not run automatically; see doc
 
 # ── Production / cloud deployment ──
 gunicorn>=23.0.0             # production WSGI server for Render/Heroku/Docker
-redis>=5.0.0                 # optional shared settings storage (REDIS_URL)
-apig-wsgi>=2.20.0            # AWS Lambda adapter for Flask (pure Python)
+redis>=5.0.0                 # shared AI settings, and required for dashboard sessions
 
 # ── Optional: only needed if you add back the /generate `image_generator` module ──
 # (Imported in the original but unused; kept here so the environment is a superset.)

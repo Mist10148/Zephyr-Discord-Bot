@@ -99,11 +99,22 @@ async def windspeed(ctx, *, city: str = "Iloilo"):
     await ctx.send(embed=embed)
 
 
-@commands.command()
-async def use(ctx):
+def _web_app_embed() -> discord.Embed:
+    """The /use link, or an honest message when the deployment has not set one."""
+    if not WEB_APP_URL:
+        return discord.Embed(
+            title="Web app not configured",
+            description="This bot has no web app URL set. Ask the owner to set `WEB_APP_URL`.",
+            color=discord.Color.orange(),
+        )
     embed = discord.Embed(title="Weather App Link", color=discord.Color.green())
     embed.description = f"[Click here to access the app]({WEB_APP_URL})"
-    await ctx.send(embed=embed)
+    return embed
+
+
+@commands.command()
+async def use(ctx):
+    await ctx.send(embed=_web_app_embed())
 
 
 @commands.command(name="helpweather")
@@ -570,8 +581,7 @@ class WeatherCog(commands.Cog):
 
     @app_commands.command(name="use", description="Provides a link to the web application version of this bot.")
     async def slash_use(self, interaction: discord.Interaction):
-        embed = Embed(title="Web Application Version", description=f"[Click here to access the app]({WEB_APP_URL})", color=0x0000FF)
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(embed=_web_app_embed())
 
     @app_commands.command(name="precipitation", description="Get precipitation details for a city.")
     async def slash_precipitation(self, interaction: discord.Interaction, city: str = "Iloilo"):

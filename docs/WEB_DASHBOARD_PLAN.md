@@ -280,9 +280,11 @@ audit log surfacing, tests for the bridge and the scheduler.
   the bot on a VPS. **Verify current free-tier terms before committing** — managed free
   Postgres offers frequently expire (Render's has historically been time-limited);
   Neon/Supabase are alternatives.
-- **`vercel_handler.py` / `aws_lambda_handler.py` become dead weight.** Serverless can't
+- ~~**`vercel_handler.py` / `aws_lambda_handler.py` become dead weight.** Serverless can't
   hold the Redis subscription or a session-backed dashboard. Either delete them or
-  restrict them to the public weather page and document that.
+  restrict them to the public weather page and document that.~~ **Resolved:** the files were
+  deleted in `a22c817`, and the documentation that still described them (plus the
+  now-unused `apig-wsgi` dependency) was removed in the hosting-readiness pass.
 - **`backdrop-filter` is the perf cliff.** A dozen concurrent glass layers will jank
   mid-range Android. `prefers-reduced-transparency` is the escape hatch; also cap
   simultaneous glass elements per view.

@@ -114,6 +114,44 @@ class TestAlembicBaseline:
             migrated = {c["name"] for c in inspector.get_columns(name)}
             assert migrated == set(table.columns.keys()), name
 
+    def test_migrations_and_create_all_agree(self, tmp_path, monkeypatch):
+        """The real drift check: both schema paths must produce the same database.
+
+        Development and container startup use create_all(); an existing deployment is
+        upgraded with Alembic. If the two disagree, a bug appears only in production
+        (or only locally), which is the worst possible split. Compares tables *and*
+        per-table column sets in both directions.
+        """
+        migrated_url = _sqlite_url(tmp_path, "migrated.db")
+        self._upgrade(monkeypatch, migrated_url)
+        migrated = inspect(build_engine(migrated_url))
+
+        created_engine = build_engine(_sqlite_url(tmp_path, "created.db"))
+        create_schema(created_engine)
+        created = inspect(created_engine)
+
+        # alembic_version is Alembic's own bookkeeping and has no model behind it.
+        migrated_tables = set(migrated.get_table_names()) - {"alembic_version"}
+        assert migrated_tables == set(created.get_table_names())
+        for table in migrated_tables:
+            assert ({c["name"] for c in migrated.get_columns(table)}
+                    == {c["name"] for c in created.get_columns(table)}), table
+
+    def test_downgrade_to_base_is_reversible(self, tmp_path, monkeypatch):
+        """`alembic downgrade base` has to actually work, or the baseline is a fiction."""
+        from alembic import command
+        from alembic.config import Config
+
+        from zephyr.config import PROJECT_ROOT
+
+        url = _sqlite_url(tmp_path, "alembic.db")
+        self._upgrade(monkeypatch, url)
+        config = Config(str(PROJECT_ROOT / "alembic.ini"))
+        command.downgrade(config, "base")
+
+        remaining = set(inspect(build_engine(url)).get_table_names())
+        assert not ({"ai_settings", "app_state", "web_users", "guilds"} & remaining)
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -12,12 +12,14 @@ Zephyr can run **locally on your machine** or be deployed to the cloud. This gui
 
 1. [Local development](#local-development)
 2. [Docker](#docker)
-3. [Render](#render)
-4. [Vercel (website only)](#vercel-website-only)
-5. [AWS (website only)](#aws-website-only)
-6. [Environment variables](#environment-variables)
-7. [Storage: local file vs Redis](#storage-local-file-vs-redis)
-8. [Cross-platform binaries](#cross-platform-binaries)
+3. [Discord OAuth setup](#discord-oauth-setup)
+4. [Database migrations](#database-migrations)
+5. [Render](#render)
+6. [Serverless is not supported](#serverless-is-not-supported)
+7. [Hosting checklist](#hosting-checklist)
+8. [Environment variables](#environment-variables)
+9. [Storage: local file vs Redis](#storage-local-file-vs-redis)
+10. [Cross-platform binaries](#cross-platform-binaries)
 
 ---
 
@@ -124,8 +126,8 @@ The redirect URI must **byte-match** a registered entry. A mismatch produces Dis
 reaching Zephyr, check this first. By default the value is derived from `WEB_PUBLIC_URL` (or
 Render's `RENDER_EXTERNAL_URL`); set `DISCORD_REDIRECT_URI` explicitly for a custom domain.
 
-`WEB_APP_URL` is **not** used for OAuth. It is only the link `/use` prints, and its default is a
-hardcoded ngrok host, so inheriting it would silently produce a redirect URI Discord rejects.
+`WEB_APP_URL` is **not** used for OAuth. It is only the link `/use` prints, and it may legitimately
+point somewhere else entirely — so the redirect URI is derived independently. Keep the two separate.
 
 Startup validation is deliberately lenient in one direction and strict in the other: leaving all
 three dashboard variables unset is a supported deployment, but setting only some of them raises at
@@ -237,38 +239,56 @@ If you prefer not to use the Blueprint:
 
 ---
 
-## Vercel (website only)
+## Serverless is not supported
 
-The Flask website can be deployed to Vercel's serverless platform.
+Vercel and AWS Lambda were previously documented for the website, via `vercel.json`,
+`vercel_handler.py` and `aws_lambda_handler.py`. **Those files were deleted and the platforms are no
+longer supported.** The instructions were left behind by mistake and are now removed.
 
-1. Install the Vercel CLI and log in:
-   ```bash
-   npm i -g vercel
-   vercel login
-   ```
-2. Deploy:
-   ```bash
-   vercel
-   ```
-3. Add `OPENWEATHER_API_KEY` in the Vercel dashboard under **Settings → Environment Variables**.
+Neither half of Zephyr fits a serverless model:
 
-> Do **not** try to deploy the Discord bot on Vercel — it requires a long-running process.
+- The **bot** needs a persistent process for its Discord gateway connection.
+- The **website** now needs a persistent Redis connection for dashboard sessions, and a request-scoped
+  function cannot hold one.
+
+Use Docker, Render, Heroku, or a VM (EC2 / ECS / Fargate). For a website-only deployment, run the
+Flask app under gunicorn on any of those.
 
 ---
 
-## AWS (website only)
+## Hosting checklist
 
-The website can run on **AWS Lambda** + **API Gateway** using the included `aws_lambda_handler.py`.
+Worth walking once before pointing users at a deployment.
 
-### Deploy with the AWS CLI / console
+| | Why |
+|---|---|
+| Serve over **HTTPS** | Session cookies get `Secure` automatically for `https://` origins, and HSTS is only sent from one. Over plain http the dashboard works but the session cookie is not protected in transit |
+| Set **`WEB_APP_URL`** | It has no default. `/use` reports that it is unconfigured rather than linking somewhere wrong |
+| Set **`REDIS_URL`** on the web service | Required for the dashboard. Without it the site serves the public weather pages only |
+| Register the **OAuth redirect** | Must byte-match; see [Discord OAuth setup](#discord-oauth-setup) |
+| Run **`alembic upgrade head`** | Only for an existing database; a fresh one is created automatically. See [Database migrations](#database-migrations) |
+| Check the **CSP** | [`website/security.py`](../website/security.py) allows images from `cdn.discordapp.com`, `i.ytimg.com` and `i.scdn.co`. Adding another image host means updating it, or those images are silently blocked |
+| Confirm `/health` | Returns `{"status": "ok"}`; point your platform's health check at it |
+| Build the SPA | Render and Docker do this for you. A missing build makes the site answer `503 spa_not_built` rather than failing quietly |
 
-1. Create a Lambda function with Python 3.13 runtime.
-2. Upload a deployment package containing the project and dependencies, or use a Lambda layer.
-3. Set the handler to `aws_lambda_handler.lambda_handler`.
-4. Add `OPENWEATHER_API_KEY` as an environment variable.
-5. Attach an API Gateway (HTTP or REST) trigger.
+The website sends `Content-Security-Policy`, `X-Content-Type-Options`, `X-Frame-Options`,
+`Referrer-Policy`, `Permissions-Policy` and `Cross-Origin-Opener-Policy` on every response, plus
+`Strict-Transport-Security` when the public origin is https.
 
-> As with Vercel, the Discord bot cannot run on Lambda. Run the bot on EC2, ECS/Fargate, or similar.
+### App icons
+
+The site is installable as a PWA. Its icons live in `website/frontend/public/icons/` and are
+generated from the same design tokens as `theme.css`, so the installed icon matches the app:
+
+```bash
+python -m scripts.generate_icons                  # the generated wordmark
+python -m scripts.generate_icons --source roxy.jpg  # or use an image of your own
+```
+
+Re-run it after changing the palette and commit the result. Both `any` and `maskable` purposes are
+published: with only `any`, Android crops the artwork with its own mask and clips the mark. The
+192px entries are what Chrome checks for installability, so removing them silently disables the
+install prompt.
 
 ---
 
