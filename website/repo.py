@@ -6,13 +6,15 @@ An ORM Session would bring a unit of work, an identity map and expire_on_commit
 semantics nobody here needs, and doing it correctly under thread-per-request means
 scoped_session plus a teardown hook -- more machinery than the queries. The right
 time to introduce it is the first phase with relationship traversal.
+
+What is left here is what only the web tier has: ``web_users``, the sign-in audit.
+Guild settings moved to ``zephyr/db/guild_settings.py`` once the bot needed to
+read ``dj_role_id`` -- a shared table belongs in the shared layer.
 """
 
 from datetime import datetime, timezone
 
-from sqlalchemy import select
-
-from zephyr.db.models import Guild, WebUser
+from zephyr.db.models import WebUser
 from zephyr.db.session import get_engine
 
 
@@ -56,25 +58,3 @@ def upsert_web_user(user: dict, *, database_url: str | None = None) -> None:
                 },
             )
         )
-
-
-def read_guild_settings(guild_id: str, *, database_url: str | None = None) -> dict | None:
-    """Return a guild's stored settings, or None when it has never been configured.
-
-    None is not a statement about bot membership -- a row only appears once
-    somebody saves settings.
-    """
-    engine = get_engine(database_url)
-    columns = (
-        Guild.id,
-        Guild.prefix,
-        Guild.locale,
-        Guild.timezone,
-        Guild.default_volume,
-        Guild.dj_role_id,
-        Guild.music_channel_ids,
-        Guild.enabled_cogs,
-    )
-    with engine.connect() as connection:
-        row = connection.execute(select(*columns).where(Guild.id == str(guild_id))).mappings().first()
-    return dict(row) if row else None

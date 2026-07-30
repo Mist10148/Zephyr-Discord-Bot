@@ -21,14 +21,17 @@ import requests
 import discord
 from discord import app_commands
 from discord.ext import commands
+from discord.ext import tasks
 from discord.ui import Button, View, Select
 from async_timeout import timeout
 import yt_dlp
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
 
-from zephyr.config import SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET
+from zephyr.config import REDIS_URL, SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET
 from zephyr.core.ffmpeg import FFMPEG_PATH
+from zephyr.db.guild_settings import read_dj_roles
+from zephyr.services import bridge
 from zephyr.utils.time_utils import _parse_user_time, _format_timestamp
 
 
@@ -103,8 +106,79 @@ def _is_spotify_playlist_input(search: str) -> bool:
     return _is_spotify_url(search) and not _parse_spotify_id(_sanitize_search(search), 'track')
 
 
+# How much of the queue a player snapshot carries.  The full length and duration
+# are reported separately, so truncating here costs the UI nothing but honesty
+# about how many entries it is showing.
+SNAPSHOT_QUEUE_LIMIT = 50
+
+
 class VoiceError(Exception):
     pass
+
+
+def _coerce_float(value, name: str) -> float:
+    """Read one number out of a bridge command's args.
+
+    Bridge args arrive as JSON from a browser, so every one of them is untrusted:
+    a missing key, a string, or a NaN must all become a message the user can act
+    on rather than a TypeError in the listener.
+    """
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise VoiceError(f"`{name}` must be a number.") from None
+    if number != number or number in (float('inf'), float('-inf')):
+        raise VoiceError(f"`{name}` must be a number.")
+    return number
+
+
+# Effect name -> the VoiceState attribute it toggles, and what it excludes.
+_TOGGLE_EFFECTS = {
+    'nightcore': ('_nightcore_enabled', ('_vaporwave_enabled',)),
+    'vaporwave': ('_vaporwave_enabled', ('_nightcore_enabled',)),
+    'reverb': ('_reverb_enabled', ()),
+    'slowed': ('_slowed_enabled', ()),
+    'slownrev': ('_slownrev_enabled', ()),
+    'sixteen_d': ('_16d_enabled', ()),
+}
+
+
+def _apply_effects(state: 'VoiceState', args: dict) -> None:
+    """Apply an effects payload from the bridge, validating every field.
+
+    ``reset`` is handled first so a payload can clear everything and set one
+    thing in the same request, which is what the UI's "reset" button does after
+    the user has already moved a slider.
+    """
+    if args.get('reset'):
+        for attribute, _ in _TOGGLE_EFFECTS.values():
+            setattr(state, attribute, False)
+        state._pitch = 1.0
+        state._bass_boost = None
+
+    for name, (attribute, excludes) in _TOGGLE_EFFECTS.items():
+        if name not in args:
+            continue
+        enabled = bool(args[name])
+        setattr(state, attribute, enabled)
+        if enabled:
+            for other in excludes:
+                setattr(state, other, False)
+
+    if 'pitch' in args:
+        pitch = _coerce_float(args['pitch'], 'pitch')
+        if not 0.5 <= pitch <= 2.0:
+            raise VoiceError("Pitch must be between 0.5 and 2.0.")
+        state._pitch = pitch
+
+    if 'bass_boost' in args:
+        if args['bass_boost'] is None:
+            state._bass_boost = None
+        else:
+            boost = int(_coerce_float(args['bass_boost'], 'bass_boost'))
+            if not -20 <= boost <= 20:
+                raise VoiceError("Bass boost must be between -20 and 20 dB.")
+            state._bass_boost = boost
 
 
 class YTDLError(Exception):
@@ -219,6 +293,24 @@ class Track:
         if self.repaired_from:
             embed.set_footer(text='Original video unavailable — playing a re-resolved match.')
         return embed
+
+    def to_payload(self) -> dict:
+        """The wire form, for a player snapshot or a stored playlist row.
+
+        ``dataclasses.asdict`` would work but would also leak every future field
+        straight to the browser; an explicit projection is the boundary.  Ids are
+        strings because snowflakes exceed JavaScript's safe integer range.
+        """
+        return {
+            'title': self.title,
+            'url': self.url,
+            'duration_s': self.duration_seconds,
+            'requester_id': str(self.requester_id) if self.requester_id else None,
+            'requester_mention': self.requester_mention,
+            'uploader': self.uploader,
+            'thumbnail': self.thumbnail,
+            'source': self.source,
+        }
 
     @staticmethod
     def _progress_bar(elapsed: float, total: int, length: int = 15) -> str:
@@ -540,17 +632,36 @@ class VoiceState:
         self._nightcore_enabled = False
         self._vaporwave_enabled = False
         self._247_enabled = False
+        self._autoplay_enabled = False
         self._pitch = 1.0
         self._bass_boost = None
 
         self._current_start_time = None
         self._current_position = 0.0
         self.audio_player = None
+        # Set by MusicCog.ensure_voice_state.  A callback rather than a back
+        # reference to the cog, so this class still knows nothing about Redis.
+        self.on_change = None
 
     def start_player(self):
         """Start the audio player task lazily; safe to call multiple times."""
         if self.audio_player is None or self.audio_player.done():
             self.audio_player = self.bot.loop.create_task(self.audio_player_task())
+
+    def changed(self) -> None:
+        """Announce a playback transition, without waiting for it to publish.
+
+        Fire and forget on purpose: the audio player must not block on Redis, and
+        a snapshot that fails to publish is corrected by the periodic loop three
+        seconds later.  Never called from the after-callback, which runs on
+        discord.py's player thread where creating a task is not safe.
+        """
+        if self.on_change is None:
+            return
+        try:
+            self.bot.loop.create_task(self.on_change(self.guild_id))
+        except RuntimeError:
+            pass  # Loop already closed during shutdown.
 
     @property
     def loop(self):
@@ -608,6 +719,50 @@ class VoiceState:
             options['options'] += f' -filter:a "{",".join(filters)}"'
         return options
 
+    def effects(self) -> dict:
+        """The effect chain as plain data, for the snapshot and the web UI."""
+        return {
+            'bass_boost': self._bass_boost,
+            'pitch': self._pitch,
+            'nightcore': self._nightcore_enabled,
+            'vaporwave': self._vaporwave_enabled,
+            'reverb': self._reverb_enabled,
+            'slowed': self._slowed_enabled,
+            'slownrev': self._slownrev_enabled,
+            'sixteen_d': self._16d_enabled,
+        }
+
+    def snapshot(self) -> dict:
+        """Everything the dashboard needs to render the player.
+
+        The queue is truncated: a 200-track queue re-serialised into Redis every
+        few seconds is a lot of bytes for a list nobody scrolls to the end of.
+        ``queue_length`` and ``queue_duration_s`` are computed over the whole
+        queue regardless, so the UI can say "and 150 more" honestly.
+        """
+        upcoming = list(self.songs)
+        channel = self.voice.channel if self.voice and self.voice.is_connected() else None
+        return {
+            'guild_id': str(self.guild_id),
+            'connected': channel is not None,
+            'voice_channel_id': str(channel.id) if channel else None,
+            'voice_channel_name': channel.name if channel else None,
+            'text_channel_id': str(self.np_channel_id) if self.np_channel_id else None,
+            'playing': bool(self.voice and self.voice.is_playing()),
+            'paused': bool(self.voice and self.voice.is_paused()),
+            'position_s': round(self.elapsed, 1) if self.current else 0.0,
+            'duration_s': self.current.duration_seconds if self.current else 0,
+            'loop': self.loop,
+            'volume': int(round(self._volume * 100)),
+            'autoplay': self._autoplay_enabled,
+            'always_on': self._247_enabled,
+            'effects': self.effects(),
+            'track': self.current.to_payload() if self.current else None,
+            'queue': [track.to_payload() for track in upcoming[:SNAPSHOT_QUEUE_LIMIT]],
+            'queue_length': len(upcoming),
+            'queue_duration_s': sum(track.duration_seconds or 0 for track in upcoming),
+        }
+
     def channel(self) -> discord.abc.Messageable | None:
         """The channel now-playing and errors are posted to, if it is still reachable."""
         if self.np_channel_id is None:
@@ -659,6 +814,7 @@ class VoiceState:
                 self._current_start_time = time.time()
                 self._current_position = 0.0
                 self.voice.play(source, after=self.play_next_song)
+                self.changed()
                 await self._notify(embed=track.create_embed())
             except Exception as e:
                 # The source owns a live ffmpeg process; if play() never took ownership
@@ -725,6 +881,7 @@ class VoiceState:
         if self.voice:
             await self.voice.disconnect()
             self.voice = None
+        self.changed()
 
     def _skip_threshold(self):
         if not self.voice or not self.voice.channel:
@@ -763,6 +920,9 @@ class MusicCog(commands.Cog):
         self.bot = bot
         self.voice_states = {}
         self._voice_connect_locks = {}
+        # guild id -> DJ role id.  Absent means "no DJ role configured", which is
+        # a different rule rather than a stricter one; see _authorize.
+        self._dj_role_ids: dict[int, str] = {}
         creds = SpotifyClientCredentials(client_id=SPOTIFY_CLIENT_ID, client_secret=SPOTIFY_CLIENT_SECRET)
         self.sp = spotipy.Spotify(client_credentials_manager=creds)
 
@@ -783,6 +943,7 @@ class MusicCog(commands.Cog):
         state = self.voice_states.get(int(guild_id))
         if not state or not state.exists:
             state = VoiceState(self.bot, guild_id, channel_id=channel_id)
+            state.on_change = self.publish_state
             self.voice_states[int(guild_id)] = state
         elif channel_id is not None:
             state.np_channel_id = channel_id
@@ -794,8 +955,339 @@ class MusicCog(commands.Cog):
         return self.ensure_voice_state(ctx.guild.id, channel_id=channel_id)
 
     def cog_unload(self):
+        self._snapshot_loop.cancel()
+        self._settings_loop.cancel()
+        for guild_id in list(self.voice_states):
+            self.bot.loop.create_task(self._clear_snapshot(guild_id))
         for state in self.voice_states.values():
             self.bot.loop.create_task(state.stop())
+
+    # ---------------- Web bridge ----------------
+
+    async def cog_load(self):
+        # The DJ role is read whether or not the dashboard exists -- it governs
+        # the in-Discord now-playing buttons too.  Only the snapshot publishing
+        # is conditional on there being somewhere to publish to.
+        self._settings_loop.start()
+        if REDIS_URL:
+            self._snapshot_loop.start()
+
+    async def _clear_snapshot(self, guild_id: int) -> None:
+        if not REDIS_URL:
+            return
+        try:
+            await asyncio.to_thread(bridge.clear_player_snapshot, guild_id)
+        except Exception as exc:
+            print(f"[Music] Could not clear the player snapshot for {guild_id}: {exc}")
+
+    async def publish_state(self, guild_id: int) -> None:
+        """Push one guild's snapshot to Redis now.
+
+        Called after every bridge action and at each playback transition, so a
+        change made from the browser is visible on the next poll rather than on
+        the next tick of the periodic loop.  Off the event loop via to_thread
+        because redis-py is synchronous.  Failures are logged and swallowed: the
+        dashboard going stale must never break playback.
+        """
+        if not REDIS_URL:
+            return
+        state = self.peek_voice_state(guild_id)
+        if state is None:
+            await self._clear_snapshot(guild_id)
+            return
+        try:
+            await asyncio.to_thread(bridge.write_player_snapshot, guild_id, state.snapshot())
+        except Exception as exc:
+            print(f"[Music] Could not publish the player snapshot for {guild_id}: {exc}")
+
+    @tasks.loop(seconds=3)
+    async def _snapshot_loop(self):
+        """Keep the snapshot fresh for changes made in Discord.
+
+        Three seconds to match the dashboard's poll interval; a slower loop would
+        make a /volume typed in Discord take up to two polls to appear.  Only
+        guilds with a live state are published -- an idle bot writes nothing.
+        """
+        for guild_id in list(self.voice_states):
+            if self.peek_voice_state(guild_id) is not None:
+                await self.publish_state(guild_id)
+
+    @_snapshot_loop.before_loop
+    async def _before_snapshot_loop(self):
+        await self.bot.wait_until_ready()
+
+    def bridge_actions(self) -> dict:
+        """The actions this cog serves on the web bridge.
+
+        Discovered by ``ZephyrBot`` rather than registered with it, so a cog that
+        wants a bridge endpoint only has to grow this method.
+
+        Every mutating action republishes the snapshot before answering, so the
+        browser's next poll shows the result of its own click instead of state
+        from up to one loop tick ago.
+        """
+        mutating = {
+            'player.pause': self._bridge_pause,
+            'player.resume': self._bridge_resume,
+            'player.skip': self._bridge_skip,
+            'player.stop': self._bridge_stop,
+            'player.clear': self._bridge_clear,
+            'player.shuffle': self._bridge_shuffle,
+            'player.seek': self._bridge_seek,
+            'player.volume': self._bridge_volume,
+            'player.loop': self._bridge_loop,
+            'player.jump': self._bridge_jump,
+            'player.remove': self._bridge_remove,
+            'player.move': self._bridge_move,
+            'player.play': self._bridge_play,
+            'player.effects': self._bridge_effects,
+        }
+        actions = {name: self._publishing(handler) for name, handler in mutating.items()}
+        actions['player.state'] = self._bridge_state
+        actions['settings.reload'] = self._bridge_reload_settings
+        return actions
+
+    def _publishing(self, handler):
+        async def wrapper(guild, actor_id, args):
+            result = await handler(guild, actor_id, args)
+            await self.publish_state(guild.id)
+            return result
+
+        return wrapper
+
+    # The bot is the authority on permissions (see zephyr/services/bridge.py).
+    # Everything below re-derives them from the live Discord cache; whatever the
+    # web tier believed when it rendered a button is irrelevant here.
+
+    def _authorize(self, guild: discord.Guild, actor_id, *, require_voice: bool = True) -> discord.Member:
+        """Resolve the actor and confirm they may drive this guild's player.
+
+        The rule is one sentence so it can be explained: **if a DJ role is
+        configured you need it (or Manage Server); if one is not, you need to be
+        in the voice channel the bot is in.**  Anything that changes what other
+        people are hearing goes through here.
+        """
+        if guild is None:
+            raise VoiceError("That server is not available.")
+        try:
+            member = guild.get_member(int(actor_id))
+        except (TypeError, ValueError):
+            member = None
+        if member is None:
+            # Not cached is treated as not present.  Fetching would let an
+            # unauthenticated id force an API call per command.
+            raise VoiceError("You are not a member of that server.")
+        if member.guild_permissions.manage_guild:
+            return member
+
+        dj_role_id = self._dj_role_ids.get(int(guild.id))
+        if dj_role_id:
+            if any(str(role.id) == str(dj_role_id) for role in member.roles):
+                return member
+            raise VoiceError("You need the DJ role to control the player.")
+
+        if require_voice:
+            state = self.peek_voice_state(guild.id)
+            bot_channel = state.voice.channel if state and state.voice and state.voice.is_connected() else None
+            listening = member.voice.channel if member.voice else None
+            if bot_channel is not None and listening != bot_channel:
+                raise VoiceError("Join the voice channel Zephyr is in to control the player.")
+            if bot_channel is None and listening is None:
+                raise VoiceError("You are not connected to a voice channel.")
+        return member
+
+    async def reload_dj_roles(self) -> None:
+        """Refresh the DJ-role cache from the database.
+
+        Cached rather than read per command: ``_authorize`` runs on every button
+        press and every bridge action, and a database round trip on that path
+        would be paid constantly to answer a question that changes roughly never.
+        The dashboard calls ``settings.reload`` after a save, so the cache is
+        corrected immediately rather than at the next slow tick.
+        """
+        try:
+            self._dj_role_ids = {
+                int(guild_id): role_id
+                for guild_id, role_id in (await asyncio.to_thread(read_dj_roles)).items()
+            }
+        except Exception as exc:
+            print(f"[Music] Could not read DJ roles: {exc}")
+
+    @tasks.loop(minutes=10)
+    async def _settings_loop(self):
+        await self.reload_dj_roles()
+
+    @_settings_loop.before_loop
+    async def _before_settings_loop(self):
+        await self.bot.wait_until_ready()
+
+    async def _bridge_reload_settings(self, guild, actor_id, args):
+        await self.reload_dj_roles()
+        return {'reloaded': True}
+
+    def _require_state(self, guild_id) -> VoiceState:
+        state = self.peek_voice_state(guild_id)
+        if state is None or not state.voice or not state.voice.is_connected():
+            raise VoiceError("Zephyr is not connected to a voice channel.")
+        return state
+
+    async def _bridge_state(self, guild, actor_id, args):
+        state = self.peek_voice_state(guild.id) if guild else None
+        return state.snapshot() if state else {'guild_id': str(guild.id), 'connected': False}
+
+    async def _bridge_pause(self, guild, actor_id, args):
+        self._authorize(guild, actor_id)
+        state = self._require_state(guild.id)
+        if not state.voice.is_playing():
+            raise VoiceError("Nothing is playing.")
+        state.voice.pause()
+        state._current_position = state.elapsed
+        state._current_start_time = None
+        return {'paused': True}
+
+    async def _bridge_resume(self, guild, actor_id, args):
+        self._authorize(guild, actor_id)
+        state = self._require_state(guild.id)
+        if not state.voice.is_paused():
+            raise VoiceError("Nothing is paused.")
+        state.voice.resume()
+        state._current_start_time = time.time()
+        return {'paused': False}
+
+    async def _bridge_skip(self, guild, actor_id, args):
+        self._authorize(guild, actor_id)
+        state = self._require_state(guild.id)
+        if not state.is_playing:
+            raise VoiceError("Nothing is playing.")
+        skipped = state.current.title
+        state.skip()
+        return {'skipped': skipped}
+
+    async def _bridge_stop(self, guild, actor_id, args):
+        self._authorize(guild, actor_id)
+        state = self._require_state(guild.id)
+        state.songs.clear()
+        if state.is_playing:
+            state.voice.stop()
+        return {'stopped': True}
+
+    async def _bridge_clear(self, guild, actor_id, args):
+        self._authorize(guild, actor_id)
+        state = self._require_state(guild.id)
+        removed = len(state.songs)
+        state.songs.clear()
+        return {'removed': removed}
+
+    async def _bridge_shuffle(self, guild, actor_id, args):
+        self._authorize(guild, actor_id)
+        state = self._require_state(guild.id)
+        state.songs.shuffle()
+        return {'queue_length': len(state.songs)}
+
+    async def _bridge_seek(self, guild, actor_id, args):
+        self._authorize(guild, actor_id)
+        state = self._require_state(guild.id)
+        if not state.is_playing:
+            raise VoiceError("Nothing is playing.")
+        position = _coerce_float(args.get('position'), 'position')
+        if state.current.duration_seconds and position > state.current.duration_seconds:
+            raise VoiceError("That position is beyond the song length.")
+        state._current_position = max(0.0, position)
+        state._current_start_time = time.time()
+        await state.restart_current(preserve_position=True)
+        return {'position_s': state._current_position}
+
+    async def _bridge_volume(self, guild, actor_id, args):
+        self._authorize(guild, actor_id)
+        state = self._require_state(guild.id)
+        volume = int(_coerce_float(args.get('volume'), 'volume'))
+        if not 0 <= volume <= 1000:
+            raise VoiceError("Volume must be between 0 and 1000.")
+        state.volume = volume / 100
+        return {'volume': volume}
+
+    async def _bridge_loop(self, guild, actor_id, args):
+        self._authorize(guild, actor_id)
+        state = self._require_state(guild.id)
+        mode = str(args.get('mode') or '').lower()
+        if mode not in {'off', 'track', 'queue'}:
+            raise VoiceError("Loop mode must be off, track or queue.")
+        state.loop = mode
+        return {'loop': mode}
+
+    async def _bridge_jump(self, guild, actor_id, args):
+        self._authorize(guild, actor_id)
+        state = self._require_state(guild.id)
+        index = int(_coerce_float(args.get('index'), 'index'))
+        if not 0 <= index < len(state.songs):
+            raise VoiceError("That track is not in the queue.")
+        state.songs.move(index, 0)
+        state.skip()
+        return {'jumped_to': index}
+
+    async def _bridge_remove(self, guild, actor_id, args):
+        self._authorize(guild, actor_id)
+        state = self._require_state(guild.id)
+        index = int(_coerce_float(args.get('index'), 'index'))
+        if not 0 <= index < len(state.songs):
+            raise VoiceError("That track is not in the queue.")
+        removed = state.songs[index].title
+        state.songs.remove(index)
+        return {'removed': removed}
+
+    async def _bridge_move(self, guild, actor_id, args):
+        self._authorize(guild, actor_id)
+        state = self._require_state(guild.id)
+        source = int(_coerce_float(args.get('from'), 'from'))
+        target = int(_coerce_float(args.get('to'), 'to'))
+        try:
+            state.songs.move(source, target)
+        except IndexError:
+            raise VoiceError("That track is not in the queue.") from None
+        return {'from': source, 'to': target}
+
+    async def _bridge_effects(self, guild, actor_id, args):
+        self._authorize(guild, actor_id)
+        state = self._require_state(guild.id)
+        _apply_effects(state, args)
+        if state.is_playing:
+            await state.restart_current(preserve_position=True)
+        return {'effects': state.effects()}
+
+    async def _bridge_play(self, guild, actor_id, args):
+        """Enqueue from the browser.
+
+        The actor's own voice channel is where the bot goes -- deliberately not a
+        channel id from the request, which would let anyone with a session pull
+        the bot into a channel they cannot see.
+        """
+        member = self._authorize(guild, actor_id)
+        query = str(args.get('query') or '').strip()
+        if not query:
+            raise VoiceError("Nothing to play.")
+        destination = member.voice.channel if member.voice else None
+        state = self.ensure_voice_state(guild.id)
+        if state.voice and state.voice.is_connected():
+            destination = state.voice.channel
+        if destination is None:
+            raise VoiceError("Join a voice channel first.")
+
+        async with self._get_voice_lock(guild.id):
+            if not state.voice or not state.voice.is_connected():
+                state.voice = await destination.connect(self_deaf=True)
+        state.start_player()
+
+        tracks = await YTDLSource.resolve_tracks(
+            query, requester_id=member.id, requester_mention=member.mention, loop=self.bot.loop)
+        if not tracks:
+            raise VoiceError("Nothing found for that query.")
+        if str(args.get('mode')) == 'next':
+            for track in reversed(tracks):
+                state.songs.add_to_front(track)
+        else:
+            for track in tracks:
+                state.songs.put_nowait(track)
+        return {'added': len(tracks), 'title': tracks[0].title}
 
     async def cog_command_error(self, ctx: commands.Context, error: commands.CommandError):
         await ctx.send(embed=discord.Embed(description=f'An error occurred: {str(error)}', color=discord.Color.red()))
@@ -1159,7 +1651,11 @@ class MusicCog(commands.Cog):
             await interaction.response.send_message("Not playing any music right now...", ephemeral=True)
             return
         voter = interaction.user
-        if voter == state.current.requester:
+        # Track carries requester_id, never a Member -- a Member is not
+        # serializable, which is the whole reason the queue is plain data.  The
+        # old `state.current.requester` raised AttributeError, so every /skip by
+        # the requester failed instead of skipping.
+        if voter.id == state.current.requester_id:
             state.skip()
             await interaction.response.send_message(embed=discord.Embed(description='⏭️ Skipped.', color=discord.Color.green()))
         elif voter.id not in state.skip_votes:

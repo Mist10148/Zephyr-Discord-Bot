@@ -10,7 +10,7 @@ from flask import current_app, jsonify
 from website import discord_api
 from website.api import api, error
 from website.api.guard import current_session, require_session
-from website.repo import read_guild_settings
+from zephyr.db.guild_settings import read_guild_settings
 from zephyr.services import bridge
 
 # Applied when a guild has no row yet, which is the normal state until somebody

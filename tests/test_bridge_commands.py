@@ -176,3 +176,82 @@ def test_the_bot_reads_well_formed_commands_and_drops_the_rest(fake_redis):
 
 def test_next_command_returns_none_when_nothing_is_waiting(fake_redis):
     assert bridge.next_command(bridge.open_command_stream(), timeout=0) is None
+
+
+# ---------------------------------------------------------------------------
+# Dispatch: the two halves meeting
+# ---------------------------------------------------------------------------
+
+
+def _bot(actions):
+    """A ZephyrBot with no gateway -- __init__ would build a real client."""
+    from zephyr.client import ZephyrBot
+
+    bot = ZephyrBot.__new__(ZephyrBot)
+
+    class StubCog:
+        def bridge_actions(self):
+            return actions
+
+    # Bot.cogs is a read-only MappingProxy over BotBase's name-mangled dict, and
+    # add_cog() would need a real Cog subclass plus a running loop.  Writing the
+    # backing attribute keeps this a test of _bridge_actions' discovery rather
+    # than of discord.py's cog machinery.
+    bot._BotBase__cogs = {"Stub": StubCog()}
+    bot.get_guild = lambda guild_id: f"guild:{guild_id}"
+    return bot
+
+
+def test_a_command_reaches_a_cog_handler_and_the_answer_comes_back(fake_redis):
+    seen = {}
+
+    async def handler(guild, actor_id, args):
+        seen.update({"guild": guild, "actor_id": actor_id, "args": args})
+        return {"skipped": "A Song"}
+
+    bot = _bot({"player.skip": handler})
+    fake_redis.on_publish = lambda channel, raw: (
+        None if channel != bridge.COMMAND_CHANNEL else _run_soon(bot, json.loads(raw))
+    )
+
+    result = bridge.send_command("player.skip", guild_id="1", actor_id="42", args={"n": 1})
+
+    assert result == {"skipped": "A Song"}
+    assert seen == {"guild": "guild:1", "actor_id": "42", "args": {"n": 1}}
+
+
+def test_an_unknown_action_is_answered_rather_than_left_to_time_out(fake_redis):
+    """Silence would be diagnosed as "the bot is offline", which is much worse."""
+    bot = _bot({})
+    fake_redis.on_publish = lambda channel, raw: (
+        None if channel != bridge.COMMAND_CHANNEL else _run_soon(bot, json.loads(raw))
+    )
+
+    with pytest.raises(bridge.BridgeError, match="Unknown action"):
+        bridge.send_command("player.teleport", guild_id="1", actor_id="42")
+
+
+def test_a_handler_that_raises_answers_with_its_message(fake_redis):
+    async def handler(guild, actor_id, args):
+        raise RuntimeError("Join the voice channel Zephyr is in.")
+
+    bot = _bot({"player.skip": handler})
+    fake_redis.on_publish = lambda channel, raw: (
+        None if channel != bridge.COMMAND_CHANNEL else _run_soon(bot, json.loads(raw))
+    )
+
+    with pytest.raises(bridge.BridgeError, match="Join the voice channel"):
+        bridge.send_command("player.skip", guild_id="1", actor_id="42")
+
+
+def _run_soon(bot, command):
+    """Dispatch synchronously from inside publish().
+
+    ``send_command`` is blocking, so there is no running loop to schedule onto --
+    and dispatching here is also the strictest possible test of the
+    subscribe-before-publish ordering, since the reply is produced before
+    ``publish`` has even returned.
+    """
+    import asyncio
+
+    asyncio.run(bot._dispatch_command(command))
