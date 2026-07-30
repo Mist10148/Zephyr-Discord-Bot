@@ -47,10 +47,14 @@ export function GuildOverview() {
       <ListRow label="Your role" detail={g.owner ? 'Owner' : 'Manager'} />
     </ListGroup>
 
+    <ListGroup>
+      <ListRow to={`/g/${g.id}/music`} label="Music" detail="Now playing, queue and playlists" />
+      <ListRow to={`/g/${g.id}/settings`} label="Settings" detail="Prefix, DJ role, music channels" />
+    </ListGroup>
+
     <GlassSurface>
       {g.defaults_applied && <p className="muted">This server has not been configured yet, so these are Zephyr's defaults.</p>}
       {g.bot_present === false && <p className="muted">Zephyr is not in this server, so these settings are not doing anything yet.</p>}
-      <p className="muted">Read-only for now — editing arrives with the next phase.</p>
     </GlassSurface>
 
     <p><Link to="/g">All servers</Link></p>

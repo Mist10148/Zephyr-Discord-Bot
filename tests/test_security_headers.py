@@ -23,9 +23,13 @@ class TestCsp:
         assert "https://cdn.discordapp.com" in _directive("img-src")
 
     def test_allows_the_track_artwork_hosts(self):
+        """Wildcarded because yt-dlp returns whichever CDN shard it was given --
+        i.ytimg.com, i9.ytimg.com and yt3.ggpht.com all turn up, and a missed
+        shard is a silently broken now-playing image."""
         img = _directive("img-src")
-        assert "https://i.ytimg.com" in img
-        assert "https://i.scdn.co" in img
+        assert "https://*.ytimg.com" in img
+        assert "https://*.ggpht.com" in img
+        assert "https://*.scdn.co" in img
 
     def test_allows_data_uris_for_inlined_images(self):
         assert "data:" in _directive("img-src")

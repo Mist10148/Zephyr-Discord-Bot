@@ -14,8 +14,10 @@ from flask import Flask
 #
 # * ``img-src`` must include https://cdn.discordapp.com or every guild icon and user
 #   avatar on the dashboard fails to load and the picker renders blank.  The API
-#   returns those URLs directly (see website/discord_api.py).  i.ytimg.com and
-#   i.scdn.co are listed for the track artwork the music remote will show.
+#   returns those URLs directly (see website/discord_api.py).  The YouTube and
+#   Spotify hosts carry the now-playing artwork; they are wildcarded because
+#   yt-dlp hands back whichever CDN shard it was given -- i.ytimg.com, i9.ytimg.com
+#   and yt3.ggpht.com all appear, and a missed shard is a silently broken image.
 # * ``script-src`` cannot use a nonce: Vite emits a plain <script type="module">
 #   with a content-hashed filename, and there is no server-side templating step to
 #   inject a nonce into.  'self' is the honest bound, and 'unsafe-inline' is
@@ -33,7 +35,7 @@ CSP = "; ".join([
     "form-action 'self'",
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: https://cdn.discordapp.com https://i.ytimg.com https://i.scdn.co",
+    "img-src 'self' data: https://cdn.discordapp.com https://*.ytimg.com https://*.ggpht.com https://*.scdn.co",
     "font-src 'self' data:",
     # The SPA talks to its own origin only; the OAuth hop is a top-level navigation,
     # which connect-src does not govern.
