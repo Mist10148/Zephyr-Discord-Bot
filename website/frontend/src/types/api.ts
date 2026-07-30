@@ -33,3 +33,21 @@ export type Player = {
 export type PlaylistSummary = { id: number; owner_id: string; guild_id: string | null; name: string; is_public: boolean; created_at: string | null; track_count: number; duration_s: number; mine: boolean }
 export type PlaylistTrack = { title: string; url: string | null; duration_s: number; source: string }
 export type PlaylistDetail = Omit<PlaylistSummary, 'mine'> & { mine: boolean; tracks: PlaylistTrack[] }
+
+export type SubKind = 'daily' | 'severe' | 'class_suspension'
+// A null threshold disables that one check without disabling the subscription --
+// "warn me about wind but never about rain".
+export type Thresholds = { wind_speed?: number | null; precipitation_probability?: number | null; apparent_temperature?: number | null; storm?: boolean }
+export type WeatherSub = {
+  id: number; guild_id: string; channel_id: string; kind: SubKind; kind_label: string
+  location: string; lat: number; lon: number; units: 'metric' | 'imperial'
+  schedule_local_time: string | null; tz: string; thresholds: Thresholds | null
+  enabled: boolean; last_run_at: string | null; last_fingerprint: string | null; created_at: string | null
+}
+export type WeatherSubList = { subscriptions: WeatherSub[]; kinds: SubKind[]; default_thresholds: Required<Thresholds> }
+export type AlertField = { name: string; value: string }
+export type Alert = { kind: SubKind; title: string; summary: string; fields: AlertField[]; fingerprint: string }
+// `alert: null` is the answer for a watch with nothing to report, not an empty
+// response. `duplicate` is why a preview can show an alert the channel will not
+// receive: the same fingerprint was posted last time.
+export type SubPreview = { id: number; kind: SubKind; alert: Alert | null; would_post: boolean; duplicate: boolean }
