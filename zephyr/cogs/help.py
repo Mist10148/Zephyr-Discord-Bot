@@ -37,6 +37,7 @@ class HelpCog(commands.Cog):
             categories_by_key(
                 "music_playback",
                 "music_queue",
+                "music_playlists",
                 "music_effects",
                 "music_voice",
             ),

@@ -62,6 +62,18 @@ HELP_CATEGORIES = [
             HelpEntry("/shuffle", "Shuffle the queue"),
             HelpEntry("/loop [mode]", "Set loop mode: off / track / queue"),
             HelpEntry("/loopqueue", "Toggle queue loop"),
+            HelpEntry("/autoplay", "Keep playing a YouTube Mix when the queue runs out"),
+        ],
+    ),
+    HelpCategory(
+        key="music_playlists",
+        emoji="📀",
+        title="Music — Playlists",
+        commands=[
+            HelpEntry("/save <name> [public]", "Save the current queue as a playlist"),
+            HelpEntry("/load <name>", "Queue up a saved playlist"),
+            HelpEntry("/playlists", "List your saved playlists"),
+            HelpEntry("/playlist-delete <name>", "Delete one of your playlists"),
         ],
     ),
     HelpCategory(

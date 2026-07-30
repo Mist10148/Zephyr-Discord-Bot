@@ -31,6 +31,14 @@ from spotipy.oauth2 import SpotifyClientCredentials
 from zephyr.config import REDIS_URL, SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET
 from zephyr.core.ffmpeg import FFMPEG_PATH
 from zephyr.db.guild_settings import read_dj_roles
+from zephyr.db.playlists import (
+    PlaylistError,
+    delete_playlist,
+    find_playlist,
+    get_playlist,
+    list_playlists,
+    save_playlist,
+)
 from zephyr.services import bridge
 from zephyr.utils.time_utils import _parse_user_time, _format_timestamp
 
@@ -110,6 +118,26 @@ def _is_spotify_playlist_input(search: str) -> bool:
 # are reported separately, so truncating here costs the UI nothing but honesty
 # about how many entries it is showing.
 SNAPSHOT_QUEUE_LIMIT = 50
+
+# Autoplay: how many Mix entries to fetch, how many to enqueue per refill, and
+# how many played tracks to remember so the radio does not loop back on itself.
+AUTOPLAY_FETCH = 30
+AUTOPLAY_ADD = 5
+AUTOPLAY_MEMORY = 50
+
+_VIDEO_ID_RE = re.compile(r'(?:v=|youtu\.be/|/shorts/|/embed/)([A-Za-z0-9_-]{11})')
+
+
+def _video_id(url: str | None) -> str | None:
+    """The YouTube video id in ``url``, if there is one.
+
+    Used to seed a Mix and to key the recently-played history, so a URL with
+    different tracking parameters is still recognised as the same video.
+    """
+    if not url:
+        return None
+    match = _VIDEO_ID_RE.search(url)
+    return match.group(1) if match else None
 
 
 class VoiceError(Exception):
@@ -220,7 +248,10 @@ class Track:
     """
 
     title: str
-    url: str                                  # canonical page URL; the re-resolve key
+    # Canonical page URL, and the re-resolve key.  Optional: an imported track
+    # may have only a title until the first time it is played, at which point
+    # from_track fills this in and the playlist heals itself.
+    url: str | None = None
     duration_seconds: int = 0
     # The requester is stored by id + mention rather than as a Member, because a
     # Member is not serializable and '<@id>' renders identically in an embed.
@@ -494,9 +525,11 @@ class YTDLSource(discord.PCMVolumeTransformer):
         Stream URLs expire, so this always re-extracts -- which the old code did too,
         immediately after having built a source per queue entry.
 
-        If extraction fails because the video is gone, fall back to searching for the
-        title (the re-resolve path saved playlists need, since stored URLs rot).  A
-        *timeout* is deliberately not retried: a network stall will stall a search too.
+        Two paths reach the by-title search: a track that never had a URL (a
+        Spotify import stores metadata only, so resolution is deferred to exactly
+        here, once, for the tracks actually played), and a track whose URL has
+        since died (the reason saved playlists do not rot).  A *timeout* is
+        deliberately not retried: a network stall will stall a search too.
         """
         loop = loop or asyncio.get_event_loop()
         options = dict(ffmpeg_options or cls.DEFAULT_FFMPEG_OPTIONS)
@@ -509,33 +542,52 @@ class YTDLSource(discord.PCMVolumeTransformer):
             return cls(discord.FFmpegPCMAudio(track.url, executable=FFMPEG_PATH, **options),
                        data={'url': track.url, 'title': track.title}, volume=volume)
 
-        try:
-            info = await cls._extract(track.url, loop=loop)
-        except asyncio.TimeoutError:
-            raise
-        except Exception as exc:
-            info = None
-            if not track.title or track.title == track.url:
-                raise YTDLError(f'Could not fetch `{track.url}`: {exc}')
-            print(f"[Re-resolve] {track.url} failed ({exc}); searching for '{track.title}'.")
-            found = await cls._extract(f"ytsearch1:{track.title}", loop=loop, process=False)
-            for entry in list((found or {}).get('entries') or []):
-                url = cls._entry_url(entry)
-                if url:
-                    info = await cls._extract(url, loop=loop)
-                    if info and info.get('url'):
-                        track.repaired_from = track.url
-                        track.url = info.get('webpage_url') or url
-                    break
-            if not info or not info.get('url'):
-                raise YTDLError(f'`{track.title}` is no longer available.')
+        info = None
+        if track.url:
+            try:
+                info = await cls._extract(track.url, loop=loop)
+            except asyncio.TimeoutError:
+                raise
+            except Exception as exc:
+                if not track.title or track.title == track.url:
+                    raise YTDLError(f'Could not fetch `{track.url}`: {exc}')
+                print(f"[Re-resolve] {track.url} failed ({exc}); searching for '{track.title}'.")
+        elif not track.title:
+            raise YTDLError('That track has neither a link nor a title.')
+
+        if not info or not info.get('url'):
+            info = await cls._resolve_by_title(track, loop=loop)
 
         if not info or 'url' not in info:
-            raise YTDLError(f'Could not fetch `{track.url}`')
+            raise YTDLError(f'Could not fetch `{track.title or track.url}`')
         # A flat entry's title/duration are placeholders until now.
         track.absorb(info)
         return cls(discord.FFmpegPCMAudio(info['url'], executable=FFMPEG_PATH, **options),
                    data=info, volume=volume)
+
+    @classmethod
+    async def _resolve_by_title(cls, track: 'Track', *, loop) -> dict | None:
+        """Find a playable video for a track that has only a title.
+
+        The track is mutated with what was found, so a saved playlist heals
+        itself: the next play uses the repaired URL directly instead of searching
+        again.  ``repaired_from`` is only set when there was something to repair,
+        which keeps the "playing a re-resolved match" footer off imports that
+        never had a URL in the first place.
+        """
+        found = await cls._extract(f"ytsearch1:{track.title}", loop=loop, process=False)
+        for entry in list((found or {}).get('entries') or []):
+            url = cls._entry_url(entry)
+            if not url:
+                continue
+            info = await cls._extract(url, loop=loop)
+            if info and info.get('url'):
+                if track.url:
+                    track.repaired_from = track.url
+                track.url = info.get('webpage_url') or url
+                return info
+            break
+        raise YTDLError(f'`{track.title}` is not available.')
 
 
 class SongQueue:
@@ -639,6 +691,9 @@ class VoiceState:
         self._current_start_time = None
         self._current_position = 0.0
         self.audio_player = None
+        # Bounded history of what autoplay has already served, so a Mix -- which
+        # always leads with its seed video -- cannot put one song on repeat.
+        self._recent_ids = deque(maxlen=AUTOPLAY_MEMORY)
         # Set by MusicCog.ensure_voice_state.  A callback rather than a back
         # reference to the cog, so this class still knows nothing about Redis.
         self.on_change = None
@@ -779,10 +834,58 @@ class VoiceState:
         except Exception as exc:
             print(f"[Music] Could not post to channel {self.np_channel_id}: {exc}")
 
+    async def _extend_with_radio(self) -> int:
+        """Top the queue up from YouTube's Mix for the last track played.
+
+        A Mix (``list=RD<video id>``) is YouTube's own related-tracks radio, so
+        this needs no recommendation logic of its own -- one flat extraction
+        yields dozens of entries.  Anything played recently is filtered out,
+        because a Mix always leads with its seed video and autoplay would
+        otherwise put the same song on repeat.
+        """
+        seed = _video_id(self.current.url) if self.current else None
+        if not seed:
+            return 0
+        try:
+            tracks = await YTDLSource.resolve_tracks(
+                f"https://www.youtube.com/watch?v={seed}&list=RD{seed}",
+                requester_id=self.bot.user.id if self.bot.user else 0,
+                requester_mention='Autoplay',
+                loop=self.bot.loop,
+                max_entries=AUTOPLAY_FETCH,
+            )
+        except Exception as exc:
+            print(f"[Autoplay] Could not build a radio for {seed}: {exc}")
+            return 0
+
+        added = 0
+        for track in tracks:
+            key = _video_id(track.url) or track.url
+            if not key or key in self._recent_ids:
+                continue
+            track.source = 'autoplay'
+            self.songs.put_nowait(track)
+            added += 1
+            if added >= AUTOPLAY_ADD:
+                break
+        if added:
+            print(f"[Autoplay] Queued {added} track(s) from the radio for {seed}.")
+        return added
+
+    def _remember(self, track: 'Track') -> None:
+        key = _video_id(track.url) or track.url
+        if key:
+            self._recent_ids.append(key)
+
     async def audio_player_task(self):
         while True:
             self.next.clear()
             self.skip_votes.clear()
+
+            # Refill before the idle timer starts, not after it fires: waiting
+            # would disconnect the bot three minutes into an autoplay session.
+            if self._autoplay_enabled and not len(self.songs) and self.loop == 'off':
+                await self._extend_with_radio()
 
             try:
                 if self.loop == 'track' and self.current:
@@ -814,6 +917,7 @@ class VoiceState:
                 self._current_start_time = time.time()
                 self._current_position = 0.0
                 self.voice.play(source, after=self.play_next_song)
+                self._remember(track)
                 self.changed()
                 await self._notify(embed=track.create_embed())
             except Exception as e:
@@ -1041,6 +1145,8 @@ class MusicCog(commands.Cog):
             'player.move': self._bridge_move,
             'player.play': self._bridge_play,
             'player.effects': self._bridge_effects,
+            'player.autoplay': self._bridge_autoplay,
+            'playlist.load': self._bridge_playlist_load,
         }
         actions = {name: self._publishing(handler) for name, handler in mutating.items()}
         actions['player.state'] = self._bridge_state
@@ -2039,6 +2145,189 @@ class MusicCog(commands.Cog):
                 await interaction.followup.send(embed=discord.Embed(description='Default audio settings reapplied.', color=discord.Color.green()))
             except Exception as e:
                 await interaction.followup.send(embed=discord.Embed(description=f'❌ Error resetting effects: {e}', color=discord.Color.red()))
+
+    @app_commands.command(name='autoplay', description='Keeps the music going with a YouTube Mix when the queue runs out.')
+    async def autoplay(self, interaction: discord.Interaction):
+        ctx = await self._interaction_ctx(interaction)
+        state = self.get_voice_state(ctx)
+        if not state.voice:
+            await interaction.response.send_message("Not connected to any voice channel.", ephemeral=True)
+            return
+        state._autoplay_enabled = not state._autoplay_enabled
+        status = "enabled" if state._autoplay_enabled else "disabled"
+        await interaction.response.send_message(
+            embed=discord.Embed(description=f'📻 Autoplay {status}.', color=discord.Color.green()))
+        state.changed()
+
+    # ---------------- Playlists ----------------
+
+    def _queue_payload(self, state: VoiceState) -> list[dict]:
+        """The current track followed by the queue, as storable rows.
+
+        The current track is included because "save this" means what is playing
+        plus what is coming, not just the part nobody has heard yet.
+        """
+        tracks = ([state.current] if state.current else []) + list(state.songs)
+        return [
+            {'title': track.title, 'url': track.url,
+             'duration_s': track.duration_seconds, 'source': track.source}
+            for track in tracks
+        ]
+
+    @app_commands.command(name='save', description='Saves the current queue as a playlist.')
+    @app_commands.describe(name="A name to save it under", public="Let anyone in this server load it")
+    async def save(self, interaction: discord.Interaction, name: str, public: bool = False):
+        if interaction.guild is None:
+            await interaction.response.send_message("❌ This command can only be used in a server.", ephemeral=True)
+            return
+        state = self.peek_voice_state(interaction.guild.id)
+        if state is None or not (state.current or len(state.songs)):
+            await interaction.response.send_message("There is nothing to save.", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+        try:
+            saved = await asyncio.to_thread(
+                save_playlist, str(interaction.user.id), name, self._queue_payload(state),
+                guild_id=str(interaction.guild.id), is_public=public)
+        except PlaylistError as exc:
+            await interaction.followup.send(embed=discord.Embed(description=f'❌ {exc}', color=discord.Color.red()))
+            return
+        except Exception as exc:
+            traceback.print_exc()
+            await interaction.followup.send(
+                embed=discord.Embed(description=f'❌ Could not save the playlist: {exc}', color=discord.Color.red()))
+            return
+
+        await interaction.followup.send(embed=discord.Embed(
+            description=f'💾 Saved **{saved["track_count"]}** track(s) as **{saved["name"]}**.',
+            color=discord.Color.green()))
+
+    @app_commands.command(name='load', description='Loads a saved playlist into the queue.')
+    @app_commands.describe(name="The playlist to load")
+    async def load(self, interaction: discord.Interaction, name: str):
+        if interaction.guild is None:
+            await interaction.response.send_message("❌ This command can only be used in a server.", ephemeral=True)
+            return
+        if not interaction.user.voice or not interaction.user.voice.channel:
+            await interaction.response.send_message("❌ You need to be in a voice channel.", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+        try:
+            playlist = await asyncio.to_thread(
+                find_playlist, str(interaction.user.id), name, guild_id=str(interaction.guild.id))
+        except Exception as exc:
+            traceback.print_exc()
+            await interaction.followup.send(
+                embed=discord.Embed(description=f'❌ Could not read your playlists: {exc}', color=discord.Color.red()))
+            return
+        if playlist is None:
+            await interaction.followup.send(
+                embed=discord.Embed(description=f'❌ No playlist called **{name}**.', color=discord.Color.red()))
+            return
+
+        added = await self._enqueue_playlist(interaction.guild, interaction.user,
+                                             interaction.user.voice.channel, playlist)
+        await interaction.followup.send(embed=discord.Embed(
+            description=f'📀 Queued **{added}** track(s) from **{playlist["name"]}**.',
+            color=discord.Color.green()))
+
+    async def _enqueue_playlist(self, guild, member, destination, playlist: dict) -> int:
+        """Connect if needed and append a stored playlist to the queue.
+
+        Nothing is resolved here.  Stored rows become Tracks as they are -- some
+        with only a title -- and ``YTDLSource.from_track`` does the lookup when
+        each one actually plays.  Resolving 200 rows up front would take minutes
+        and throw most of the work away the moment somebody ran /skip.
+        """
+        state = self.ensure_voice_state(guild.id)
+        async with self._get_voice_lock(guild.id):
+            if not state.voice or not state.voice.is_connected():
+                state.voice = await destination.connect(self_deaf=True)
+        state.start_player()
+
+        for row in playlist['tracks']:
+            state.songs.put_nowait(Track(
+                title=row['title'], url=row['url'], duration_seconds=row['duration_s'] or 0,
+                requester_id=member.id, requester_mention=member.mention, source=row['source']))
+        state.changed()
+        return len(playlist['tracks'])
+
+    @app_commands.command(name='playlists', description='Lists your saved playlists.')
+    async def playlists(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        guild_id = str(interaction.guild.id) if interaction.guild else None
+        try:
+            saved = await asyncio.to_thread(list_playlists, str(interaction.user.id), guild_id=guild_id)
+        except Exception as exc:
+            traceback.print_exc()
+            await interaction.followup.send(f'❌ Could not read your playlists: {exc}', ephemeral=True)
+            return
+
+        if not saved:
+            await interaction.followup.send(
+                "You have no saved playlists yet. Queue something up and run `/save`.", ephemeral=True)
+            return
+
+        embed = discord.Embed(title='📀 Your playlists', color=discord.Color.blurple())
+        for playlist in saved[:25]:
+            owned = playlist['owner_id'] == str(interaction.user.id)
+            label = playlist['name'] if owned else f"{playlist['name']} (shared)"
+            embed.add_field(
+                name=label,
+                value=f"{playlist['track_count']} track(s) • {_format_timestamp(playlist['duration_s'])}",
+                inline=False)
+        if len(saved) > 25:
+            embed.set_footer(text=f'Showing 25 of {len(saved)}.')
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @app_commands.command(name='playlist-delete', description='Deletes one of your saved playlists.')
+    @app_commands.describe(name="The playlist to delete")
+    async def playlist_delete(self, interaction: discord.Interaction, name: str):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            playlist = await asyncio.to_thread(find_playlist, str(interaction.user.id), name)
+        except Exception as exc:
+            traceback.print_exc()
+            await interaction.followup.send(f'❌ Could not read your playlists: {exc}', ephemeral=True)
+            return
+        # find_playlist without a guild only ever returns your own, so ownership
+        # is already established -- but assert it rather than rely on that.
+        if playlist is None or playlist['owner_id'] != str(interaction.user.id):
+            await interaction.followup.send(f'❌ You have no playlist called **{name}**.', ephemeral=True)
+            return
+        await asyncio.to_thread(delete_playlist, playlist['id'])
+        await interaction.followup.send(f'🗑️ Deleted **{playlist["name"]}**.', ephemeral=True)
+
+    async def _bridge_playlist_load(self, guild, actor_id, args):
+        member = self._authorize(guild, actor_id)
+        try:
+            playlist_id = int(args.get('playlist_id'))
+        except (TypeError, ValueError):
+            raise VoiceError("That is not a playlist.") from None
+        playlist = await asyncio.to_thread(get_playlist, playlist_id)
+        if playlist is None:
+            raise VoiceError("That playlist no longer exists.")
+        # A private playlist is loadable only by its owner, wherever it was saved.
+        if playlist['owner_id'] != str(member.id) and not playlist['is_public']:
+            raise VoiceError("That playlist is not yours.")
+
+        state = self.peek_voice_state(guild.id)
+        destination = state.voice.channel if state and state.voice and state.voice.is_connected() else None
+        if destination is None:
+            destination = member.voice.channel if member.voice else None
+        if destination is None:
+            raise VoiceError("Join a voice channel first.")
+
+        added = await self._enqueue_playlist(guild, member, destination, playlist)
+        return {'added': added, 'name': playlist['name']}
+
+    async def _bridge_autoplay(self, guild, actor_id, args):
+        self._authorize(guild, actor_id)
+        state = self._require_state(guild.id)
+        state._autoplay_enabled = bool(args.get('enabled'))
+        return {'autoplay': state._autoplay_enabled}
 
     # ---------------- Spotify Helpers ----------------
 
