@@ -50,6 +50,7 @@ export function GuildOverview() {
     <ListGroup>
       <ListRow to={`/g/${g.id}/music`} label="Music" detail="Now playing, queue and playlists" />
       <ListRow to={`/g/${g.id}/weather-alerts`} label="Weather alerts" detail="Daily digests and severe-weather watches" />
+      <ListRow to={`/g/${g.id}/ai`} label="AI" detail="Personas, usage, and channel memory" />
       <ListRow to={`/g/${g.id}/settings`} label="Settings" detail="Prefix, DJ role, music channels" />
     </ListGroup>
 
