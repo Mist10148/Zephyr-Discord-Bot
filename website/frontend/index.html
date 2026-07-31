@@ -3,7 +3,24 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#0b1020" />
+    <!-- Per-scheme theme-color so the mobile browser chrome matches the page in both
+         light and dark, rather than a single dark bar over a light UI. -->
+    <meta name="theme-color" content="#eaf1fb" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0b1020" media="(prefers-color-scheme: dark)" />
+    <!-- Set the theme class before first paint so there is no light-then-dark flash.
+         Mirrors resolveTheme() in src/lib/theme.tsx: an explicit stored choice wins,
+         otherwise follow the OS. Inlined (not imported) because it must run before
+         the module bundle loads. -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem('zephyr-theme')
+          var dark = stored === 'dark' || (stored !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches)
+          if (dark) document.documentElement.classList.add('dark')
+          document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
+        } catch (e) {}
+      })()
+    </script>
     <meta name="description" content="Weather forecasts and Zephyr bot controls." />
     <link rel="icon" href="/icons/favicon.ico" sizes="any" />
     <link rel="icon" type="image/png" href="/icons/icon-192.png" />
