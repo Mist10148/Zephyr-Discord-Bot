@@ -189,6 +189,42 @@ def patch_guild_settings(guild_id: str):
     return jsonify({"id": guild_id, "defaults_applied": False, **settings})
 
 
+@api.get("/guilds/<guild_id>/audit")
+@guild_scoped
+def guild_audit(guild_id: str):
+    """One page of the guild's audit trail, newest first.
+
+    The writers have existed since Phase 4 (``settings.update`` here, every
+    ``player.*`` and ``ai.*`` action elsewhere); this is the reader the plan
+    deferred to Phase 7.  Pagination is keyset -- ``?before=<id>`` -- so a busy
+    guild writing rows between page loads cannot make the cursor skip or repeat
+    an entry the way an offset would.
+    """
+    def _int_arg(name):
+        raw = request.args.get(name)
+        if raw is None or raw == "":
+            return None
+        if not raw.isdigit():
+            raise ValueError(name)
+        return int(raw)
+
+    try:
+        limit = _int_arg("limit")
+        before = _int_arg("before")
+    except ValueError as exc:
+        return error("invalid_query", f"{exc.args[0]} must be a positive integer.", 400)
+
+    kwargs = {"database_url": current_app.config["DATABASE_URL"], "before_id": before}
+    if limit is not None:
+        kwargs["limit"] = limit
+    try:
+        page = audit.read(guild_id, **kwargs)
+    except Exception as exc:
+        print(f"[Guilds] Could not read the audit log for {guild_id}: {exc}")
+        return error("audit_unavailable", "Could not read the audit log.", 503)
+    return jsonify({"id": guild_id, **page})
+
+
 @api.get("/guilds/<guild_id>/meta")
 @guild_scoped
 def guild_meta(guild_id: str):

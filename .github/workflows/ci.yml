@@ -31,6 +31,7 @@ jobs:
       - run: npm --prefix website/frontend ci
       - run: npm --prefix website/frontend run lint
       - run: npm --prefix website/frontend run typecheck
+      - run: npm --prefix website/frontend run test
       - run: npm --prefix website/frontend run build
 
   docker:

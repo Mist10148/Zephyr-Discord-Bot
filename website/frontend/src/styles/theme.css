@@ -15,6 +15,21 @@ a.ios-button { display:inline-block; color:white; text-decoration:none; }.ios-bu
 .stack { display:grid; gap:1rem; }.muted { color:#8e8e93; }
 .skeleton { display:grid; gap:.6rem; }.skeleton i { display:block; height:1.05rem; border-radius:8px; background:linear-gradient(90deg,#2c2c2e,#3a3a3c,#2c2c2e) 0 0/200% 100%; animation:shimmer 1.2s linear infinite; }.skeleton i:nth-child(even) { width:70%; }@keyframes shimmer { to { background-position:-200% 0; } }
 .toast.error { background:#3a1214; color:#ff9f9b; }
+/* Phase 7 a11y: the custom controls are real <button>/<a>/<input> elements, so
+   they are already keyboard-reachable -- but with border:0 and no default outline
+   a keyboard user could not see where focus was. One :focus-visible ring covers
+   every primitive; :focus-visible (not :focus) keeps it off mouse clicks. */
+:where(.ios-button,.list-row,.toggle,.segmented button,.stepper button,.drag-handle,.text-input,.slider,[cmdk-item]):focus-visible {
+  outline:2px solid #0a84ff; outline-offset:2px; border-radius:var(--radius-control);
+}
+.slider:focus-visible { outline-offset:4px; }
+/* Phase 7 perf: backdrop-filter is the most expensive thing the UI paints, and the
+   cost is per *stacked* layer, not per element. The budget is "glass only where it
+   frames content over the gradient" -- cards, sheets, the command palette -- never
+   nested glass-in-glass, and never on a list of rows (those are opaque #2c2c2e).
+   prefers-reduced-transparency below is the hard escape hatch for devices that
+   still cannot afford it. */
+@media (prefers-reduced-transparency: reduce) { .palette,.sheet { backdrop-filter:none; } }
 .now-playing { display:flex; gap:1rem; align-items:flex-start; }.now-playing .art { flex:0 0 auto; width:88px; height:88px; border-radius:var(--radius-control); object-fit:cover; }.now-playing h2 { margin:0; font-size:1.05rem; line-height:1.3; }.now-playing .stack { gap:.5rem; min-width:0; }.progress { height:6px; border-radius:99px; background:#3a3a3c; overflow:hidden; }.progress i { display:block; height:100%; border-radius:99px; background:#0a84ff; }.times { display:flex; justify-content:space-between; font-variant-numeric:tabular-nums; font-size:.8rem; }
 .transport { display:flex; flex-wrap:wrap; gap:.5rem; margin:1rem 0; }.transport .ios-button { flex:1 1 auto; }.row-actions { display:flex; flex:0 0 auto; gap:.4rem; }.row-actions .ios-button { padding:.4rem .7rem; font-size:.85rem; }
 .text-input,select.text-input { flex:1 1 auto; min-width:0; max-width:60%; border:1px solid #3a3a3c; border-radius:var(--radius-control); padding:.5rem .7rem; background:#1c1c1e; color:inherit; font:inherit; }.text-input.short { max-width:8rem; }

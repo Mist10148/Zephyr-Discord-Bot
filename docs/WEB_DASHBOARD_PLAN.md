@@ -1,6 +1,6 @@
 # Zephyr Web Dashboard — Design & Build Plan
 
-**Status:** planning
+**Status:** shipped (Phases 0–7 complete)
 **Created:** 2026-07-29
 **Scope:** React/Vite/shadcn dashboard with Discord OAuth + four bot feature tracks
 
@@ -499,3 +499,27 @@ code differs and why. It is appended to as phases land, and §§1–7 are not re
     replies per channel; ordinary channel chat is never retained. `/summarize` reads recent visible
     messages on demand and returns an ephemeral result, while `/translate` is one-shot. Guild
     managers can inspect and irreversibly purge stored exchanges, and select a default persona.
+
+### Phase 7 — Hardening
+
+46. **Much of Phase 7 was already paid down in earlier phases.** The player rate limiter (§4) shipped
+    with Phase 4, the CSP's `img-src` for `cdn.discordapp.com` (§8 ¶14) has been correct since the
+    guild picker landed, and the model-vs-migration drift check (`test_migrations_and_create_all_agree`)
+    already guards both schema paths. Phase 7 added only what was genuinely missing.
+47. **`/summarize` got a cooldown, not a work queue.** A per-user (30s) + per-guild (10s) gap in
+    `zephyr/cogs/chat.py`, mirroring the image-gen cooldown that already existed a few functions up.
+    A full work queue was the plan's aspiration, but the cooldown is what actually protects the Gemini
+    free-tier RPM budget, and it is one dict lookup rather than a scheduler with its own failure modes.
+48. **The audit reader is `GET /guilds/:id/audit`, keyset-paginated.** `zephyr/db/audit.read` fetches
+    `limit + 1` rows to compute `next_before` without a count query; the dashboard's `GuildAudit`
+    route consumes it with React Query's `useInfiniteQuery`. Pagination is `?before=<id>` rather than
+    an offset because the log only grows and an offset would drift under a busy guild.
+49. **A11y is focus-visible rings + labelled controls, not a widget-grid rewrite.** The implemented
+    widget grid is a static card grid with no drag-and-drop, so the ¶44 keyboard concern does not
+    apply to it; the real gap was that the border-0 custom controls showed no focus. One
+    `:focus-visible` ring now covers every primitive, and `Slider`/`SegmentedControl` carry
+    `aria-label`/`aria-pressed`. A Vitest runner (in `website/frontend/test/`, kept out of `src/` so
+    the build and lint are untouched) locks that aria contract.
+50. **Migrations run in a Render `preDeployCommand`, not `startCommand`.** `alembic upgrade head` runs
+    once between build and release — a single process, so the two gunicorn workers never race it, which
+    is exactly why it was deferred out of the worker start in the first place.

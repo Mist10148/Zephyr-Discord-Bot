@@ -89,6 +89,7 @@ export function GuildMusic() {
         </ListRow>
         <ListRow label="Volume" detail={`${shownVolume}%`}>
           <Slider
+            label="Volume"
             value={shownVolume}
             onChange={next => { setVolume(next); act.mutate({ action: 'volume', args: { volume: next } }, { onSettled: () => setVolume(null) }) }}
           />
