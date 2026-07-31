@@ -175,12 +175,15 @@ deployment state rather than an error worth retrying.
 
 ## Database migrations
 
-Alembic is available and correct, but **not automatic**. Nothing runs `alembic upgrade head` on
-deploy: the web service runs two gunicorn workers that would race each other, and Render's free tier
-has no release phase. Automating it is a hardening task.
+Alembic runs automatically on deploy. `render.yaml`'s web service carries a
+`preDeployCommand: alembic upgrade head`, which Render runs **once** between build and release — a
+single process, so the two gunicorn workers never race it, and it stands in for the release phase the
+free tier does not otherwise have.
 
 Development and container startup still create tables via `create_all()` (`DB_AUTO_CREATE=1`), so a
-fresh deployment needs no manual step. Migrations matter when the schema *changes*.
+fresh deployment needs no manual step either. Migrations matter when the schema *changes*; on Render
+the pre-deploy hook applies them before any worker serves traffic. To run one by hand (a non-Render
+host, or a recovery):
 
 ```bash
 # Fresh database — build it from migrations alone
@@ -203,8 +206,9 @@ Revisions so far:
 | `0003` | `weather_subs`, `bot_users` |
 
 `alembic downgrade base` is meaningful at every step. Because `create_all()` and Alembic can drift,
-a model-vs-migration check is on the hardening list; `tests/test_web_schema.py` currently asserts the
-baseline matches the models.
+`tests/test_web_schema.py` asserts the two agree — `test_migrations_and_create_all_agree` builds a
+database each way and compares tables and columns in both directions, so a model change that skips a
+migration fails CI rather than production.
 
 ### The bot ↔ web bridge
 

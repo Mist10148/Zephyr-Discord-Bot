@@ -69,6 +69,38 @@ def _update_image_gen_cooldown(user_id: int, guild_id):
         image_gen_guild_cooldowns[guild_id] = now + IMAGE_GEN_GUILD_COOLDOWN
 
 
+# ---------------------------------------------------------------------------
+# Summarize throttling (Phase 7 hardening)
+# ---------------------------------------------------------------------------
+# /summarize reads a batch of channel history and sends it to Gemini in one
+# request. On the free tier that one request competes for the same per-minute
+# budget the message handler uses, so an unthrottled slash command in a busy
+# server is the fastest way to trip the RPM limit for everyone. A per-user gap
+# stops one person spamming it; a shorter per-guild gap smooths a room full of
+# people discovering it at once, without a full work queue's machinery.
+SUMMARIZE_USER_COOLDOWN = 30  # seconds between summaries per user
+SUMMARIZE_GUILD_COOLDOWN = 10  # seconds between summaries per guild
+
+summarize_user_cooldowns = {}
+summarize_guild_cooldowns = {}
+
+
+def _check_summarize_cooldown(user_id: int, guild_id):
+    """True when the caller may summarize now; otherwise the seconds to wait."""
+    now = datetime.now(timezone.utc).timestamp()
+    user_remaining = max(0, summarize_user_cooldowns.get(user_id, 0) - now)
+    guild_remaining = max(0, summarize_guild_cooldowns.get(guild_id, 0) - now) if guild_id else 0
+    remaining = max(user_remaining, guild_remaining)
+    return (remaining <= 0), remaining
+
+
+def _update_summarize_cooldown(user_id: int, guild_id):
+    now = datetime.now(timezone.utc).timestamp()
+    summarize_user_cooldowns[user_id] = now + SUMMARIZE_USER_COOLDOWN
+    if guild_id:
+        summarize_guild_cooldowns[guild_id] = now + SUMMARIZE_GUILD_COOLDOWN
+
+
 def _get_cached_image(prompt: str):
     now = datetime.now(timezone.utc).timestamp()
     entry = image_gen_cache.get(prompt)
@@ -230,6 +262,14 @@ class ChatCog(commands.Cog):
     @app_commands.describe(messages="How many recent messages to summarize (5-100)")
     async def summarize(self, interaction: discord.Interaction, messages: app_commands.Range[int, 5, 100] = 20):
         await interaction.response.defer(ephemeral=True)
+        guild_id = interaction.guild.id if interaction.guild else None
+        allowed, remaining = _check_summarize_cooldown(interaction.user.id, guild_id)
+        if not allowed:
+            await interaction.followup.send(
+                f"⏳ Summarize is on cooldown. Please wait **{int(remaining) + 1}** second(s) before trying again.",
+                ephemeral=True,
+            )
+            return
         channel = interaction.channel
         if not hasattr(channel, "history"):
             await interaction.followup.send("This channel does not support message history.", ephemeral=True)
@@ -241,6 +281,9 @@ class ChatCog(commands.Cog):
         if not lines:
             await interaction.followup.send("There are no text messages to summarize.", ephemeral=True)
             return
+        # Charged only once there is real work to send to Gemini: a call that bailed
+        # out on an empty channel above never spent the quota this guards.
+        _update_summarize_cooldown(interaction.user.id, guild_id)
         response = await generate_utility_response(
             interaction.guild_id, interaction.user.id, "\n".join(lines),
             instruction="Summarize the supplied Discord discussion accurately and concisely. Do not invent details.",

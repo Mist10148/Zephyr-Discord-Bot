@@ -4,10 +4,11 @@
 **Last updated:** 2026-07-30  
 **Owner:** Zephyr Discord Bot project  
 
-> **Shipped through Phase 5:** database-backed settings, the React dashboard with Discord OAuth,
-> the public weather PWA, the bot↔web bridge with persistent playlists and a music remote, and
-> weather subscriptions, AI summarization, memory, personas, and translation. **Remaining:** Phase 7
-> (hardening). Architecture, data model, API surface, phased delivery and the running log of
+> **Shipped through Phase 7:** database-backed settings, the React dashboard with Discord OAuth,
+> the public weather PWA, the bot↔web bridge with persistent playlists and a music remote,
+> weather subscriptions, AI summarization, memory, personas, and translation, and the Phase 7
+> hardening pass (a11y, rate limiting, the audit-log reader, tests, and automated migrations).
+> Architecture, data model, API surface, phased delivery and the running log of
 > deliberate departures live in [`WEB_DASHBOARD_PLAN.md`](WEB_DASHBOARD_PLAN.md).
 > Sections 6–11 below describe the **currently shipped** product.
 
@@ -335,8 +336,12 @@ Detailed scope per phase: [`WEB_DASHBOARD_PLAN.md`](WEB_DASHBOARD_PLAN.md) §6.
 - [x] **Phase 6** — `/summarize`, per-channel conversation memory, per-guild personas,
       `/translate`, dashboard persona management, usage, and memory purge. Only exchanges directed
       at Zephyr are persisted; summaries are ephemeral to the invoker.
-- [ ] **Phase 7** — Accessibility, performance, rate limiting, audit log, tests,
-      deployment cleanup.
+- [x] **Phase 7** — Accessibility (focus-visible rings, labelled controls), performance
+      (documented glass budget + reduced-transparency escape hatch), rate limiting (player
+      per-session + `/summarize` per-user/guild cooldown), audit log reader
+      (`GET /guilds/:id/audit` + dashboard view), tests (audit repo/API, `/summarize` cooldown,
+      weather-scheduler delivery, and a Vitest frontend runner), and deployment cleanup
+      (automated `alembic upgrade head` pre-deploy step).
 
 **Backlog (not scheduled)**
 

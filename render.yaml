@@ -4,6 +4,12 @@ services:
     runtime: python
     plan: free
     buildCommand: npm --prefix website/frontend ci && npm --prefix website/frontend run build && pip install -r requirements.txt
+    # Migrations run here, once, between build and release -- not in startCommand,
+    # where the two gunicorn workers would race the same `alembic upgrade` (the free
+    # tier has no separate release phase, so this preDeploy hook is that phase). The
+    # app still calls create_all() at boot for a fresh database; on an existing one
+    # this has already brought the schema to head before any worker serves traffic.
+    preDeployCommand: alembic upgrade head
     startCommand: gunicorn wsgi:app --bind 0.0.0.0:${PORT:-5000} --workers 2 --threads 4
     envVars:
       - key: WEB_APP_URL
