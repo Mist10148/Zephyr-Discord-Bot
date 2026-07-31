@@ -38,7 +38,7 @@ export function Login() {
   if (me.data) return <Navigate to={next} replace />
 
   return <main className="app">
-    <LargeTitleHeader title="Sign in" />
+    <LargeTitleHeader title="Sign in" subtitle="Manage the Discord servers you already administer." />
     {error && <CapsuleToast tone="error">{MESSAGES[error] ?? 'Sign-in failed. Please try again.'}</CapsuleToast>}
     <GlassSurface>
       <p>Sign in with Discord to manage the servers you already administer.</p>

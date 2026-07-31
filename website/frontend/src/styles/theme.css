@@ -357,6 +357,36 @@ a.list-row:hover, button.list-row:hover { background: var(--surface-2); }
 
 .pull-refresh { display: contents; }
 
+/* ---- Home hero -------------------------------------------------------------- */
+.hero { text-align: center; padding: 2.5rem 0 1.5rem; }
+.hero-mark { display: inline-block; font-size: 3rem; line-height: 1; color: var(--accent); filter: drop-shadow(0 6px 20px var(--accent-soft)); }
+.hero h1 { margin: .6rem 0 0; font-size: clamp(2.4rem, 8vw, 3.4rem); font-weight: 800; }
+.hero-tagline { margin: .6rem auto 1.1rem; max-width: 34rem; color: var(--text-muted); font-size: 1.05rem; line-height: 1.5; }
+.status-pill { display: inline-flex; align-items: center; gap: .5rem; padding: .4rem .85rem; border-radius: var(--radius-pill); background: var(--surface-1); box-shadow: var(--shadow-card); font-size: .9rem; font-weight: 600; }
+.status-pill i { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); }
+.status-pill.ok i { background: var(--success); box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 25%, transparent); }
+.status-pill.off i { background: var(--danger); }
+.hero-actions { display: flex; flex-wrap: wrap; gap: .6rem; justify-content: center; margin-top: 1.25rem; }
+
+/* ---- Feature grid (home) ---------------------------------------------------- */
+.feature-grid { display: grid; grid-template-columns: 1fr; gap: 1rem; }
+@media (min-width: 720px) { .feature-grid { grid-template-columns: repeat(3, 1fr); } }
+.feature-card { display: flex; flex-direction: column; gap: .4rem; text-decoration: none; color: inherit; }
+.feature-card h2 { margin: 0; font-size: 1.15rem; font-weight: 700; letter-spacing: -0.01em; color: var(--text); text-transform: none; }
+.feature-card .feature-go { margin-top: auto; display: inline-flex; align-items: center; gap: .4rem; color: var(--accent); font-weight: 600; font-size: .9rem; padding-top: .5rem; }
+.feature-card .chevron { border-color: var(--accent); }
+
+/* ---- Search + current weather ----------------------------------------------- */
+.search-input { width: 100%; margin-bottom: 1rem; border: 1px solid var(--hairline); border-radius: var(--radius-control); padding: .8rem 1rem; background: var(--surface-1); color: var(--text); font: inherit; box-shadow: var(--shadow-card); }
+.search-input:focus { outline: none; border-color: var(--accent); }
+.current-weather-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.current-weather h2 { text-transform: none; letter-spacing: -0.01em; font-size: 1.1rem; color: var(--text); }
+.current-desc { margin: .1rem 0 0; color: var(--text-muted); }
+.current-temp { font-size: 3rem; font-weight: 800; line-height: 1; letter-spacing: -0.03em; }
+.current-meta { display: flex; flex-wrap: wrap; gap: .35rem 1.25rem; margin-top: .9rem; color: var(--text-muted); font-size: .9rem; }
+.day-name { display: block; margin-bottom: .35rem; font-weight: 700; }
+.day-low { color: var(--text-muted); font-weight: 500; }
+
 /* ---- Accessibility: focus ring ---------------------------------------------- */
 /* The custom controls are real button/a/input elements (keyboard-reachable), but
    border:0 leaves a keyboard user with nowhere to look. :focus-visible (not :focus)
