@@ -173,6 +173,16 @@ h1, h2, h3 { letter-spacing: -0.02em; }
   box-shadow: var(--shadow-card);
   padding: 1.15rem;
 }
+.glass > h2:first-child, .glass > h3:first-child { margin-top: 0; }
+/* Stat/weather widget cards: a small uppercase label above a big value. Scoped to
+   the widget grid so it never touches, say, a now-playing track title in a card. */
+.widget-grid h2 { font-size: .8rem; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; color: var(--text-muted); margin: 0 0 .35rem; }
+/* Opt-in big-number style for a stat card's value (used by the guild overview and
+   weather cards) — kept a utility class rather than a blanket `p` rule so a card
+   with body copy is not forced to 1.4rem. */
+.stat-value { margin: 0; font-size: 1.4rem; font-weight: 700; letter-spacing: -0.02em; }
+.glass-interactive { transition: transform var(--dur) var(--ease), box-shadow var(--dur) var(--ease); cursor: pointer; }
+.glass-interactive:hover { transform: translateY(-2px); box-shadow: var(--shadow-pop); }
 
 /* ---- Buttons ---------------------------------------------------------------- */
 .ios-button, .segmented button, .stepper button {
