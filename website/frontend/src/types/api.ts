@@ -54,3 +54,9 @@ export type SubPreview = { id: number; kind: SubKind; alert: Alert | null; would
 export type Persona = { id: number; guild_id: string; name: string; system_prompt: string; is_default: boolean; created_at: string | null; updated_at: string | null }
 export type AIConversation = { channel_id: string; rolling_summary: string | null; token_count: number; updated_at: string | null; message_count: number }
 export type AIUsage = { model: string; rpm: number; tpm: number; rpd: number; cooldown_until: string | null; totals: { prompt_tokens: number; output_tokens: number; total_tokens: number; successful_requests: number; session_requests: number } }
+
+// The audit reader Phase 7 added. `payload` is whatever the writer recorded, so it
+// is unknown rather than a fixed shape. `next_before` is the keyset cursor: pass it
+// back as ?before= for the next page, or null when there are no older entries.
+export type AuditEntry = { id: number; guild_id: string | null; actor_id: string; action: string; payload: unknown; source: string; created_at: string | null }
+export type AuditPage = { id: string; entries: AuditEntry[]; next_before: number | null }

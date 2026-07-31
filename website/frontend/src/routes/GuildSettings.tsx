@@ -78,7 +78,7 @@ export function GuildSettings() {
         <input className="text-input" value={draft.timezone} onChange={event => set('timezone', event.target.value)} />
       </ListRow>
       <ListRow label="Default volume" detail={`${draft.default_volume}%`}>
-        <Slider value={draft.default_volume} onChange={value => set('default_volume', value)} />
+        <Slider label="Default volume" value={draft.default_volume} onChange={value => set('default_volume', value)} />
       </ListRow>
       <ListRow label="DJ role" detail="Everyone can control the player until one is set">
         {meta.data

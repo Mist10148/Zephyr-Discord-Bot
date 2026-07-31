@@ -52,6 +52,7 @@ export function GuildOverview() {
       <ListRow to={`/g/${g.id}/weather-alerts`} label="Weather alerts" detail="Daily digests and severe-weather watches" />
       <ListRow to={`/g/${g.id}/ai`} label="AI" detail="Personas, usage, and channel memory" />
       <ListRow to={`/g/${g.id}/settings`} label="Settings" detail="Prefix, DJ role, music channels" />
+      <ListRow to={`/g/${g.id}/audit`} label="Audit log" detail="Who changed what, from where" />
     </ListGroup>
 
     <GlassSurface>
