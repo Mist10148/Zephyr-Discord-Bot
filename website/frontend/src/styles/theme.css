@@ -240,6 +240,46 @@ a.list-row:hover, button.list-row:hover { background: var(--surface-2); }
 /* ---- Stepper ---------------------------------------------------------------- */
 .stepper { display: flex; align-items: center; gap: 1rem; }
 
+/* ---- App shell / top bar ---------------------------------------------------- */
+.appbar {
+  position: sticky; top: 0; z-index: 15;
+  padding-top: env(safe-area-inset-top);
+  background: var(--surface-glass);
+  backdrop-filter: blur(var(--blur-regular)) saturate(160%);
+  -webkit-backdrop-filter: blur(var(--blur-regular)) saturate(160%);
+  border-bottom: 1px solid var(--hairline);
+}
+.appbar-inner {
+  max-width: 960px; margin-inline: auto;
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  padding: .7rem 1.25rem;
+}
+.brand { display: inline-flex; align-items: center; gap: .5rem; text-decoration: none; color: var(--text); font-weight: 800; letter-spacing: -0.02em; }
+.brand-mark { color: var(--accent); font-size: 1.15rem; line-height: 1; }
+.brand-name { font-size: 1.1rem; }
+.appbar-nav { display: flex; align-items: center; gap: .6rem; }
+.nav-link { text-decoration: none; color: var(--text-muted); font-weight: 600; font-size: .95rem; padding: .4rem .7rem; border-radius: var(--radius-pill); transition: background var(--dur-fast), color var(--dur-fast); }
+.nav-link:hover { color: var(--text); background: var(--surface-2); }
+.nav-link.active { color: var(--accent); background: var(--accent-soft); }
+.theme-toggle {
+  display: grid; place-items: center; width: 38px; height: 38px;
+  border: 1px solid var(--hairline); border-radius: var(--radius-pill);
+  background: var(--surface-2); color: var(--text); cursor: pointer;
+  transition: background var(--dur-fast), color var(--dur-fast);
+}
+.theme-toggle:hover { background: var(--surface-3); }
+
+/* Sidebar for the guild sub-pages: a rail on wide screens, and stacked pills that
+   scroll horizontally on phones. Pages opt in by wrapping content in `.guild-shell`. */
+.guild-shell { display: grid; gap: 1rem; }
+.guild-nav { display: flex; gap: .4rem; overflow-x: auto; padding-bottom: .25rem; -webkit-overflow-scrolling: touch; }
+.guild-nav .nav-link { white-space: nowrap; background: var(--surface-1); }
+@media (min-width: 860px) {
+  .guild-shell { grid-template-columns: 220px 1fr; align-items: start; }
+  .guild-nav { position: sticky; top: calc(64px + env(safe-area-inset-top)); flex-direction: column; overflow: visible; gap: .2rem; }
+  .guild-nav .nav-link { background: transparent; }
+}
+
 /* ---- Nav bars --------------------------------------------------------------- */
 .tab-bar { position: sticky; bottom: 0; padding: 1rem env(safe-area-inset-bottom); }
 
