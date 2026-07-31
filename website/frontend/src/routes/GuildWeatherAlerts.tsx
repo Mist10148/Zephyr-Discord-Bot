@@ -5,6 +5,7 @@ import { api } from '../lib/api'
 import { haptic } from '../lib/haptics'
 import { useGuildMeta } from '../lib/player'
 import { ErrorNote } from '../components/ErrorNote'
+import { GuildShell } from '../components/GuildNav'
 import { CapsuleToast, GlassSurface, LargeTitleHeader, ListGroup, ListRow, PressableButton, Sheet, Skeleton, Toggle } from '../components/ios'
 import type { SubKind, SubPreview, WeatherSub, WeatherSubList } from '../types/api'
 
@@ -132,8 +133,8 @@ export function GuildWeatherAlerts() {
     </main>
   }
 
-  return <main className="app">
-    <LargeTitleHeader title="Weather alerts" />
+  return <main className="app"><GuildShell guildId={guildId}>
+    <LargeTitleHeader title="Weather alerts" subtitle="Daily digests and severe-weather watches posted to your channels." />
 
     {subs.data.subscriptions.length === 0
       ? <GlassSurface>
@@ -164,7 +165,5 @@ export function GuildWeatherAlerts() {
     <Sheet open={previewing !== null} onOpenChange={open => !open && setPreviewing(null)}>
       {previewing && <PreviewSheet guildId={guildId} sub={previewing} onClose={() => setPreviewing(null)} />}
     </Sheet>
-
-    <p><Link to={`/g/${guildId}`}>Back to the server</Link></p>
-  </main>
+  </GuildShell></main>
 }

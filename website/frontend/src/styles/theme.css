@@ -155,10 +155,21 @@ body::before {
 a { color: var(--link); text-underline-offset: 2px; }
 
 h1, h2, h3 { letter-spacing: -0.02em; }
+/* Section heading used on the guild pages (Usage / Personas / Queue / Music
+   channels …). The special cases — widget-grid labels, feature cards, the weather
+   card, now-playing — all override this by being more specific. */
+h2 { font-size: 1.15rem; font-weight: 700; margin: 1.6rem 0 .7rem; }
+/* Content flows in normal block order beside the nav rail; the header's own top
+   margin is trimmed so it lines up with the first nav pill. */
+.guild-main > *:first-child { margin-top: 0; }
+.guild-main .large-title { margin-top: 0; }
 
 .large-title { margin: .25rem 0 1.25rem; }
 .large-title h1 { margin: 0; font-size: 2.1rem; font-weight: 800; }
 .large-title .subtitle { margin: .35rem 0 0; color: var(--text-muted); font-size: .98rem; }
+.guild-head { display: flex; align-items: center; gap: .85rem; }
+.guild-head h1 { margin: 0; font-size: 1.7rem; }
+.guild-head .subtitle { margin: .15rem 0 0; }
 
 .stack { display: grid; gap: 1rem; }
 .muted { color: var(--text-muted); }

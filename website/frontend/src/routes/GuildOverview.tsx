@@ -4,6 +4,7 @@ import { api } from '../lib/api'
 import type { GuildOverview as Overview } from '../types/api'
 import { GuildIcon } from '../components/DiscordAvatar'
 import { ErrorNote } from '../components/ErrorNote'
+import { GuildShell } from '../components/GuildNav'
 import { GlassSurface, LargeTitleHeader, ListGroup, ListRow, Skeleton, WidgetGrid } from '../components/ios'
 
 function botLabel(botPresent: boolean | null) {
@@ -26,15 +27,18 @@ export function GuildOverview() {
   if (guild.error || !guild.data) return <main className="app"><LargeTitleHeader title="No access" /><ErrorNote error={guild.error} onRetry={() => guild.refetch()} /><p><Link to="/g">All servers</Link></p></main>
 
   const g = guild.data
-  return <main className="app">
-    <header className="large-title" style={{ display: 'flex', alignItems: 'center', gap: '.75rem' }}>
+  return <main className="app"><GuildShell guildId={guildId}>
+    <header className="large-title guild-head">
       <GuildIcon name={g.name} iconUrl={g.icon_url} large />
-      <h1>{g.name}</h1>
+      <div>
+        <h1>{g.name}</h1>
+        <p className="subtitle">{g.owner ? 'You own this server' : 'You manage this server'}</p>
+      </div>
     </header>
 
     <WidgetGrid>
-      <GlassSurface><h2>Prefix</h2><p>{g.prefix}</p></GlassSurface>
-      <GlassSurface><h2>Zephyr</h2><p>{botLabel(g.bot_present)}</p></GlassSurface>
+      <GlassSurface><h2>Prefix</h2><p className="stat-value">{g.prefix}</p></GlassSurface>
+      <GlassSurface><h2>Zephyr</h2><p className="stat-value">{botLabel(g.bot_present)}</p></GlassSurface>
     </WidgetGrid>
 
     <ListGroup>
@@ -61,5 +65,5 @@ export function GuildOverview() {
     </GlassSurface>
 
     <p><Link to="/g">All servers</Link></p>
-  </main>
+  </GuildShell></main>
 }

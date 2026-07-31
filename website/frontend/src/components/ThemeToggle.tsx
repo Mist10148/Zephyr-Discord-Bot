@@ -1,5 +1,5 @@
 import { motion } from 'motion/react'
-import { useTheme } from '../lib/theme'
+import { useTheme } from '../lib/theme-context'
 import { haptic } from '../lib/haptics'
 
 // A single control that reads its own state from the theme context. Sun/moon glyphs

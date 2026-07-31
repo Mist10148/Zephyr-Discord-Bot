@@ -5,6 +5,7 @@ import { api, ApiError } from '../lib/api'
 import { haptic } from '../lib/haptics'
 import { useGuildMeta } from '../lib/player'
 import { ErrorNote } from '../components/ErrorNote'
+import { GuildShell } from '../components/GuildNav'
 import { CapsuleToast, GlassSurface, LargeTitleHeader, ListGroup, ListRow, PressableButton, Skeleton, Slider } from '../components/ios'
 import type { GuildSettings as Settings } from '../types/api'
 
@@ -63,8 +64,8 @@ export function GuildSettings() {
     ? (save.error.detail as { field?: string } | null)?.field
     : undefined
 
-  return <main className="app">
-    <LargeTitleHeader title="Settings" />
+  return <main className="app"><GuildShell guildId={guildId}>
+    <LargeTitleHeader title="Settings" subtitle="Prefix, DJ role, music channels and more." />
     {settings.data!.defaults_applied && <GlassSurface><p className="muted">This server has never been configured, so these are Zephyr's defaults. Saving stores them.</p></GlassSurface>}
 
     <ListGroup>
@@ -113,6 +114,5 @@ export function GuildSettings() {
       <PressableButton variant="secondary" disabled={!dirty} onClick={() => { setDraft(original); setSaved(false) }}>Discard</PressableButton>
     </div>
 
-    <p><Link to={`/g/${guildId}`}>Back to the server</Link></p>
-  </main>
+  </GuildShell></main>
 }
