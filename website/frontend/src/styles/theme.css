@@ -288,7 +288,9 @@ a.list-row:hover, button.list-row:hover { background: var(--surface-2); }
   background: var(--surface-2); color: var(--text); cursor: pointer;
   transition: background var(--dur-fast), color var(--dur-fast);
 }
-.theme-toggle:hover { background: var(--surface-3); }
+.theme-toggle:hover { background: var(--surface-3); color: var(--accent); }
+.theme-toggle svg { transition: transform var(--dur) var(--ease); }
+.theme-toggle:hover svg { transform: rotate(-18deg); }
 
 /* Sidebar for the guild sub-pages: a rail on wide screens, and stacked pills that
    scroll horizontally on phones. Pages opt in by wrapping content in `.guild-shell`. */
