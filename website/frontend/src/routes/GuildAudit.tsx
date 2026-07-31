@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { api } from '../lib/api'
 import type { AuditEntry, AuditPage } from '../types/api'
 import { ErrorNote } from '../components/ErrorNote'
+import { GuildShell } from '../components/GuildNav'
 import { GlassSurface, LargeTitleHeader, ListGroup, ListRow, PressableButton, Skeleton } from '../components/ios'
 
 // Actions are recorded as dotted machine strings (`player.skip`, `ai.persona.create`);
@@ -51,8 +52,8 @@ export function GuildAudit() {
   if (query.error) return <main className="app"><LargeTitleHeader title="Audit log" /><ErrorNote error={query.error} onRetry={() => query.refetch()} /><p><Link to={`/g/${guildId}`}>Back</Link></p></main>
 
   const entries = query.data.pages.flatMap(page => page.entries)
-  return <main className="app">
-    <LargeTitleHeader title="Audit log" />
+  return <main className="app"><GuildShell guildId={guildId}>
+    <LargeTitleHeader title="Audit log" subtitle="Who changed what in this server, and from where." />
     {entries.length === 0
       ? <GlassSurface><p className="muted">Nothing has been changed here yet. Settings edits and player actions from the dashboard show up here.</p></GlassSurface>
       : <ListGroup>{entries.map(entry => <AuditRow key={entry.id} entry={entry} />)}</ListGroup>}
@@ -61,6 +62,5 @@ export function GuildAudit() {
         {query.isFetchingNextPage ? 'Loading…' : 'Load older'}
       </PressableButton>
     </div>}
-    <p><Link to={`/g/${guildId}`}>Back to overview</Link></p>
-  </main>
+  </GuildShell></main>
 }

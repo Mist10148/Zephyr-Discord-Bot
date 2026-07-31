@@ -4,6 +4,7 @@ import { ApiError } from '../lib/api'
 import { haptic } from '../lib/haptics'
 import { formatDuration, useElapsed, usePlayer, usePlayerAction } from '../lib/player'
 import { ErrorNote } from '../components/ErrorNote'
+import { GuildShell } from '../components/GuildNav'
 import { PlaylistPanel } from '../components/PlaylistPanel'
 import { GlassSurface, LargeTitleHeader, ListGroup, ListRow, PressableButton, SegmentedControl, Skeleton, Slider, Toggle } from '../components/ios'
 import type { Player } from '../types/api'
@@ -65,8 +66,8 @@ export function GuildMusic() {
   // local value wins until the mutation that carries it has settled.
   const shownVolume = volume ?? data.volume ?? 50
 
-  return <main className="app">
-    <LargeTitleHeader title="Music" />
+  return <main className="app"><GuildShell guildId={guildId}>
+    <LargeTitleHeader title="Music" subtitle="Now playing, queue and playlists for this server." />
 
     {!data.live && <GlassSurface>
       <p>Zephyr is not playing anything here.</p>
@@ -123,7 +124,5 @@ export function GuildMusic() {
     {(data.queue_length ?? 0) > data.queue.length && <p className="muted">and {(data.queue_length ?? 0) - data.queue.length} more…</p>}
 
     <PlaylistPanel guildId={guildId} />
-
-    <p><Link to={`/g/${guildId}`}>Back to the server</Link></p>
-  </main>
+  </GuildShell></main>
 }

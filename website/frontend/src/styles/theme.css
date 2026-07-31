@@ -1,39 +1,423 @@
 @import "tailwindcss";
 @custom-variant dark (&:is(.dark *));
-@theme { --font-sans: -apple-system, BlinkMacSystemFont, "Inter", sans-serif; --radius-control: 12px; --radius-card: 22px; --radius-sheet: 38px; --shadow-card: 0 1px 2px rgb(0 0 0/.04), 0 8px 24px rgb(0 0 0/.08), 0 24px 48px rgb(0 0 0/.06); }
+
+/* ============================================================================
+   Zephyr design system — "Elevated glass"
+   ----------------------------------------------------------------------------
+   Everything visual is a token. Colours live only here, once per theme, so a
+   surface never hard-codes a hex value and light/dark stay in lockstep. Glass is
+   applied surgically (cards, sheets, nav, the command palette) over an animated
+   aurora backdrop -- never as flat full-screen chrome. `.dark` on <html> selects
+   the dark palette; its absence is light. The pre-paint snippet in index.html sets
+   that class before React mounts, so there is no theme flash on load.
+   ========================================================================== */
+
+@theme {
+  --font-sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+
+:root {
+  color-scheme: light;
+
+  /* Shape */
+  --radius-control: 12px;
+  --radius-card: 22px;
+  --radius-sheet: 34px;
+  --radius-pill: 999px;
+
+  /* Motion — springy but restrained; the `motion` lib carries the tactile springs,
+     these ease CSS state changes (hover, theme, expand). */
+  --dur-fast: .14s;
+  --dur: .22s;
+  --ease: cubic-bezier(.2, .8, .2, 1);
+
+  /* Glass material. Three blur tiers so a sheet reads heavier than a card without
+     each surface inventing its own numbers. */
+  --blur-thin: 12px;
+  --blur-regular: 20px;
+  --blur-thick: 34px;
+
+  /* ---- Light palette ---- */
+  --bg: #e9f0fb;
+  --aurora-1: rgba(120, 170, 245, .55);   /* sky blue   */
+  --aurora-2: rgba(178, 150, 232, .45);   /* soft violet */
+  --aurora-3: rgba(120, 214, 200, .42);   /* breeze teal */
+
+  --text: #0c1526;
+  --text-muted: #5a6474;
+  --text-faint: #8a93a3;
+
+  --surface-glass: rgba(255, 255, 255, .62);
+  --surface-glass-border: rgba(255, 255, 255, .7);
+  --surface-1: #ffffff;   /* opaque card / list background */
+  --surface-2: #eef2f9;   /* inset control track          */
+  --surface-3: #e2e8f2;   /* pressed / hover fill          */
+  --hairline: rgba(12, 21, 38, .09);
+
+  --accent: #0a84ff;
+  --accent-strong: #0060df;
+  --accent-soft: rgba(10, 132, 255, .12);
+  --on-accent: #ffffff;
+  --success: #12a150;
+  --danger: #e5484d;
+  --danger-soft: rgba(229, 72, 77, .12);
+  --link: #0a68d6;
+
+  --shadow-card:
+    0 1px 2px rgba(12, 21, 38, .06),
+    0 8px 24px rgba(12, 21, 38, .08),
+    0 24px 48px rgba(12, 21, 38, .06);
+  --shadow-pop:
+    0 8px 20px rgba(12, 21, 38, .12),
+    0 32px 64px rgba(12, 21, 38, .18);
+}
+
+.dark {
+  color-scheme: dark;
+
+  --bg: #080b16;
+  --aurora-1: rgba(49, 86, 129, .70);
+  --aurora-2: rgba(78, 54, 90, .62);
+  --aurora-3: rgba(31, 91, 87, .55);
+
+  --text: #f4f6fb;
+  --text-muted: #9aa4b6;
+  --text-faint: #6a7383;
+
+  --surface-glass: rgba(255, 255, 255, .08);
+  --surface-glass-border: rgba(255, 255, 255, .14);
+  --surface-1: #141826;
+  --surface-2: #1b2030;
+  --surface-3: #262c3e;
+  --hairline: rgba(255, 255, 255, .10);
+
+  --accent: #0a84ff;
+  --accent-strong: #409cff;
+  --accent-soft: rgba(10, 132, 255, .20);
+  --on-accent: #ffffff;
+  --success: #30d158;
+  --danger: #ff453a;
+  --danger-soft: rgba(255, 69, 58, .18);
+  --link: #8ab4ff;
+
+  --shadow-card:
+    0 1px 2px rgba(0, 0, 0, .30),
+    0 10px 30px rgba(0, 0, 0, .40),
+    0 30px 60px rgba(0, 0, 0, .30);
+  --shadow-pop:
+    0 12px 28px rgba(0, 0, 0, .45),
+    0 40px 80px rgba(0, 0, 0, .55);
+}
+
 * { box-sizing: border-box; }
 html, body, #root { min-height: 100%; margin: 0; }
-body { background: radial-gradient(circle at 15% 10%, #315681, transparent 35%), radial-gradient(circle at 80% 80%, #4e365a, transparent 40%), #0b1020; color: white; font-family: var(--font-sans); }
-.app { max-width: 720px; margin: auto; min-height: 100vh; padding: max(2rem, env(safe-area-inset-top)) 1.25rem; }
-a { color: #8ab4ff; }
-.glass { background: rgb(255 255 255 / .14); backdrop-filter: blur(40px) saturate(150%); border: 1px solid rgb(255 255 255 / .16); border-radius: var(--radius-card); box-shadow: var(--shadow-card); padding: 1rem; }
-.ios-button,.segmented button,.stepper button { border: 0; border-radius: var(--radius-control); padding: .7rem 1rem; background: #0a84ff; color: white; font: inherit; }.sheet-overlay { position: fixed; inset: 0; background: rgb(0 0 0/.45); }.sheet { position: fixed; inset: auto .5rem .5rem; min-height: 40vh; max-height: 92vh; overflow: auto; border-radius: var(--radius-sheet); background: #2c2c2e; padding: 1rem; }.grabber { width: 36px; height: 5px; margin: 0 auto 1rem; border-radius: 99px; background: #777; }.segmented { display:flex; gap:2px; padding:3px; background:#3a3a3c; border-radius:12px; }.segmented button { flex:1; background:transparent; }.segmented .active { background:#636366; }.list-group { overflow:hidden; border-radius:22px; background:#2c2c2e; }.list-row { display:flex; justify-content:space-between; padding:1rem; border-bottom:1px solid #3a3a3c; }.toggle { width:50px; border:0; border-radius:99px; background:#636366; padding:3px; }.toggle i { display:block; width:22px; height:22px; border-radius:50%; background:white; transition:transform .2s; }.toggle.on { background:#30d158; }.toggle.on i { transform:translateX(22px); }.slider { width:100%; }.stepper { display:flex; align-items:center; gap:1rem; }.tab-bar { position:sticky; bottom:0; padding:1rem env(safe-area-inset-bottom); }.island,.toast { margin:1rem auto; width:max-content; max-width:100%; padding:.6rem 1rem; border-radius:999px; background:#000; }.widget-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:.75rem; }.widget-grid>* { grid-column:span 2; }
-@media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation-duration:.01ms !important; scroll-behavior:auto !important; } } @media (prefers-reduced-transparency: reduce) { .glass { backdrop-filter:none; background:#2c2c2e; } }
-.list-row { align-items:center; gap:.75rem; }.list-row:last-child { border-bottom:0; }a.list-row,button.list-row { width:100%; border:0; background:transparent; color:inherit; font:inherit; text-align:left; text-decoration:none; cursor:pointer; }.row-leading { flex:0 0 auto; display:flex; }.row-label { flex:1 1 auto; min-width:0; display:grid; gap:.15rem; }.row-label small { color:#8e8e93; }.chevron { flex:0 0 auto; width:8px; height:8px; border-right:2px solid #636366; border-top:2px solid #636366; transform:rotate(45deg); }
-.guild-icon { display:grid; place-items:center; flex:0 0 auto; width:40px; height:40px; border-radius:12px; overflow:hidden; background:#3a3a3c; color:#e5e5ea; font-weight:600; font-size:.9rem; }.guild-icon img { width:100%; height:100%; object-fit:cover; }.guild-icon.lg { width:64px; height:64px; border-radius:20px; font-size:1.4rem; }
-a.ios-button { display:inline-block; color:white; text-decoration:none; }.ios-button.secondary { background:#3a3a3c; }.ios-button.danger { background:#3a3a3c; color:#ff453a; }.ios-button[disabled] { opacity:.45; }
-.stack { display:grid; gap:1rem; }.muted { color:#8e8e93; }
-.skeleton { display:grid; gap:.6rem; }.skeleton i { display:block; height:1.05rem; border-radius:8px; background:linear-gradient(90deg,#2c2c2e,#3a3a3c,#2c2c2e) 0 0/200% 100%; animation:shimmer 1.2s linear infinite; }.skeleton i:nth-child(even) { width:70%; }@keyframes shimmer { to { background-position:-200% 0; } }
-.toast.error { background:#3a1214; color:#ff9f9b; }
-/* Phase 7 a11y: the custom controls are real <button>/<a>/<input> elements, so
-   they are already keyboard-reachable -- but with border:0 and no default outline
-   a keyboard user could not see where focus was. One :focus-visible ring covers
-   every primitive; :focus-visible (not :focus) keeps it off mouse clicks. */
-:where(.ios-button,.list-row,.toggle,.segmented button,.stepper button,.drag-handle,.text-input,.slider,[cmdk-item]):focus-visible {
-  outline:2px solid #0a84ff; outline-offset:2px; border-radius:var(--radius-control);
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
 }
-.slider:focus-visible { outline-offset:4px; }
-/* Phase 7 perf: backdrop-filter is the most expensive thing the UI paints, and the
-   cost is per *stacked* layer, not per element. The budget is "glass only where it
-   frames content over the gradient" -- cards, sheets, the command palette -- never
-   nested glass-in-glass, and never on a list of rows (those are opaque #2c2c2e).
-   prefers-reduced-transparency below is the hard escape hatch for devices that
-   still cannot afford it. */
-@media (prefers-reduced-transparency: reduce) { .palette,.sheet { backdrop-filter:none; } }
-.now-playing { display:flex; gap:1rem; align-items:flex-start; }.now-playing .art { flex:0 0 auto; width:88px; height:88px; border-radius:var(--radius-control); object-fit:cover; }.now-playing h2 { margin:0; font-size:1.05rem; line-height:1.3; }.now-playing .stack { gap:.5rem; min-width:0; }.progress { height:6px; border-radius:99px; background:#3a3a3c; overflow:hidden; }.progress i { display:block; height:100%; border-radius:99px; background:#0a84ff; }.times { display:flex; justify-content:space-between; font-variant-numeric:tabular-nums; font-size:.8rem; }
-.transport { display:flex; flex-wrap:wrap; gap:.5rem; margin:1rem 0; }.transport .ios-button { flex:1 1 auto; }.row-actions { display:flex; flex:0 0 auto; gap:.4rem; }.row-actions .ios-button { padding:.4rem .7rem; font-size:.85rem; }
-.text-input,select.text-input { flex:1 1 auto; min-width:0; max-width:60%; border:1px solid #3a3a3c; border-radius:var(--radius-control); padding:.5rem .7rem; background:#1c1c1e; color:inherit; font:inherit; }.text-input.short { max-width:8rem; }
-/* The handle is what carries dnd-kit's keyboard bindings, so it must be a real
-   focusable button -- drag-and-drop with no keyboard path is an a11y dead end. */
-.sortable { touch-action:none; background:#2c2c2e; }.sortable.dragging { opacity:.6; }.drag-handle { flex:0 0 auto; border:0; border-radius:8px; padding:.3rem .5rem; background:#3a3a3c; color:#8e8e93; font:inherit; cursor:grab; }
-.palette-backdrop { position:fixed; inset:0; z-index:20; display:grid; place-items:start center; padding-top:15vh; background:rgb(0 0 0/.5); }.palette { width:min(640px,calc(100vw - 2rem)); overflow:hidden; border-radius:22px; background:#2c2c2e; box-shadow:var(--shadow-card); }.palette input { width:100%; border:0; border-bottom:1px solid #444; padding:1rem; background:transparent; color:white; font:inherit; }.palette [cmdk-item] { display:grid; gap:.25rem; padding:.8rem 1rem; cursor:pointer; }.palette [cmdk-item][data-selected=true] { background:#3a3a3c; }.palette span { color:#bbb; font-size:.85rem; }
+
+/* ---- Animated aurora / wind backdrop -----------------------------------------
+   Three drifting radial blobs, fixed behind everything, that give "Zephyr" its
+   breeze. GPU-cheap: it animates only background-position on a single fixed layer,
+   and it is switched off entirely under prefers-reduced-motion below. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: -20vmax;
+  z-index: -1;
+  background:
+    radial-gradient(38vmax 38vmax at 18% 12%, var(--aurora-1), transparent 60%),
+    radial-gradient(42vmax 42vmax at 82% 82%, var(--aurora-2), transparent 60%),
+    radial-gradient(34vmax 34vmax at 62% 28%, var(--aurora-3), transparent 62%);
+  background-repeat: no-repeat;
+  filter: saturate(1.05);
+  animation: drift 34s ease-in-out infinite alternate;
+}
+@keyframes drift {
+  0%   { transform: translate3d(-2%, -1%, 0) scale(1);    }
+  50%  { transform: translate3d(2%, 1.5%, 0) scale(1.06); }
+  100% { transform: translate3d(-1%, 2%, 0) scale(1.02);  }
+}
+
+.app {
+  max-width: 760px;
+  margin-inline: auto;
+  min-height: 100vh;
+  padding: max(1.75rem, env(safe-area-inset-top)) 1.25rem calc(2rem + env(safe-area-inset-bottom));
+}
+
+a { color: var(--link); text-underline-offset: 2px; }
+
+h1, h2, h3 { letter-spacing: -0.02em; }
+/* Section heading used on the guild pages (Usage / Personas / Queue / Music
+   channels …). The special cases — widget-grid labels, feature cards, the weather
+   card, now-playing — all override this by being more specific. */
+h2 { font-size: 1.15rem; font-weight: 700; margin: 1.6rem 0 .7rem; }
+/* Content flows in normal block order beside the nav rail; the header's own top
+   margin is trimmed so it lines up with the first nav pill. */
+.guild-main > *:first-child { margin-top: 0; }
+.guild-main .large-title { margin-top: 0; }
+
+.large-title { margin: .25rem 0 1.25rem; }
+.large-title h1 { margin: 0; font-size: 2.1rem; font-weight: 800; }
+.large-title .subtitle { margin: .35rem 0 0; color: var(--text-muted); font-size: .98rem; }
+.guild-head { display: flex; align-items: center; gap: .85rem; }
+.guild-head h1 { margin: 0; font-size: 1.7rem; }
+.guild-head .subtitle { margin: .15rem 0 0; }
+
+.stack { display: grid; gap: 1rem; }
+.muted { color: var(--text-muted); }
+
+/* ---- Glass surface ---------------------------------------------------------- */
+.glass {
+  background: var(--surface-glass);
+  backdrop-filter: blur(var(--blur-regular)) saturate(160%);
+  -webkit-backdrop-filter: blur(var(--blur-regular)) saturate(160%);
+  border: 1px solid var(--surface-glass-border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  padding: 1.15rem;
+}
+.glass > h2:first-child, .glass > h3:first-child { margin-top: 0; }
+/* Stat/weather widget cards: a small uppercase label above a big value. Scoped to
+   the widget grid so it never touches, say, a now-playing track title in a card. */
+.widget-grid h2 { font-size: .8rem; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; color: var(--text-muted); margin: 0 0 .35rem; }
+/* Opt-in big-number style for a stat card's value (used by the guild overview and
+   weather cards) — kept a utility class rather than a blanket `p` rule so a card
+   with body copy is not forced to 1.4rem. */
+.stat-value { margin: 0; font-size: 1.4rem; font-weight: 700; letter-spacing: -0.02em; }
+.glass-interactive { transition: transform var(--dur) var(--ease), box-shadow var(--dur) var(--ease); cursor: pointer; }
+.glass-interactive:hover { transform: translateY(-2px); box-shadow: var(--shadow-pop); }
+
+/* ---- Buttons ---------------------------------------------------------------- */
+.ios-button, .segmented button, .stepper button {
+  border: 0;
+  border-radius: var(--radius-control);
+  padding: .72rem 1.1rem;
+  background: var(--accent);
+  color: var(--on-accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease), opacity var(--dur-fast);
+}
+.ios-button:hover { background: var(--accent-strong); }
+.ios-button.secondary { background: var(--surface-3); color: var(--text); }
+.ios-button.secondary:hover { background: var(--surface-2); }
+.ios-button.danger { background: var(--danger-soft); color: var(--danger); }
+.ios-button[disabled] { opacity: .45; cursor: not-allowed; }
+a.ios-button { display: inline-block; text-align: center; text-decoration: none; color: var(--on-accent); }
+a.ios-button.secondary { color: var(--text); }
+
+/* ---- Sheet (bottom drawer) -------------------------------------------------- */
+.sheet-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, .5); backdrop-filter: blur(2px); }
+.sheet {
+  position: fixed; inset: auto .5rem calc(.5rem + env(safe-area-inset-bottom));
+  min-height: 40vh; max-height: 92vh; overflow: auto;
+  border-radius: var(--radius-sheet);
+  background: var(--surface-glass);
+  backdrop-filter: blur(var(--blur-thick)) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--blur-thick)) saturate(180%);
+  border: 1px solid var(--surface-glass-border);
+  box-shadow: var(--shadow-pop);
+  padding: 1.15rem 1.15rem 1.5rem;
+}
+.grabber { width: 40px; height: 5px; margin: 0 auto 1rem; border-radius: var(--radius-pill); background: var(--text-faint); }
+
+/* ---- Segmented control ------------------------------------------------------ */
+.segmented { display: flex; gap: 3px; padding: 3px; background: var(--surface-2); border-radius: var(--radius-control); }
+.segmented button { flex: 1; background: transparent; color: var(--text); font-weight: 600; padding: .5rem .7rem; }
+.segmented button:hover { background: var(--surface-3); }
+.segmented .active { background: var(--surface-1); box-shadow: 0 1px 3px rgba(0, 0, 0, .12); }
+
+/* ---- Inset-grouped lists ---------------------------------------------------- */
+.list-group { overflow: hidden; border-radius: var(--radius-card); background: var(--surface-1); box-shadow: var(--shadow-card); }
+.list-row { display: flex; align-items: center; gap: .75rem; padding: .95rem 1.1rem; border-bottom: 1px solid var(--hairline); }
+.list-row:last-child { border-bottom: 0; }
+a.list-row, button.list-row { width: 100%; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; text-decoration: none; cursor: pointer; transition: background var(--dur-fast); }
+a.list-row:hover, button.list-row:hover { background: var(--surface-2); }
+.row-leading { flex: 0 0 auto; display: flex; }
+.row-label { flex: 1 1 auto; min-width: 0; display: grid; gap: .15rem; }
+.row-label small { color: var(--text-muted); }
+.row-actions { display: flex; flex: 0 0 auto; gap: .4rem; }
+.row-actions .ios-button { padding: .4rem .7rem; font-size: .85rem; }
+.chevron { flex: 0 0 auto; width: 8px; height: 8px; border-right: 2px solid var(--text-faint); border-top: 2px solid var(--text-faint); transform: rotate(45deg); }
+
+/* ---- Toggle ----------------------------------------------------------------- */
+.toggle { width: 52px; border: 0; border-radius: var(--radius-pill); background: var(--surface-3); padding: 3px; cursor: pointer; transition: background var(--dur) var(--ease); }
+.toggle i { display: block; width: 24px; height: 24px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .3); transition: transform var(--dur) var(--ease); }
+.toggle.on { background: var(--success); }
+.toggle.on i { transform: translateX(22px); }
+
+/* ---- Slider ----------------------------------------------------------------- */
+.slider { width: 100%; accent-color: var(--accent); }
+
+/* ---- Stepper ---------------------------------------------------------------- */
+.stepper { display: flex; align-items: center; gap: 1rem; }
+
+/* ---- App shell / top bar ---------------------------------------------------- */
+.appbar {
+  position: sticky; top: 0; z-index: 15;
+  padding-top: env(safe-area-inset-top);
+  background: var(--surface-glass);
+  backdrop-filter: blur(var(--blur-regular)) saturate(160%);
+  -webkit-backdrop-filter: blur(var(--blur-regular)) saturate(160%);
+  border-bottom: 1px solid var(--hairline);
+}
+.appbar-inner {
+  max-width: 960px; margin-inline: auto;
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  padding: .7rem 1.25rem;
+}
+.brand { display: inline-flex; align-items: center; gap: .5rem; text-decoration: none; color: var(--text); font-weight: 800; letter-spacing: -0.02em; }
+.brand-mark { color: var(--accent); font-size: 1.15rem; line-height: 1; }
+.brand-name { font-size: 1.1rem; }
+.appbar-nav { display: flex; align-items: center; gap: .6rem; }
+.nav-link { text-decoration: none; color: var(--text-muted); font-weight: 600; font-size: .95rem; padding: .4rem .7rem; border-radius: var(--radius-pill); transition: background var(--dur-fast), color var(--dur-fast); }
+.nav-link:hover { color: var(--text); background: var(--surface-2); }
+.nav-link.active { color: var(--accent); background: var(--accent-soft); }
+.theme-toggle {
+  display: grid; place-items: center; width: 38px; height: 38px;
+  border: 1px solid var(--hairline); border-radius: var(--radius-pill);
+  background: var(--surface-2); color: var(--text); cursor: pointer;
+  transition: background var(--dur-fast), color var(--dur-fast);
+}
+.theme-toggle:hover { background: var(--surface-3); color: var(--accent); }
+.theme-toggle svg { transition: transform var(--dur) var(--ease); }
+.theme-toggle:hover svg { transform: rotate(-18deg); }
+
+/* Sidebar for the guild sub-pages: a rail on wide screens, and stacked pills that
+   scroll horizontally on phones. Pages opt in by wrapping content in `.guild-shell`. */
+.guild-shell { display: grid; gap: 1rem; }
+.guild-nav { display: flex; gap: .4rem; overflow-x: auto; padding-bottom: .25rem; -webkit-overflow-scrolling: touch; }
+.guild-nav .nav-link { white-space: nowrap; background: var(--surface-1); }
+@media (min-width: 860px) {
+  .guild-shell { grid-template-columns: 220px 1fr; align-items: start; }
+  .guild-nav { position: sticky; top: calc(64px + env(safe-area-inset-top)); flex-direction: column; overflow: visible; gap: .2rem; }
+  .guild-nav .nav-link { background: transparent; }
+}
+
+/* ---- Nav bars --------------------------------------------------------------- */
+.tab-bar { position: sticky; bottom: 0; padding: 1rem env(safe-area-inset-bottom); }
+
+/* ---- Dynamic island / toasts ------------------------------------------------ */
+.island, .toast {
+  margin: 1rem auto; width: max-content; max-width: 100%;
+  padding: .6rem 1.1rem; border-radius: var(--radius-pill);
+  background: var(--surface-1); color: var(--text); box-shadow: var(--shadow-card);
+}
+.toast.error { background: var(--danger-soft); color: var(--danger); }
+
+/* ---- Widget grid ------------------------------------------------------------ */
+.widget-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: .85rem; }
+.widget-grid > * { grid-column: span 2; }
+
+/* ---- Guild icon ------------------------------------------------------------- */
+.guild-icon { display: grid; place-items: center; flex: 0 0 auto; width: 40px; height: 40px; border-radius: 12px; overflow: hidden; background: var(--surface-3); color: var(--text); font-weight: 600; font-size: .9rem; }
+.guild-icon img { width: 100%; height: 100%; object-fit: cover; }
+.guild-icon.lg { width: 64px; height: 64px; border-radius: 20px; font-size: 1.4rem; }
+
+/* ---- Skeleton --------------------------------------------------------------- */
+.skeleton { display: grid; gap: .6rem; }
+.skeleton i { display: block; height: 1.05rem; border-radius: 8px; background: linear-gradient(90deg, var(--surface-2), var(--surface-3), var(--surface-2)) 0 0 / 200% 100%; animation: shimmer 1.3s linear infinite; }
+.skeleton i:nth-child(even) { width: 70%; }
+@keyframes shimmer { to { background-position: -200% 0; } }
+
+/* ---- Now playing ------------------------------------------------------------ */
+.now-playing { display: flex; gap: 1rem; align-items: flex-start; }
+.now-playing .art { flex: 0 0 auto; width: 92px; height: 92px; border-radius: var(--radius-control); object-fit: cover; box-shadow: var(--shadow-card); }
+.now-playing h2 { margin: 0; font-size: 1.05rem; line-height: 1.3; }
+.now-playing .stack { gap: .5rem; min-width: 0; }
+.progress { height: 6px; border-radius: var(--radius-pill); background: var(--surface-3); overflow: hidden; }
+.progress i { display: block; height: 100%; border-radius: var(--radius-pill); background: var(--accent); }
+.times { display: flex; justify-content: space-between; font-variant-numeric: tabular-nums; font-size: .8rem; color: var(--text-muted); }
+
+/* ---- Transport -------------------------------------------------------------- */
+.transport { display: flex; flex-wrap: wrap; gap: .5rem; margin: 1rem 0; }
+.transport .ios-button { flex: 1 1 auto; }
+
+/* ---- Inputs ----------------------------------------------------------------- */
+.text-input, select.text-input {
+  flex: 1 1 auto; min-width: 0; max-width: 60%;
+  border: 1px solid var(--hairline); border-radius: var(--radius-control);
+  padding: .55rem .75rem; background: var(--surface-2); color: inherit; font: inherit;
+  transition: border-color var(--dur-fast), background var(--dur-fast);
+}
+.text-input:focus { border-color: var(--accent); outline: none; }
+.text-input.short { max-width: 8rem; }
+
+/* ---- Sortable / drag handle (playlist editor) ------------------------------- */
+/* The handle carries dnd-kit's keyboard bindings, so it must be a real focusable
+   button -- drag-and-drop with no keyboard path is an a11y dead end. */
+.sortable { touch-action: none; background: var(--surface-1); }
+.sortable.dragging { opacity: .6; }
+.drag-handle { flex: 0 0 auto; border: 0; border-radius: 8px; padding: .3rem .5rem; background: var(--surface-3); color: var(--text-muted); font: inherit; cursor: grab; }
+
+/* ---- Command palette -------------------------------------------------------- */
+.palette-backdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: start center; padding-top: 15vh; background: rgba(0, 0, 0, .5); }
+.palette { width: min(640px, calc(100vw - 2rem)); overflow: hidden; border-radius: var(--radius-card); background: var(--surface-glass); backdrop-filter: blur(var(--blur-thick)) saturate(180%); -webkit-backdrop-filter: blur(var(--blur-thick)) saturate(180%); border: 1px solid var(--surface-glass-border); box-shadow: var(--shadow-pop); }
+.palette input { width: 100%; border: 0; border-bottom: 1px solid var(--hairline); padding: 1rem; background: transparent; color: var(--text); font: inherit; }
+.palette input:focus { outline: none; }
+.palette [cmdk-item] { display: grid; gap: .25rem; padding: .8rem 1rem; cursor: pointer; }
+.palette [cmdk-item][data-selected=true] { background: var(--accent-soft); }
+.palette span { color: var(--text-muted); font-size: .85rem; }
+
+.pull-refresh { display: contents; }
+
+/* ---- Home hero -------------------------------------------------------------- */
+.hero { text-align: center; padding: 2.5rem 0 1.5rem; }
+.hero-mark { display: inline-block; font-size: 3rem; line-height: 1; color: var(--accent); filter: drop-shadow(0 6px 20px var(--accent-soft)); }
+.hero h1 { margin: .6rem 0 0; font-size: clamp(2.4rem, 8vw, 3.4rem); font-weight: 800; }
+.hero-tagline { margin: .6rem auto 1.1rem; max-width: 34rem; color: var(--text-muted); font-size: 1.05rem; line-height: 1.5; }
+.status-pill { display: inline-flex; align-items: center; gap: .5rem; padding: .4rem .85rem; border-radius: var(--radius-pill); background: var(--surface-1); box-shadow: var(--shadow-card); font-size: .9rem; font-weight: 600; }
+.status-pill i { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); }
+.status-pill.ok i { background: var(--success); box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 25%, transparent); }
+.status-pill.off i { background: var(--danger); }
+.hero-actions { display: flex; flex-wrap: wrap; gap: .6rem; justify-content: center; margin-top: 1.25rem; }
+
+/* ---- Feature grid (home) ---------------------------------------------------- */
+.feature-grid { display: grid; grid-template-columns: 1fr; gap: 1rem; }
+@media (min-width: 720px) { .feature-grid { grid-template-columns: repeat(3, 1fr); } }
+.feature-card { display: flex; flex-direction: column; gap: .4rem; text-decoration: none; color: inherit; }
+.feature-card h2 { margin: 0; font-size: 1.15rem; font-weight: 700; letter-spacing: -0.01em; color: var(--text); text-transform: none; }
+.feature-card .feature-go { margin-top: auto; display: inline-flex; align-items: center; gap: .4rem; color: var(--accent); font-weight: 600; font-size: .9rem; padding-top: .5rem; }
+.feature-card .chevron { border-color: var(--accent); }
+
+/* ---- Search + current weather ----------------------------------------------- */
+.search-input { width: 100%; margin-bottom: 1rem; border: 1px solid var(--hairline); border-radius: var(--radius-control); padding: .8rem 1rem; background: var(--surface-1); color: var(--text); font: inherit; box-shadow: var(--shadow-card); }
+.search-input:focus { outline: none; border-color: var(--accent); }
+.current-weather-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.current-weather h2 { text-transform: none; letter-spacing: -0.01em; font-size: 1.1rem; color: var(--text); }
+.current-desc { margin: .1rem 0 0; color: var(--text-muted); }
+.current-temp { font-size: 3rem; font-weight: 800; line-height: 1; letter-spacing: -0.03em; }
+.current-meta { display: flex; flex-wrap: wrap; gap: .35rem 1.25rem; margin-top: .9rem; color: var(--text-muted); font-size: .9rem; }
+.day-name { display: block; margin-bottom: .35rem; font-weight: 700; }
+.day-low { color: var(--text-muted); font-weight: 500; }
+
+/* ---- Accessibility: focus ring ---------------------------------------------- */
+/* The custom controls are real button/a/input elements (keyboard-reachable), but
+   border:0 leaves a keyboard user with nowhere to look. :focus-visible (not :focus)
+   keeps the ring off mouse clicks. */
+:where(.ios-button, .list-row, .toggle, .segmented button, .stepper button, .drag-handle, .text-input, .slider, [cmdk-item], .theme-toggle, .nav-link):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-control);
+}
+.slider:focus-visible { outline-offset: 4px; }
+
+/* ---- Reduced motion / transparency -----------------------------------------
+   Performance + preference escape hatches. Glass is the most expensive thing the
+   UI paints; under reduced-transparency every glass surface falls back to an
+   opaque one, and the aurora animation stops under reduced-motion. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .glass, .sheet, .palette { background: var(--surface-1); backdrop-filter: none; -webkit-backdrop-filter: none; }
+}
