@@ -203,20 +203,25 @@ body {
   z-index: 2;
   flex: 1;
   width: 100%;
-  max-width: 1080px;
+  max-width: 1600px;
   margin-inline: auto;
   padding: max(1.75rem, env(safe-area-inset-top)) 1.25rem 2.5rem;
   container-type: inline-size;
 }
+/* Gutters grow with the window instead of the content stranding itself in a
+   1080px column with 400px of empty aurora either side on a wide monitor. */
+@media (min-width: 1200px) { .app { padding-inline: 2.5rem; } }
+@media (min-width: 1700px) { .app { padding-inline: 3.5rem; } }
 /* While the tab bar is pinned it floats over the end of the page, so the phone
    needs a bar's worth of clearance under the last row of content. */
 @media (max-width: 859px) {
   .app { padding-bottom: calc(5.5rem + env(safe-area-inset-bottom)); }
 }
 /* Narrower measures for the pages that are a single column of prose or one list. */
+/* Login and 404 stay narrow on purpose: they are one short statement each, and a
+   1600px measure would strand a single sentence across the whole monitor. */
 .app.narrow { max-width: 560px; }
-.app.medium { max-width: 720px; }
-.app.sink   { max-width: 760px; }
+.app.sink   { max-width: 1100px; }
 .app.centred { text-align: center; padding-top: 4rem; }
 
 a { color: var(--link); text-underline-offset: 2px; }
@@ -342,12 +347,19 @@ a.ios-button.secondary { color: var(--text); }
 }
 .icon-button.danger:hover { background: color-mix(in oklab, var(--danger) 10%, transparent); }
 
+/* A pill, not a text link. It frequently sits beside real buttons (Sign out,
+   Load older, Add a subscription), and an underlined link next to a pill reads as
+   two different kinds of control for what is the same kind of action. */
 .back-link-row { margin: 1.6rem 0 0; }
 .back-link {
-  display: inline-flex; align-items: center; gap: .3rem;
-  font-size: 14.5px; font-weight: 600; color: var(--link); text-decoration: none;
+  display: inline-flex; align-items: center; justify-content: center; gap: .4rem;
+  padding: 11px 20px; border-radius: var(--radius-pill);
+  border: 1px solid var(--hairline); background: var(--surface-1); color: var(--text);
+  font-size: 14.5px; font-weight: 600; text-decoration: none;
+  transition: background var(--dur-fast) var(--ease);
 }
-.back-link:hover { text-decoration: underline; }
+.back-link:hover { background: var(--surface-2); color: var(--text); text-decoration: none; }
+.back-link > span { color: var(--text-faint); }
 
 /* ---- Sheet (bottom drawer) -------------------------------------------------- */
 .sheet-overlay { position: fixed; inset: 0; z-index: 50; background: rgba(25, 25, 23, .32); backdrop-filter: blur(2px); }
@@ -505,7 +517,12 @@ a.list-row:hover, button.list-row:hover { background: var(--surface-2); text-dec
 .toast.error .toast-badge { background: var(--danger); font-size: 11px; }
 
 /* ---- Widget grid ------------------------------------------------------------ */
-.widget-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+/* auto-FILL, not auto-fit: with only two stat cards, auto-fit stretches each one
+   to half a 1600px page and leaves a 40px value floating in 700px of card. */
+.widget-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
+/* 210px never fits twice on a phone, so auto-fill collapses to one column and the
+   four dashboard stats become a screenful of scrolling before the servers. */
+@media (max-width: 599px) { .widget-grid { grid-template-columns: repeat(2, 1fr); } }
 .widget-grid .glass { padding: 18px; }
 .widget-grid h2 {
   font-family: var(--font-sans); font-size: 12px; font-weight: 600;
@@ -605,9 +622,9 @@ select.text-input { appearance: auto; }
   border-bottom: 1px solid var(--hairline);
 }
 .appbar-inner {
-  max-width: 1080px; margin-inline: auto;
+  max-width: 1600px; margin-inline: auto;
   display: flex; align-items: center; gap: 14px;
-  padding: 12px 22px;
+  padding: 12px 1.25rem;
 }
 .brand {
   display: inline-flex; align-items: center; gap: 10px;
@@ -820,6 +837,37 @@ select.text-input { appearance: auto; }
   background: var(--danger); color: #fff; font-size: 12px; font-weight: 700; font-style: normal;
 }
 
+/* ---- Dashboard (/g) ----------------------------------------------------------
+   A landing screen rather than a bare list: the servers are still the point, but
+   the questions you arrive with -- is the bot up, how many of my servers is it
+   actually in -- are answered before you have to click anything. */
+.dash-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 1.25rem; flex-wrap: wrap; margin: .25rem 0 1.5rem;
+}
+.dash-head h1 { margin: 0; font-size: clamp(30px, 3.6cqw, 42px); line-height: 1.05; letter-spacing: -.025em; }
+.dash-head .subtitle { margin: .4rem 0 0; color: var(--text-muted); font-size: 15px; }
+.dash-account {
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 8px 8px 12px; border-radius: var(--radius-pill);
+  border: 1px solid var(--hairline); background: var(--surface-1);
+}
+.dash-identity { display: grid; gap: 1px; min-width: 0; }
+.dash-identity b { font-size: 14px; font-weight: 600; }
+.dash-identity small { font-size: 12.5px; color: var(--text-muted); }
+.dash-stats { margin-bottom: 1.75rem; }
+.stat-of { font-size: .6em; font-weight: 400; color: var(--text-faint); }
+
+.server-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+.server-card {
+  display: flex; align-items: center; gap: 13px;
+  padding: 16px; text-decoration: none; color: var(--text);
+}
+.server-card:hover { text-decoration: none; color: var(--text); }
+.server-card-body { flex: 1; min-width: 0; display: grid; gap: 3px; }
+.server-card-body b { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.server-card-body small { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-muted); }
+
 /* ---- Server list ------------------------------------------------------------ */
 .list-row.strong-row .row-label { font-size: 15px; font-weight: 600; }
 .row-detail { display: inline-flex; align-items: center; gap: 6px; }
@@ -862,6 +910,8 @@ select.text-input { appearance: auto; }
 .actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 1.25rem 0; }
 .section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 1.7rem 0 .65rem; flex-wrap: wrap; }
 .section-head h2 { margin: 0; }
+/* The row owns the spacing; the label inside it must not add its own on top. */
+.section-head .section-label { margin: 0; }
 
 /* ---- Weather alerts: preview embed ------------------------------------------ */
 .embed { background: var(--surface-1); border: 1px solid var(--hairline); border-radius: 18px; overflow: hidden; }
