@@ -8,7 +8,7 @@ import { api } from '../lib/api'
 import { haptic } from '../lib/haptics'
 import { formatDuration, usePlaylist, usePlaylists } from '../lib/player'
 import { ErrorNote } from './ErrorNote'
-import { GlassSurface, ListGroup, ListRow, PressableButton, Sheet, Skeleton } from './ios'
+import { GlassSurface, IconButton, ListGroup, ListRow, PressableButton, Sheet, Skeleton } from './ios'
 import type { PlaylistTrack } from '../types/api'
 
 function SortableTrack({ id, track, onRemove }: { id: string; track: PlaylistTrack; onRemove(): void }) {
@@ -23,7 +23,7 @@ function SortableTrack({ id, track, onRemove }: { id: string; track: PlaylistTra
         keyboard path is the accessibility failure this component would otherwise be. */}
     <button className="drag-handle" aria-label={`Reorder ${track.title}`} {...attributes} {...listeners}>⠿</button>
     <span className="row-label">{track.title}<small>{track.url ? formatDuration(track.duration_s) : 'Resolved when it plays'}</small></span>
-    <PressableButton variant="secondary" onClick={onRemove}>Remove</PressableButton>
+    <span className="row-actions"><PressableButton className="small" variant="danger" onClick={onRemove}>Remove</PressableButton></span>
   </div>
 }
 
@@ -56,27 +56,28 @@ function PlaylistEditor({ playlistId, onClose }: { playlistId: number; onClose()
   }
 
   const dirty = JSON.stringify(tracks) !== JSON.stringify(playlist.data!.tracks)
-  return <div className="stack">
-    <h2>{playlist.data!.name}</h2>
+  return <>
+    <h2>Edit — {playlist.data!.name}</h2>
+    <p>Drag to reorder, or use the handle with arrow keys.</p>
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
       <SortableContext items={tracks.map(key)} strategy={verticalListSortingStrategy}>
-        <div className="list-group">
+        <ListGroup>
           {tracks.map((track, index) => <SortableTrack
             key={key(track, index)}
             id={key(track, index)}
             track={track}
             onRemove={() => setTracks(tracks.filter((_, position) => position !== index))}
           />)}
-        </div>
+        </ListGroup>
       </SortableContext>
     </DndContext>
     {tracks.length === 0 && <p className="muted">This playlist is now empty. Saving it will leave it empty.</p>}
     {save.error && <ErrorNote error={save.error} onRetry={() => save.reset()} />}
-    <div className="transport">
-      <PressableButton disabled={!dirty || save.isPending} onClick={() => save.mutate(tracks)}>{save.isPending ? 'Saving…' : 'Save order'}</PressableButton>
+    <div className="sheet-actions">
       <PressableButton variant="secondary" onClick={onClose}>Close</PressableButton>
+      <PressableButton disabled={!dirty || save.isPending} onClick={() => save.mutate(tracks)}>{save.isPending ? 'Saving…' : 'Save order'}</PressableButton>
     </div>
-  </div>
+  </>
 }
 
 function ImportForm({ guildId, onDone }: { guildId: string | undefined; onDone(): void }) {
@@ -86,13 +87,19 @@ function ImportForm({ guildId, onDone }: { guildId: string | undefined; onDone()
     mutationFn: () => api('/playlists/import/spotify', { method: 'POST', body: { url, guild_id: guildId } }),
     onSuccess: () => { client.invalidateQueries({ queryKey: ['playlists'] }); setUrl(''); onDone() },
   })
-  return <div className="stack">
+  return <>
     <h2>Import from Spotify</h2>
-    <p className="muted">Paste a Spotify track, album or playlist link. Only titles are imported — each one is matched to audio the first time it plays, so a link that stops working later does not take the playlist with it.</p>
-    <input className="text-input" value={url} placeholder="https://open.spotify.com/playlist/…" onChange={event => setUrl(event.target.value)} />
+    <p>Zephyr copies titles only — each track is matched to audio the first time it plays, so a link that stops working later does not take the playlist with it.</p>
+    <label className="field">
+      <span>Playlist link</span>
+      <input className="text-input full" value={url} placeholder="https://open.spotify.com/playlist/…" onChange={event => setUrl(event.target.value)} />
+    </label>
     {importer.error && <ErrorNote error={importer.error} onRetry={() => importer.reset()} />}
-    <PressableButton disabled={!url.trim() || importer.isPending} onClick={() => importer.mutate()}>{importer.isPending ? 'Importing…' : 'Import'}</PressableButton>
-  </div>
+    <div className="sheet-actions">
+      <PressableButton variant="secondary" onClick={onDone}>Cancel</PressableButton>
+      <PressableButton disabled={!url.trim() || importer.isPending} onClick={() => importer.mutate()}>{importer.isPending ? 'Importing…' : 'Import'}</PressableButton>
+    </div>
+  </>
 }
 
 export function PlaylistPanel({ guildId }: { guildId: string | undefined }) {
@@ -110,22 +117,25 @@ export function PlaylistPanel({ guildId }: { guildId: string | undefined }) {
     onSuccess: () => client.invalidateQueries({ queryKey: ['playlists'] }),
   })
 
-  return <section className="stack">
-    <h2>Playlists</h2>
+  return <section>
+    <div className="section-head">
+      <h2>Playlists</h2>
+      <PressableButton variant="secondary" className="small" onClick={() => setImporting(true)}>Import from Spotify</PressableButton>
+    </div>
     {playlists.isPending && <Skeleton lines={3} />}
     {playlists.error && <ErrorNote error={playlists.error} onRetry={() => playlists.refetch()} />}
     {playlists.data && (playlists.data.playlists.length === 0
-      ? <GlassSurface><p className="muted">No playlists yet. Queue something up in Discord and run <code>/save</code>, or import one from Spotify.</p></GlassSurface>
+      ? <GlassSurface tier="thin"><p className="muted">No playlists yet. Queue something up in Discord and run <code>/save</code>, or import one from Spotify.</p></GlassSurface>
       : <ListGroup>
         {playlists.data.playlists.map(playlist => <ListRow
           key={playlist.id}
           label={playlist.mine ? playlist.name : `${playlist.name} (shared)`}
-          detail={`${playlist.track_count} track${playlist.track_count === 1 ? '' : 's'} • ${formatDuration(playlist.duration_s)}`}
+          detail={`${playlist.track_count} track${playlist.track_count === 1 ? '' : 's'} · ${formatDuration(playlist.duration_s)}`}
         >
           <span className="row-actions">
-            <PressableButton variant="secondary" onClick={() => { haptic(8); load.mutate(playlist.id) }}>Queue</PressableButton>
-            {playlist.mine && <PressableButton variant="secondary" onClick={() => setEditing(playlist.id)}>Edit</PressableButton>}
-            {playlist.mine && <PressableButton variant="danger" onClick={() => { haptic(15); remove.mutate(playlist.id) }}>Delete</PressableButton>}
+            <PressableButton className="small soft" onClick={() => { haptic(8); load.mutate(playlist.id) }}>Queue</PressableButton>
+            {playlist.mine && <PressableButton variant="secondary" className="small" onClick={() => setEditing(playlist.id)}>Edit</PressableButton>}
+            {playlist.mine && <IconButton variant="danger" size={30} label={`Delete ${playlist.name}`} onClick={() => { haptic(15); remove.mutate(playlist.id) }}>×</IconButton>}
           </span>
         </ListRow>)}
       </ListGroup>)}
@@ -133,12 +143,10 @@ export function PlaylistPanel({ guildId }: { guildId: string | undefined }) {
     {load.error && <ErrorNote error={load.error} onRetry={() => load.reset()} />}
     {remove.error && <ErrorNote error={remove.error} onRetry={() => remove.reset()} />}
 
-    <PressableButton variant="secondary" onClick={() => setImporting(true)}>Import from Spotify</PressableButton>
-
-    <Sheet open={editing !== null} onOpenChange={open => !open && setEditing(null)}>
+    <Sheet open={editing !== null} onOpenChange={open => !open && setEditing(null)} label="Edit playlist">
       {editing !== null && <PlaylistEditor playlistId={editing} onClose={() => setEditing(null)} />}
     </Sheet>
-    <Sheet open={importing} onOpenChange={setImporting}>
+    <Sheet open={importing} onOpenChange={setImporting} label="Import from Spotify">
       <ImportForm guildId={guildId} onDone={() => setImporting(false)} />
     </Sheet>
   </section>

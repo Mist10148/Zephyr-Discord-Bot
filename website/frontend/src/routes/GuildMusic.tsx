@@ -1,15 +1,17 @@
 import { useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
 import { ApiError } from '../lib/api'
 import { haptic } from '../lib/haptics'
 import { formatDuration, useElapsed, usePlayer, usePlayerAction } from '../lib/player'
 import { ErrorNote } from '../components/ErrorNote'
 import { GuildShell } from '../components/GuildNav'
 import { PlaylistPanel } from '../components/PlaylistPanel'
-import { GlassSurface, LargeTitleHeader, ListGroup, ListRow, PressableButton, SegmentedControl, Skeleton, Slider, Toggle } from '../components/ios'
+import { BackLink, GlassSurface, IconButton, LargeTitleHeader, ListGroup, ListRow, PressableButton, SegmentedControl, Skeleton, Slider, Toggle } from '../components/ios'
+import { PauseIcon, PlayIcon, ShuffleIcon, SkipIcon, StopIcon } from '../components/icons'
 import type { Player } from '../types/api'
 
 const LOOP_MODES = ['off', 'track', 'queue'] as const
+const LOOP_LABELS = { off: 'Off', track: 'Track', queue: 'Queue' }
 
 // A 409 is the bot refusing -- not in the voice channel, no DJ role, nothing
 // playing. It is the user's answer, not an outage, so it is shown inline and the
@@ -28,13 +30,17 @@ function ProgressBar({ elapsed, duration }: { elapsed: number; duration: number 
 function NowPlaying({ player, elapsed }: { player: Player; elapsed: number }) {
   const track = player.track!
   return <GlassSurface className="now-playing">
-    {track.thumbnail && <img className="art" src={track.thumbnail} alt="" />}
-    <div className="stack">
-      <h2>{track.title}</h2>
-      <p className="muted">{track.uploader}{player.voice_channel_name ? ` • ${player.voice_channel_name}` : ''}</p>
-      <ProgressBar elapsed={elapsed} duration={player.duration_s ?? 0} />
-      <p className="muted times"><span>{formatDuration(elapsed)}</span><span>{formatDuration(player.duration_s)}</span></p>
+    <div className="now-playing-head">
+      {track.thumbnail
+        ? <img className="art" src={track.thumbnail} alt="" />
+        : <span className="art-placeholder" aria-hidden>track art</span>}
+      <div className="meta">
+        <h2>{track.title}</h2>
+        <p>{track.uploader}{player.voice_channel_name ? ` · ${player.voice_channel_name}` : ''}</p>
+      </div>
     </div>
+    <ProgressBar elapsed={elapsed} duration={player.duration_s ?? 0} />
+    <p className="times"><span>{formatDuration(elapsed)}</span><span>{formatDuration(player.duration_s)}</span></p>
   </GlassSurface>
 }
 
@@ -55,7 +61,7 @@ export function GuildMusic() {
     return <main className="app">
       <LargeTitleHeader title="Music" />
       <ErrorNote error={player.error} onRetry={() => player.refetch()} />
-      <p><Link to={`/g/${guildId}`}>Back to the server</Link></p>
+      <BackLink to={`/g/${guildId}`}>Back to the server</BackLink>
     </main>
   }
 
@@ -78,25 +84,32 @@ export function GuildMusic() {
 
     {data.live && <>
       <div className="transport">
-        <PressableButton variant="secondary" onClick={() => run(paused ? 'resume' : 'pause')}>{paused ? '▶︎ Resume' : '❙❙ Pause'}</PressableButton>
-        <PressableButton variant="secondary" onClick={() => run('skip')}>⏭ Skip</PressableButton>
-        <PressableButton variant="secondary" onClick={() => run('shuffle')}>🔀 Shuffle</PressableButton>
-        <PressableButton variant="danger" onClick={() => run('stop')}>⏹ Stop</PressableButton>
+        <IconButton variant="primary" size={52} label={paused ? 'Resume' : 'Pause'} onClick={() => run(paused ? 'resume' : 'pause')}>
+          {paused ? <PlayIcon size={18} /> : <PauseIcon size={18} />}
+        </IconButton>
+        <IconButton label="Skip" onClick={() => run('skip')}><SkipIcon /></IconButton>
+        <IconButton label="Shuffle" onClick={() => run('shuffle')}><ShuffleIcon /></IconButton>
+        <IconButton variant="danger" label="Stop" onClick={() => run('stop')}><StopIcon /></IconButton>
       </div>
 
       <ListGroup>
         <ListRow label="Loop">
-          <SegmentedControl values={[...LOOP_MODES]} value={data.loop ?? 'off'} onChange={mode => run('loop', { mode })} />
+          <span className="row-actions">
+            <SegmentedControl values={[...LOOP_MODES]} labels={LOOP_LABELS} value={data.loop ?? 'off'} onChange={mode => run('loop', { mode })} />
+          </span>
         </ListRow>
-        <ListRow label="Volume" detail={`${shownVolume}%`}>
-          <Slider
-            label="Volume"
-            value={shownVolume}
-            onChange={next => { setVolume(next); act.mutate({ action: 'volume', args: { volume: next } }, { onSettled: () => setVolume(null) }) }}
-          />
+        <ListRow label="Volume">
+          <span className="row-actions">
+            <span className="row-value mono">{shownVolume}%</span>
+            <Slider
+              label="Volume"
+              value={shownVolume}
+              onChange={next => { setVolume(next); act.mutate({ action: 'volume', args: { volume: next } }, { onSettled: () => setVolume(null) }) }}
+            />
+          </span>
         </ListRow>
         <ListRow label="Autoplay" detail="Keep playing a YouTube Mix when the queue runs out">
-          <Toggle checked={!!data.autoplay} onChange={enabled => run('autoplay', { enabled })} />
+          <span className="row-actions"><Toggle label="Autoplay" checked={!!data.autoplay} onChange={enabled => run('autoplay', { enabled })} /></span>
         </ListRow>
       </ListGroup>
     </>}
@@ -106,16 +119,16 @@ export function GuildMusic() {
 
     <h2>Queue{data.queue_length ? ` (${data.queue_length})` : ''}</h2>
     {data.queue.length === 0
-      ? <GlassSurface><p className="muted">Nothing queued.</p></GlassSurface>
+      ? <GlassSurface tier="thin"><p className="muted">Nothing queued.</p></GlassSurface>
       : <ListGroup>
         {data.queue.map((track, index) => <ListRow
           key={`${track.url ?? track.title}-${index}`}
           label={track.title}
-          detail={`${track.uploader} • ${formatDuration(track.duration_s)}`}
+          detail={`${track.uploader} · ${formatDuration(track.duration_s)}`}
         >
           <span className="row-actions">
-            <PressableButton variant="secondary" onClick={() => run('jump', { index })}>Play</PressableButton>
-            <PressableButton variant="secondary" onClick={() => run('remove', { index })}>Remove</PressableButton>
+            <PressableButton className="small soft" onClick={() => run('jump', { index })}>Play</PressableButton>
+            <IconButton variant="danger" size={30} label={`Remove ${track.title}`} onClick={() => run('remove', { index })}>×</IconButton>
           </span>
         </ListRow>)}
       </ListGroup>}
@@ -124,5 +137,7 @@ export function GuildMusic() {
     {(data.queue_length ?? 0) > data.queue.length && <p className="muted">and {(data.queue_length ?? 0) - data.queue.length} more…</p>}
 
     <PlaylistPanel guildId={guildId} />
+
+    <BackLink to={`/g/${guildId}`}>Back to the server</BackLink>
   </GuildShell></main>
 }
