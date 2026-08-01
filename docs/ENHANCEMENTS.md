@@ -3,6 +3,11 @@
 A prioritised list of UX/UI improvements and features for the dashboard, written to be
 picked up and implemented directly.
 
+> **Frontend release:** API-ready enhancement work, browser-local appearance settings,
+> server discovery, pinned servers, and the command reference are implemented. The
+> actor-name lookup (A3), server-side audit filters (F4), and SSE player stream (E5)
+> remain backend work.
+
 Read [DESIGN.md](DESIGN.md) for the design system rules and [SCREENS.md](SCREENS.md) for
 what each screen currently contains. **Every item here must respect the rules in
 DESIGN.md** — tokens not literals, `data-glass` on frosted surfaces, hooks in `.ts`
