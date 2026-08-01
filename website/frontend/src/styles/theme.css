@@ -2,7 +2,7 @@
 @custom-variant dark (&:is(.dark *));
 
 /* ============================================================================
-   Zephyr design system — "Elevated glass"
+   Zephyr design system — "Warm glass"
    ----------------------------------------------------------------------------
    Everything visual is a token. Colours live only here, once per theme, so a
    surface never hard-codes a hex value and light/dark stay in lockstep. Glass is
@@ -10,10 +10,16 @@
    aurora backdrop -- never as flat full-screen chrome. `.dark` on <html> selects
    the dark palette; its absence is light. The pre-paint snippet in index.html sets
    that class before React mounts, so there is no theme flash on load.
+
+   The palette is warm clay and cream over a cool-leaning third aurora blob: the
+   product is a *wind* companion, so one cold note is kept deliberately. Display
+   type is a serif (Source Serif 4); body copy stays on the system sans, which is
+   what gives the UI its iOS/Big Sur feel.
    ========================================================================== */
 
 @theme {
-  --font-sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  --font-serif: "Source Serif 4 Variable", "Source Serif 4", Iowan Old Style, Georgia, serif;
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
 }
 
@@ -33,81 +39,85 @@
   --ease: cubic-bezier(.2, .8, .2, 1);
 
   /* Glass material. Three blur tiers so a sheet reads heavier than a card without
-     each surface inventing its own numbers. */
+     each surface inventing its own numbers. Tier is chosen by role, not by taste:
+     thin = day cards and notices, regular = the top bar and content cards,
+     thick = tab bar, palette, sheets and the save bar. */
   --blur-thin: 12px;
-  --blur-regular: 20px;
+  --blur-regular: 22px;
   --blur-thick: 34px;
 
   /* ---- Light palette ---- */
-  --bg: #e9f0fb;
-  --aurora-1: rgba(120, 170, 245, .55);   /* sky blue   */
-  --aurora-2: rgba(178, 150, 232, .45);   /* soft violet */
-  --aurora-3: rgba(120, 214, 200, .42);   /* breeze teal */
+  --bg: #F0EEE6;
+  --bg-2: #F6F4EE;
+  --aurora-1: rgba(204, 107, 76, .34);    /* clay   */
+  --aurora-2: rgba(226, 178, 132, .40);   /* sand   */
+  --aurora-3: rgba(140, 166, 154, .34);   /* breeze */
 
-  --text: #0c1526;
-  --text-muted: #5a6474;
-  --text-faint: #8a93a3;
+  --text: #191917;
+  --text-muted: #6B6A62;
+  --text-faint: #9B9890;
 
-  --surface-glass: rgba(255, 255, 255, .62);
-  --surface-glass-border: rgba(255, 255, 255, .7);
-  --surface-1: #ffffff;   /* opaque card / list background */
-  --surface-2: #eef2f9;   /* inset control track          */
-  --surface-3: #e2e8f2;   /* pressed / hover fill          */
-  --hairline: rgba(12, 21, 38, .09);
+  --surface-glass: rgba(255, 255, 255, .60);
+  --surface-glass-border: rgba(255, 255, 255, .78);
+  --glass-solid: #FBF9F4;  /* opaque stand-in under prefers-reduced-transparency */
+  --surface-1: #FFFFFF;    /* opaque card / list background */
+  --surface-2: #F4F1EA;    /* inset control track           */
+  --surface-3: #E8E4DA;    /* pressed / hover fill          */
+  --hairline: rgba(25, 25, 23, .10);
 
-  --accent: #0a84ff;
-  --accent-strong: #0060df;
-  --accent-soft: rgba(10, 132, 255, .12);
+  --accent: #CC6B4C;
+  --accent-strong: #AF5333;
+  --accent-soft: rgba(204, 107, 76, .12);
   --on-accent: #ffffff;
-  --success: #12a150;
-  --danger: #e5484d;
-  --danger-soft: rgba(229, 72, 77, .12);
-  --link: #0a68d6;
+  --success: #3F8F63;
+  /* Deliberately rose-leaning rather than orange: the accent is already a warm
+     red-orange, and a destructive button has to stay tellable from a primary one. */
+  --danger: #C8443A;
+  --danger-soft: rgba(200, 68, 58, .12);
+  --link: #A8543A;
 
   --shadow-card:
-    0 1px 2px rgba(12, 21, 38, .06),
-    0 8px 24px rgba(12, 21, 38, .08),
-    0 24px 48px rgba(12, 21, 38, .06);
+    0 1px 2px rgba(25, 25, 23, .05),
+    0 18px 44px -26px rgba(25, 25, 23, .34);
   --shadow-pop:
-    0 8px 20px rgba(12, 21, 38, .12),
-    0 32px 64px rgba(12, 21, 38, .18);
+    0 30px 70px -30px rgba(25, 25, 23, .45);
 }
 
 .dark {
   color-scheme: dark;
 
-  --bg: #080b16;
-  --aurora-1: rgba(49, 86, 129, .70);
-  --aurora-2: rgba(78, 54, 90, .62);
-  --aurora-3: rgba(31, 91, 87, .55);
+  --bg: #1A1917;
+  --bg-2: #201F1C;
+  --aurora-1: rgba(168, 80, 48, .44);
+  --aurora-2: rgba(126, 92, 58, .40);
+  --aurora-3: rgba(66, 90, 82, .40);
 
-  --text: #f4f6fb;
-  --text-muted: #9aa4b6;
-  --text-faint: #6a7383;
+  --text: #F5F3EE;
+  --text-muted: #A8A49A;
+  --text-faint: #7B776D;
 
-  --surface-glass: rgba(255, 255, 255, .08);
-  --surface-glass-border: rgba(255, 255, 255, .14);
-  --surface-1: #141826;
-  --surface-2: #1b2030;
-  --surface-3: #262c3e;
+  --surface-glass: rgba(255, 255, 255, .07);
+  --surface-glass-border: rgba(255, 255, 255, .13);
+  --glass-solid: #26241F;
+  --surface-1: #24221F;
+  --surface-2: #2C2A25;
+  --surface-3: #36332D;
   --hairline: rgba(255, 255, 255, .10);
 
-  --accent: #0a84ff;
-  --accent-strong: #409cff;
-  --accent-soft: rgba(10, 132, 255, .20);
-  --on-accent: #ffffff;
-  --success: #30d158;
-  --danger: #ff453a;
-  --danger-soft: rgba(255, 69, 58, .18);
-  --link: #8ab4ff;
+  --accent: #E08A66;
+  --accent-strong: #F2A585;
+  --accent-soft: rgba(224, 138, 102, .16);
+  --on-accent: #1A1917;
+  --success: #62C48A;
+  --danger: #F0776A;
+  --danger-soft: rgba(240, 119, 106, .18);
+  --link: #F0A183;
 
   --shadow-card:
-    0 1px 2px rgba(0, 0, 0, .30),
-    0 10px 30px rgba(0, 0, 0, .40),
-    0 30px 60px rgba(0, 0, 0, .30);
+    0 1px 2px rgba(0, 0, 0, .28),
+    0 22px 50px -28px rgba(0, 0, 0, .7);
   --shadow-pop:
-    0 12px 28px rgba(0, 0, 0, .45),
-    0 40px 80px rgba(0, 0, 0, .55);
+    0 34px 80px -30px rgba(0, 0, 0, .8);
 }
 
 * { box-sizing: border-box; }
@@ -117,42 +127,90 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
+  font-size: 15px;
+  overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
 }
 
 /* ---- Animated aurora / wind backdrop -----------------------------------------
-   Three drifting radial blobs, fixed behind everything, that give "Zephyr" its
-   breeze. GPU-cheap: it animates only background-position on a single fixed layer,
-   and it is switched off entirely under prefers-reduced-motion below. */
-body::before {
-  content: "";
+   Three drifting blurred blobs, fixed behind everything, that give "Zephyr" its
+   breeze. Each animates only `transform` on its own cycle, and the whole layer is
+   switched off under prefers-reduced-motion below. Rendered by AppShell so the
+   blobs can drift independently rather than as one shared gradient. */
+.aurora {
   position: fixed;
-  inset: -20vmax;
-  z-index: -1;
-  background:
-    radial-gradient(38vmax 38vmax at 18% 12%, var(--aurora-1), transparent 60%),
-    radial-gradient(42vmax 42vmax at 82% 82%, var(--aurora-2), transparent 60%),
-    radial-gradient(34vmax 34vmax at 62% 28%, var(--aurora-3), transparent 62%);
-  background-repeat: no-repeat;
-  filter: saturate(1.05);
-  animation: drift 34s ease-in-out infinite alternate;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
 }
+.aurora i {
+  position: absolute;
+  display: block;
+  border-radius: 50%;
+}
+.aurora i:nth-child(1) {
+  top: -14vh; left: -6vw; width: 62vw; height: 62vw;
+  background: var(--aurora-1); filter: blur(90px);
+  animation: drift 24s ease-in-out infinite;
+}
+.aurora i:nth-child(2) {
+  top: 6vh; right: -12vw; width: 56vw; height: 56vw;
+  background: var(--aurora-2); filter: blur(100px);
+  animation: drift2 30s ease-in-out infinite;
+}
+.aurora i:nth-child(3) {
+  bottom: -24vh; left: 24vw; width: 52vw; height: 52vw;
+  background: var(--aurora-3); filter: blur(110px);
+  animation: drift 34s ease-in-out infinite;
+}
+/* A 90-110px blur over half the viewport is the single most expensive thing the
+   phone paints. Same composition, cheaper radii. */
+@media (max-width: 859px) {
+  .aurora i:nth-child(1) { top: -10%; left: -20%; width: 90%; height: 44%; filter: blur(48px); }
+  .aurora i:nth-child(2) { top: 18%; right: -24%; width: 86%; height: 40%; filter: blur(52px); }
+  .aurora i:nth-child(3) { bottom: -8%; left: 10%; width: 80%; height: 38%; filter: blur(56px); }
+}
+
 @keyframes drift {
-  0%   { transform: translate3d(-2%, -1%, 0) scale(1);    }
-  50%  { transform: translate3d(2%, 1.5%, 0) scale(1.06); }
-  100% { transform: translate3d(-1%, 2%, 0) scale(1.02);  }
+  0%   { transform: translate3d(0, 0, 0) scale(1);        }
+  50%  { transform: translate3d(4%, -3%, 0) scale(1.12);  }
+  100% { transform: translate3d(0, 0, 0) scale(1);        }
+}
+@keyframes drift2 {
+  0%   { transform: translate3d(0, 0, 0) scale(1.05);     }
+  50%  { transform: translate3d(-5%, 4%, 0) scale(1);     }
+  100% { transform: translate3d(0, 0, 0) scale(1.05);     }
+}
+@keyframes sheetUp {
+  from { transform: translateY(16px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+@keyframes popIn {
+  from { transform: scale(.97); opacity: 0; }
+  to   { transform: scale(1);   opacity: 1; }
 }
 
 .app {
-  max-width: 760px;
+  position: relative;
+  z-index: 2;
+  max-width: 1080px;
   margin-inline: auto;
   min-height: 100vh;
   padding: max(1.75rem, env(safe-area-inset-top)) 1.25rem calc(2rem + env(safe-area-inset-bottom));
+  container-type: inline-size;
 }
+/* Narrower measures for the pages that are a single column of prose or one list. */
+.app.narrow { max-width: 560px; }
+.app.medium { max-width: 720px; }
+.app.sink   { max-width: 760px; }
 
 a { color: var(--link); text-underline-offset: 2px; }
+a:hover { color: var(--accent-strong); text-decoration: underline; }
+button, input, select, textarea { font-family: inherit; }
+input[type=range] { accent-color: var(--accent); }
 
 h1, h2, h3 { letter-spacing: -0.02em; }
 /* Section heading used on the guild pages (Usage / Personas / Queue / Music
@@ -418,6 +476,12 @@ a.list-row:hover, button.list-row:hover { background: var(--surface-2); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
+/* One rule covers every glass surface: they all carry data-glass, so a new frosted
+   component gets the opaque fallback for free instead of being forgotten here. */
 @media (prefers-reduced-transparency: reduce) {
-  .glass, .sheet, .palette { background: var(--surface-1); backdrop-filter: none; -webkit-backdrop-filter: none; }
+  [data-glass] {
+    background: var(--glass-solid) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
 }

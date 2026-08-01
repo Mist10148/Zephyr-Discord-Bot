@@ -12,6 +12,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   const inDashboard = pathname.startsWith('/g')
   return (
     <>
+      {/* Three independently drifting blobs rather than one shared gradient, so the
+          backdrop reads as moving air. Fixed, behind everything, inert to pointers. */}
+      <div className="aurora" aria-hidden><i /><i /><i /></div>
       <header className="appbar">
         <div className="appbar-inner">
           <Link to="/" className="brand" aria-label="Zephyr home">
