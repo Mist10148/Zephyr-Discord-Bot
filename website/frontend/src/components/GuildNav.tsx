@@ -1,9 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
-import { NavLink } from 'react-router-dom'
+import { NavLink, useNavigate } from 'react-router-dom'
 import type { ReactNode } from 'react'
 import { api } from '../lib/api'
 import type { GuildOverview } from '../types/api'
 import { GuildIcon } from './DiscordAvatar'
+import { useMe } from '../lib/auth'
 
 // The per-server section nav. On desktop `.guild-shell` lays this out as a sticky
 // 208px left rail headed by the server's own icon and name; on phones it becomes a
@@ -23,8 +24,10 @@ const SECTIONS = [
 
 export function GuildNav({ guildId }: { guildId?: string }) {
   const base = `/g/${guildId ?? ''}`
+  const navigate = useNavigate(); const me = useMe()
   return (
     <nav className="guild-nav" aria-label="Server sections">
+      {me.data && <label className="guild-switcher"><span>Server</span><select aria-label="Switch server" value={guildId} onChange={event => navigate(`/g/${event.target.value}`)}>{me.data.guilds.map(guild => <option key={guild.id} value={guild.id}>{guild.name}</option>)}</select></label>}
       {SECTIONS.map(section => (
         <NavLink key={section.to} to={`${base}${section.to}`} end={section.end} className={({ isActive }) => `pill ${isActive ? 'active' : ''}`}>
           {section.label}
