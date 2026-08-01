@@ -809,7 +809,21 @@ select.text-input { appearance: auto; }
   background: var(--danger); color: #fff; font-size: 12px; font-weight: 700; font-style: normal;
 }
 
+/* ---- Server list ------------------------------------------------------------ */
+.list-row.strong-row .row-label { font-size: 15px; font-weight: 600; }
+.row-detail { display: inline-flex; align-items: center; gap: 6px; }
+/* The stale-server-list warning: a notice, not a card, so it sits closer to the
+   list it is about than a full glass panel would. */
+.notice {
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 18px; border-radius: 18px; margin: 14px 0 18px;
+  font-size: 13.5px; color: var(--text-muted);
+}
+.notice p { margin: 0; }
+.notice .dot { width: 8px; height: 8px; }
+
 /* ---- Guild overview --------------------------------------------------------- */
+.overview-stats { margin-bottom: 30px; }
 .guild-head { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; }
 .guild-head h1 { margin: 0; font-size: clamp(26px, 3.4cqw, 36px); line-height: 1.08; letter-spacing: -.025em; }
 .guild-head .subtitle { margin: 4px 0 0; font-family: var(--font-sans); font-size: 14px; color: var(--text-muted); }
