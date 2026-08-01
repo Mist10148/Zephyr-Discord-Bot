@@ -9,6 +9,7 @@ Ported 1:1 from the original bot.py (lines 178-892). Prefix commands are kept as
 
 import asyncio
 from datetime import datetime, timezone, timedelta
+from urllib.parse import quote
 
 import requests
 import discord
@@ -18,11 +19,13 @@ from discord.ui import Button, View
 
 from zephyr.config import (
     API_KEY,
+    AUTH_ENABLED,
     CURRENT_URL,
     FORECAST_URL,
     ALERTS_URL,
     ILOILO_COORDS,
     WEB_APP_URL,
+    WEB_PUBLIC_URL,
 )
 from zephyr.db.weather_subs import clear_bot_user, read_bot_user, write_bot_user
 from zephyr.utils.weather_utils import (
@@ -103,22 +106,71 @@ async def windspeed(ctx, *, city: str = "Iloilo"):
     await ctx.send(embed=embed)
 
 
-def _web_app_embed() -> discord.Embed:
-    """The /use link, or an honest message when the deployment has not set one."""
-    if not WEB_APP_URL:
-        return discord.Embed(
-            title="Web app not configured",
-            description="This bot has no web app URL set. Ask the owner to set `WEB_APP_URL`.",
-            color=discord.Color.orange(),
+def _web_app_link(guild_id: int | None) -> str | None:
+    """Where /use should send someone, or None when this deployment has no web app.
+
+    With the dashboard configured, the link is the *sign-in* endpoint rather than the
+    site root: it runs the Discord OAuth round trip and drops the user on the page
+    they actually wanted, already authenticated, instead of on a signed-out page that
+    makes them find the login themselves. `next` is re-validated server-side by
+    safe_next(), so the guild id is the only thing interpolated here.
+
+    The base is WEB_PUBLIC_URL and that is *not* interchangeable with WEB_APP_URL:
+    OAuth returns to the redirect URI registered with Discord, which config derives
+    from WEB_PUBLIC_URL, so signing in via any other host dies at the callback.
+    (tests/test_web_config.py pins that separation.)
+    """
+    if AUTH_ENABLED:
+        # In a DM there is no server to open, so land on the server picker.
+        next_path = f"/g/{guild_id}" if guild_id else "/g"
+        return f"{WEB_PUBLIC_URL.rstrip('/')}/api/v1/auth/login?next={quote(next_path, safe='')}"
+    # No dashboard on this deployment: hand out the plain public site if the owner
+    # set one. WEB_PUBLIC_URL is deliberately not used as a fallback -- it always
+    # carries a localhost default, so it would advertise a dead link to everyone on
+    # a deployment that configured nothing.
+    return WEB_APP_URL or None
+
+
+def _web_app_embed(guild_id: int | None = None) -> tuple[discord.Embed, View | None]:
+    """The /use response, or an honest message when the deployment has not set one."""
+    link = _web_app_link(guild_id)
+    if not link:
+        return (
+            discord.Embed(
+                title="Web app not configured",
+                description=(
+                    "This bot has no web app URL set. Ask the owner to set `WEB_APP_URL`, "
+                    "or to configure the dashboard (`DISCORD_CLIENT_ID`, "
+                    "`DISCORD_CLIENT_SECRET`, `REDIS_URL`)."
+                ),
+                color=discord.Color.orange(),
+            ),
+            None,
         )
-    embed = discord.Embed(title="Weather App Link", color=discord.Color.green())
-    embed.description = f"[Click here to access the app]({WEB_APP_URL})"
-    return embed
+
+    if AUTH_ENABLED:
+        embed = discord.Embed(title="Zephyr dashboard", color=discord.Color.green())
+        embed.description = (
+            "Sign in with Discord to manage this server's music, weather alerts, AI and settings.\n"
+            "You will only see servers where you have **Manage Server**."
+        )
+        label = "Sign in and open dashboard"
+    else:
+        embed = discord.Embed(title="Weather App Link", color=discord.Color.green())
+        embed.description = "Live conditions, the week ahead, and heat-index advisories for any city."
+        label = "Open the web app"
+
+    # A link button, not a markdown link: it needs no callback and no custom_id, so
+    # timeout=None is free and the button keeps working long after the message ages.
+    view = View(timeout=None)
+    view.add_item(Button(label=label, url=link, style=discord.ButtonStyle.link))
+    return embed, view
 
 
 @commands.command()
 async def use(ctx):
-    await ctx.send(embed=_web_app_embed())
+    embed, view = _web_app_embed(ctx.guild.id if ctx.guild else None)
+    await ctx.send(embed=embed, view=view)
 
 
 @commands.command(name="helpweather")
@@ -660,7 +712,8 @@ class WeatherCog(commands.Cog):
 
     @app_commands.command(name="use", description="Provides a link to the web application version of this bot.")
     async def slash_use(self, interaction: discord.Interaction):
-        await interaction.response.send_message(embed=_web_app_embed())
+        embed, view = _web_app_embed(interaction.guild_id)
+        await interaction.response.send_message(embed=embed, view=view)
 
     @app_commands.command(name="precipitation", description="Get precipitation details for a city.")
     async def slash_precipitation(self, interaction: discord.Interaction, city: str = None):
