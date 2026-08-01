@@ -249,8 +249,11 @@ h2 { font-size: 18px; line-height: 1.2; margin: 1.7rem 0 .65rem; letter-spacing:
 .section-label {
   font-family: var(--font-sans); font-size: 13px; font-weight: 600; line-height: 1;
   letter-spacing: .08em; text-transform: uppercase; color: var(--text-faint);
-  margin: 0 0 .6rem; padding-left: 4px;
+  margin: 1.9rem 0 .6rem; padding-left: 4px;
 }
+/* It is a *label for what follows*, so it must sit closer to its own group than to
+   the one above. No leading gap when it opens a page or a card. */
+.section-label:first-child { margin-top: 0; }
 
 .stack { display: grid; gap: 1rem; }
 .muted { color: var(--text-muted); }
@@ -483,6 +486,10 @@ a.list-row:hover, button.list-row:hover { background: var(--surface-2); text-dec
   box-shadow: var(--shadow-card);
   font-size: 14px; font-weight: 500;
 }
+/* A stack already spaces its children; without this the toast's own margin is
+   added to the gap and the group falls apart. `justify-self` keeps it a pill --
+   a grid item would otherwise stretch it to the full column width. */
+.stack > .toast { margin: 0; justify-self: start; }
 .toast-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); }
 .toast-badge {
   display: grid; place-items: center; flex: none;
