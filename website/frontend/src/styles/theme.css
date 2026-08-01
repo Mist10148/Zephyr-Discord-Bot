@@ -120,6 +120,15 @@
     0 34px 80px -30px rgba(0, 0, 0, .8);
 }
 
+/* Palette changes are token overrides, never per-component colour literals. */
+:root[data-palette="twilight"] { --bg:#eeedf4; --bg-2:#f5f3fa; --aurora-1:rgba(118,91,180,.31); --aurora-2:rgba(119,155,204,.30); --aurora-3:rgba(181,128,177,.25); --accent:#7152ac; --accent-strong:#593d91; --accent-soft:rgba(113,82,172,.13); --link:#593d91; }
+.dark[data-palette="twilight"] { --bg:#191820; --bg-2:#211f2a; --aurora-1:rgba(124,95,192,.38); --aurora-2:rgba(69,115,162,.30); --aurora-3:rgba(163,100,160,.23); --accent:#b69aee; --accent-strong:#d0baff; --accent-soft:rgba(182,154,238,.16); --link:#d0baff; --on-accent:#1a1822; }
+:root[data-palette="forest"] { --bg:#edf0e9; --bg-2:#f3f5f0; --aurora-1:rgba(82,130,96,.29); --aurora-2:rgba(183,151,100,.28); --aurora-3:rgba(87,139,137,.27); --accent:#3f7e59; --accent-strong:#2f6545; --accent-soft:rgba(63,126,89,.13); --link:#2f6545; }
+.dark[data-palette="forest"] { --bg:#171c18; --bg-2:#1e251f; --aurora-1:rgba(78,137,91,.33); --aurora-2:rgba(130,106,64,.26); --aurora-3:rgba(57,121,116,.29); --accent:#77c08c; --accent-strong:#9bdfa9; --accent-soft:rgba(119,192,140,.16); --link:#9bdfa9; --on-accent:#172019; }
+html[data-density="compact"] { --density-gap: .78; } html:not([data-density="compact"]) { --density-gap: 1; }
+html[data-text-scale="90"] { font-size: 90%; } html[data-text-scale="110"] { font-size: 110%; }
+html[data-motion="reduced"] *, html[data-motion="reduced"] *::before, html[data-motion="reduced"] *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+
 * { box-sizing: border-box; }
 html, body, #root { min-height: 100%; margin: 0; }
 
@@ -622,10 +631,16 @@ select.text-input { appearance: auto; }
   border-bottom: 1px solid var(--hairline);
 }
 .appbar-inner {
-  max-width: 1600px; margin-inline: auto;
+  max-width: none; margin-inline: auto;
   display: flex; align-items: center; gap: 14px;
-  padding: 12px 1.25rem;
+  padding: 12px clamp(16px, 2.5vw, 48px);
 }
+.skip-link { position: fixed; top: 8px; left: 8px; z-index: 100; transform: translateY(-180%); padding: 8px 12px; background: var(--surface-1); color: var(--text); border-radius: var(--radius-control); }
+.skip-link:focus { transform: translateY(0); }
+.offline-banner { position: sticky; top: 58px; z-index: 19; padding: 8px clamp(16px, 2.5vw, 48px); background: var(--danger-soft); color: var(--danger); border-bottom: 1px solid var(--danger); font-size: 13px; font-weight: 600; }
+.pwa-update { position: fixed; right: 16px; bottom: 16px; z-index: 60; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--radius-pill); background: var(--glass-solid); border: 1px solid var(--hairline); box-shadow: var(--shadow-pop); font-size: 13px; }
+.mini-player { position: fixed; right: 16px; bottom: 76px; z-index: 17; display: flex; gap: 6px; max-width: min(360px, calc(100vw - 32px)); overflow: hidden; padding: 10px 14px; border: 1px solid var(--surface-glass-border); border-radius: var(--radius-pill); background: var(--surface-glass); backdrop-filter: blur(var(--blur-thick)); color: var(--text); text-decoration: none; font-size: 13px; }.mini-player b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.mini-player-dot { width: 8px; height: 8px; align-self: center; border-radius: 50%; background: var(--success); }
+@media (min-width: 860px) { .mini-player { bottom: 16px; } }
 .brand {
   display: inline-flex; align-items: center; gap: 10px;
   text-decoration: none; color: var(--text);
@@ -720,6 +735,7 @@ select.text-input { appearance: auto; }
 .guild-nav .pill:hover { text-decoration: none; color: var(--text); }
 .guild-nav .pill.active { background: var(--accent); border-color: transparent; color: #fff; }
 .guild-nav .pill.active:hover { color: #fff; }
+.guild-switcher { display: grid; gap: 4px; padding: 0 0 8px; font-size: 11px; color: var(--text-faint); }.guild-switcher select { min-width: 0; border: 1px solid var(--hairline); border-radius: var(--radius-control); background: var(--surface-1); color: var(--text); padding: 7px; font: inherit; }
 
 @media (min-width: 860px) {
   .guild-shell { flex-direction: row; gap: 30px; align-items: flex-start; }
@@ -806,6 +822,7 @@ select.text-input { appearance: auto; }
 
 /* ---- Weather ---------------------------------------------------------------- */
 .current-weather { padding: 24px; margin-bottom: 18px; }
+.weather-tools { display: flex; flex-wrap: wrap; gap: 8px; margin: -4px 0 14px; }
 .current-weather-head { display: flex; align-items: flex-start; gap: 18px; flex-wrap: wrap; }
 .current-weather-head > .place { flex: 1; min-width: 180px; }
 .current-weather h2 { margin: 0 0 4px; font-size: 24px; line-height: 1.15; letter-spacing: -.015em; }
@@ -822,6 +839,7 @@ select.text-input { appearance: auto; }
 .day-temp { margin: 0; font-family: var(--font-serif); font-size: 22px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
 .day-low { font-size: 15px; font-weight: 400; color: var(--text-faint); }
 .day-desc { display: block; margin-top: 6px; font-size: 12px; color: var(--text-muted); }
+.hourly-strip { display: flex; gap: 8px; overflow-x: auto; padding: 2px 0 16px; margin-bottom: 6px; }.hour-card { position: relative; min-width: 70px; min-height: 110px; display: grid; justify-items: center; align-content: space-between; padding: 10px; border: 1px solid var(--surface-glass-border); border-radius: var(--radius-control); background: var(--surface-glass); overflow: hidden; font-size: 12px; }.hour-card b { color: var(--text-muted); font-weight: 600; }.hour-card strong { font-family: var(--font-serif); font-size: 18px; }.hour-card i { position: absolute; bottom: 0; left: 0; right: 0; background: var(--accent-soft); z-index: -1; }.air-detail summary { cursor: pointer; }.air-detail div { position: absolute; z-index: 2; margin-top: 8px; width: 240px; padding: 10px; border: 1px solid var(--hairline); border-radius: var(--radius-control); background: var(--surface-1); color: var(--text-muted); font-size: 12px; line-height: 1.5; }
 
 /* ---- Login ------------------------------------------------------------------ */
 .error-banner {
@@ -859,6 +877,8 @@ select.text-input { appearance: auto; }
 .stat-of { font-size: .6em; font-weight: 400; color: var(--text-faint); }
 
 .server-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+.server-grid.server-list-view { grid-template-columns: 1fr; }
+.server-card-wrap { position: relative; min-width: 0; }
 .server-card {
   display: flex; align-items: center; gap: 13px;
   padding: 16px; text-decoration: none; color: var(--text);
@@ -867,6 +887,13 @@ select.text-input { appearance: auto; }
 .server-card-body { flex: 1; min-width: 0; display: grid; gap: 3px; }
 .server-card-body b { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .server-card-body small { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-muted); }
+.audit-details { margin-left: auto; font-size: 12px; color: var(--text-muted); }.audit-details summary { cursor: pointer; }.audit-details pre { max-width: 320px; max-height: 180px; overflow: auto; white-space: pre-wrap; color: var(--text); }
+.pin-button { position: absolute; top: 9px; right: 38px; width: 28px; height: 28px; border: 0; border-radius: 50%; color: var(--text-faint); background: transparent; cursor: pointer; }
+.pin-button:hover, .pin-button.active { color: var(--accent); background: var(--accent-soft); }
+.server-finder { display: grid; grid-template-columns: minmax(180px, 1fr) auto auto auto; gap: 10px; align-items: end; margin: 0 0 16px; }
+.server-finder .search-field { margin: 0; }.finder-select { display: grid; gap: 4px; font-size: 12px; color: var(--text-muted); }.finder-select select { min-height: 38px; border: 1px solid var(--hairline); border-radius: var(--radius-control); background: var(--surface-1); color: var(--text); padding: 0 8px; font: inherit; }
+.command-arg { color: var(--text-faint); font-family: var(--font-mono); font-size: 12px; }.palette-notice { padding: 0 14px 12px; margin: 0; color: var(--success); font-size: 13px; }
+@media (max-width: 700px) { .server-finder { grid-template-columns: 1fr 1fr; }.server-finder .search-field { grid-column: 1 / -1; } }
 
 /* ---- Server list ------------------------------------------------------------ */
 .list-row.strong-row .row-label { font-size: 15px; font-weight: 600; }

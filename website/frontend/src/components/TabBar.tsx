@@ -11,7 +11,7 @@ const TABS = [
   { to: '/', label: 'Home', Icon: TabHomeIcon, end: true },
   { to: '/weather', label: 'Weather', Icon: TabWeatherIcon },
   { to: '/g', label: 'Servers', Icon: TabServersIcon },
-  { to: '/kitchen-sink', label: 'System', Icon: TabSystemIcon },
+  { to: '/settings', label: 'System', Icon: TabSystemIcon },
 ]
 
 export function TabBar() {

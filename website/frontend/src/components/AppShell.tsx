@@ -1,4 +1,5 @@
 import { Link, useLocation } from 'react-router-dom'
+import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { ThemeToggle } from './ThemeToggle'
 
@@ -10,6 +11,8 @@ import { ThemeToggle } from './ThemeToggle'
 export function AppShell({ children, onOpenPalette }: { children: ReactNode; onOpenPalette(): void }) {
   const { pathname } = useLocation()
   const inDashboard = pathname.startsWith('/g')
+  const [online, setOnline] = useState(() => navigator.onLine)
+  useEffect(() => { const update = () => setOnline(navigator.onLine); window.addEventListener('online', update); window.addEventListener('offline', update); return () => { window.removeEventListener('online', update); window.removeEventListener('offline', update) } }, [])
   // The palette is not mounted on the sign-in screen, so its trigger must not be
   // offered there either.
   const showPalette = pathname !== '/login'
@@ -27,6 +30,7 @@ export function AppShell({ children, onOpenPalette }: { children: ReactNode; onO
           <div className="appbar-spacer" />
           <nav className="appbar-nav">
             {inDashboard && <Link to="/g" className="nav-link">Servers</Link>}
+            {pathname !== '/login' && <Link to="/settings" className="nav-link">Appearance</Link>}
             {/* ⌘K on its own is a secret. The pill makes the shortcut discoverable
                 and gives pointer users a way into the palette at all. */}
             {showPalette && (
@@ -39,7 +43,8 @@ export function AppShell({ children, onOpenPalette }: { children: ReactNode; onO
           </nav>
         </div>
       </header>
-      {children}
+      {!online && <div className="offline-banner" role="status">You’re offline. Saved public results remain available until you reconnect.</div>}
+      <div id="main-content" tabIndex={-1}>{children}</div>
     </>
   )
 }

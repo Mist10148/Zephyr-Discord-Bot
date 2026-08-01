@@ -11,16 +11,7 @@
          Mirrors resolveTheme() in src/lib/theme.tsx: an explicit stored choice wins,
          otherwise follow the OS. Inlined (not imported) because it must run before
          the module bundle loads. -->
-    <script>
-      (function () {
-        try {
-          var stored = localStorage.getItem('zephyr-theme')
-          var dark = stored === 'dark' || (stored !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches)
-          if (dark) document.documentElement.classList.add('dark')
-          document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
-        } catch (e) {}
-      })()
-    </script>
+    <script src="/theme-init.js"></script>
     <meta name="description" content="Weather forecasts and Zephyr bot controls." />
     <link rel="icon" href="/icons/favicon.ico" sizes="any" />
     <link rel="icon" type="image/png" href="/icons/icon-192.png" />
