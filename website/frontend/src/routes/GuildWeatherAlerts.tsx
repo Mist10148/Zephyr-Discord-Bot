@@ -1,12 +1,12 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
 import { api } from '../lib/api'
 import { haptic } from '../lib/haptics'
 import { useGuildMeta } from '../lib/player'
 import { ErrorNote } from '../components/ErrorNote'
 import { GuildShell } from '../components/GuildNav'
-import { CapsuleToast, GlassSurface, LargeTitleHeader, ListGroup, ListRow, PressableButton, Sheet, Skeleton, Toggle } from '../components/ios'
+import { BackLink, CapsuleToast, GlassSurface, IconButton, LargeTitleHeader, ListGroup, ListRow, PressableButton, SegmentedControl, Sheet, Skeleton, Toggle } from '../components/ios'
 import type { SubKind, SubPreview, WeatherSub, WeatherSubList } from '../types/api'
 
 const KIND_HELP: Record<SubKind, string> = {
@@ -14,10 +14,15 @@ const KIND_HELP: Record<SubKind, string> = {
   severe: 'Posted only when wind, rain, heat or a storm crosses a threshold.',
   class_suspension: 'Posted when the heat index reaches an advisory level. Advisory only — always confirm with your school.',
 }
+const KIND_LABELS: Record<SubKind, string> = {
+  daily: 'Daily digest',
+  severe: 'Severe weather watch',
+  class_suspension: 'Class suspension watch',
+}
 
 function describe(sub: WeatherSub) {
-  const when = sub.schedule_local_time ? ` at ${sub.schedule_local_time} (${sub.tz})` : ''
-  return `${sub.location} → #${sub.channel_id}${when}${sub.enabled ? '' : ' • paused'}`
+  const when = sub.schedule_local_time ? ` at ${sub.schedule_local_time} (${sub.tz})` : ` (${sub.tz})`
+  return `${sub.location} → #${sub.channel_id}${when}${sub.enabled ? '' : ' · paused'}`
 }
 
 function PreviewSheet({ guildId, sub, onClose }: { guildId: string | undefined; sub: WeatherSub; onClose(): void }) {
@@ -26,22 +31,28 @@ function PreviewSheet({ guildId, sub, onClose }: { guildId: string | undefined; 
     queryFn: () => api<SubPreview>(`/guilds/${guildId}/weather-subs/${sub.id}/preview`),
   })
 
-  return <div className="stack">
+  return <>
     <h2>Preview — {sub.location}</h2>
     {preview.isPending && <Skeleton lines={4} />}
     {preview.error && <ErrorNote error={preview.error} onRetry={() => preview.refetch()} />}
     {preview.data && (preview.data.alert
-      ? <GlassSurface>
-        <h3>{preview.data.alert.title}</h3>
-        <p>{preview.data.alert.summary}</p>
-        <ListGroup>{preview.data.alert.fields.map(field => <ListRow key={field.name} label={field.name} detail={field.value} />)}</ListGroup>
+      ? <>
+        {/* Shaped like the Discord embed it would become, so "what would be
+            posted" is answered by looking rather than by reading a description. */}
+        <div className="embed">
+          <div className="embed-head"><i className="dot danger" aria-hidden /><b>{preview.data.alert.title}</b></div>
+          <p>{preview.data.alert.summary}</p>
+          {preview.data.alert.fields.length > 0 && <div className="embed-fields">
+            {preview.data.alert.fields.map(field => <div key={field.name}><span>{field.name}</span><b>{field.value}</b></div>)}
+          </div>}
+        </div>
         {/* Shown because it explains a genuinely confusing case: the preview has
             something to say, and the channel will still see nothing. */}
-        {preview.data.duplicate && <p className="muted">This is the same alert that was posted last time, so it would not be sent again until the forecast changes.</p>}
-      </GlassSurface>
-      : <GlassSurface><p>Nothing to report right now.</p><p className="muted">This subscription would stay quiet — which is what a watch does most of the time.</p></GlassSurface>)}
-    <PressableButton variant="secondary" onClick={onClose}>Close</PressableButton>
-  </div>
+        {preview.data.duplicate && <p className="muted small-note">This is the same alert that was posted last time, so it would not be sent again until the forecast changes.</p>}
+      </>
+      : <GlassSurface tier="thin"><p>Nothing to report right now.</p><p className="muted">This subscription would stay quiet — which is what a watch does most of the time.</p></GlassSurface>)}
+    <div className="sheet-actions"><PressableButton variant="secondary" onClick={onClose}>Close</PressableButton></div>
+  </>
 }
 
 function CreateSheet({ guildId, kinds, onDone }: { guildId: string | undefined; kinds: SubKind[]; onDone(): void }) {
@@ -68,42 +79,51 @@ function CreateSheet({ guildId, kinds, onDone }: { guildId: string | undefined; 
   })
 
   const postable = meta.data?.channels.filter(channel => channel.can_send) ?? []
-  return <div className="stack">
+  return <>
     <h2>New subscription</h2>
-    <ListGroup>
-      <ListRow label="What to post">
-        <select className="text-input" value={kind} onChange={event => setKind(event.target.value as SubKind)}>
-          {kinds.map(value => <option key={value} value={value}>{value === 'daily' ? 'Daily digest' : value === 'severe' ? 'Severe weather watch' : 'Class suspension watch'}</option>)}
-        </select>
-      </ListRow>
-      <ListRow label="Place">
-        <input className="text-input" value={location} placeholder="Iloilo City" onChange={event => setLocation(event.target.value)} />
-      </ListRow>
-      <ListRow label="Channel">
+    <p>Choose what to post, where, and when.</p>
+    <div className="stack">
+      <label className="field">
+        <span>What to post</span>
+        {/* A segmented control rather than a select: three fixed options where the
+            choice changes the rest of the form, so it should be visible at a glance. */}
+        <SegmentedControl values={kinds} labels={KIND_LABELS} value={kind} onChange={value => setKind(value as SubKind)} />
+      </label>
+      <label className="field">
+        <span>Place</span>
+        <input className="text-input full" value={location} placeholder="Iloilo City" onChange={event => setLocation(event.target.value)} />
+      </label>
+      <label className="field">
+        <span>Channel</span>
         {/* Channels that Zephyr cannot post in are left out rather than shown and
             rejected later: a subscription pointed at one fails silently forever. */}
         {meta.data
-          ? <select className="text-input" value={channelId} onChange={event => setChannelId(event.target.value)}>
+          ? <select className="text-input full" value={channelId} onChange={event => setChannelId(event.target.value)}>
             <option value="">Choose a channel</option>
             {postable.map(channel => <option key={channel.id} value={channel.id}>#{channel.name}</option>)}
           </select>
-          : <input className="text-input" value={channelId} placeholder="Channel id" onChange={event => setChannelId(event.target.value)} />}
-      </ListRow>
-      {kind === 'daily' && <ListRow label="Time" detail="Local to the timezone below">
-        <input className="text-input short" value={at} placeholder="08:00" onChange={event => setAt(event.target.value)} />
-      </ListRow>}
-      <ListRow label="Timezone" detail="Leave empty to use the place's own">
-        <input className="text-input" value={tz} placeholder="Asia/Manila" onChange={event => setTz(event.target.value)} />
-      </ListRow>
-    </ListGroup>
-    <p className="muted">{KIND_HELP[kind]}</p>
-    {!meta.data && !meta.isPending && <p className="muted">Zephyr is not reachable, so its channels cannot be listed. You can still paste a channel id.</p>}
-    {create.error && <ErrorNote error={create.error} onRetry={() => create.reset()} />}
-    <div className="transport">
-      <PressableButton disabled={!location.trim() || !channelId.trim() || create.isPending} onClick={() => { haptic(15); create.mutate() }}>{create.isPending ? 'Saving…' : 'Subscribe'}</PressableButton>
-      <PressableButton variant="secondary" onClick={onDone}>Cancel</PressableButton>
+          : <input className="text-input full" value={channelId} placeholder="Channel id" onChange={event => setChannelId(event.target.value)} />}
+      </label>
+      <div className="field-row">
+        {kind === 'daily' && <label className="field" style={{ flex: 1 }}>
+          <span>Time</span>
+          <input className="text-input full mono" value={at} placeholder="08:00" onChange={event => setAt(event.target.value)} />
+        </label>}
+        <label className="field" style={{ flex: 1.4 }}>
+          <span>Timezone</span>
+          <input className="text-input full" value={tz} placeholder="Asia/Manila" onChange={event => setTz(event.target.value)} />
+        </label>
+      </div>
+      <p className="note">{KIND_HELP[kind]}</p>
+      {!tz && <p className="muted small-note">Leave the timezone empty to use the place's own.</p>}
+      {!meta.data && !meta.isPending && <p className="muted small-note">Zephyr is not reachable, so its channels cannot be listed. You can still paste a channel id.</p>}
+      {create.error && <ErrorNote error={create.error} onRetry={() => create.reset()} />}
     </div>
-  </div>
+    <div className="sheet-actions">
+      <PressableButton variant="secondary" onClick={onDone}>Cancel</PressableButton>
+      <PressableButton disabled={!location.trim() || !channelId.trim() || create.isPending} onClick={() => { haptic(15); create.mutate() }}>{create.isPending ? 'Saving…' : 'Subscribe'}</PressableButton>
+    </div>
+  </>
 }
 
 export function GuildWeatherAlerts() {
@@ -129,7 +149,7 @@ export function GuildWeatherAlerts() {
     return <main className="app">
       <LargeTitleHeader title="Weather alerts" />
       <ErrorNote error={subs.error} onRetry={() => subs.refetch()} />
-      <p><Link to={`/g/${guildId}`}>Back to the server</Link></p>
+      <BackLink to={`/g/${guildId}`}>Back to the server</BackLink>
     </main>
   }
 
@@ -142,11 +162,11 @@ export function GuildWeatherAlerts() {
         <p className="muted">A daily digest arrives at a time you pick. The two watches stay quiet until there is something worth saying.</p>
       </GlassSurface>
       : <ListGroup>
-        {subs.data.subscriptions.map(sub => <ListRow key={sub.id} label={sub.kind_label} detail={describe(sub)}>
+        {subs.data.subscriptions.map(sub => <ListRow key={sub.id} label={sub.kind_label} detail={describe(sub)} className="strong-row">
           <span className="row-actions">
-            <Toggle checked={sub.enabled} onChange={enabled => { haptic(15); toggle.mutate({ id: sub.id, enabled }) }} />
-            <PressableButton variant="secondary" onClick={() => setPreviewing(sub)}>Preview</PressableButton>
-            <PressableButton variant="danger" onClick={() => { haptic(15); remove.mutate(sub.id) }}>Delete</PressableButton>
+            <Toggle label={`${sub.kind_label} enabled`} checked={sub.enabled} onChange={enabled => { haptic(15); toggle.mutate({ id: sub.id, enabled }) }} />
+            <PressableButton variant="secondary" className="small" onClick={() => setPreviewing(sub)}>Preview</PressableButton>
+            <IconButton variant="danger" size={30} label={`Delete ${sub.kind_label} for ${sub.location}`} onClick={() => { haptic(15); remove.mutate(sub.id) }}>×</IconButton>
           </span>
         </ListRow>)}
       </ListGroup>}
@@ -157,13 +177,15 @@ export function GuildWeatherAlerts() {
         subscription keeps its place and its thresholds. */}
     {subs.data.subscriptions.some(sub => !sub.enabled) && <CapsuleToast>Paused subscriptions keep their settings.</CapsuleToast>}
 
-    <PressableButton onClick={() => setCreating(true)}>Add a subscription</PressableButton>
+    <div className="actions"><PressableButton onClick={() => setCreating(true)}>Add a subscription</PressableButton></div>
 
-    <Sheet open={creating} onOpenChange={setCreating}>
+    <Sheet open={creating} onOpenChange={setCreating} label="New subscription">
       <CreateSheet guildId={guildId} kinds={subs.data.kinds} onDone={() => setCreating(false)} />
     </Sheet>
-    <Sheet open={previewing !== null} onOpenChange={open => !open && setPreviewing(null)}>
+    <Sheet open={previewing !== null} onOpenChange={open => !open && setPreviewing(null)} label="Subscription preview">
       {previewing && <PreviewSheet guildId={guildId} sub={previewing} onClose={() => setPreviewing(null)} />}
     </Sheet>
+
+    <BackLink to={`/g/${guildId}`}>Back to the server</BackLink>
   </GuildShell></main>
 }

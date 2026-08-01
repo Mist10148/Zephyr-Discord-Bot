@@ -872,6 +872,10 @@ select.text-input { appearance: auto; }
 .quota .model { flex: 1; min-width: 140px; }
 .quota .model b { display: block; margin-top: 2px; font-size: 15.5px; font-weight: 600; }
 .quota .figures { display: flex; gap: 18px; flex-wrap: wrap; font-family: var(--font-mono); font-size: 13px; color: var(--text-muted); }
+.quota .section-label { margin: 0; padding: 0; }
+.form-card { margin-bottom: 30px; }
+.self-start { align-self: flex-start; }
+.small-note { margin: 0; font-size: 12.5px; }
 
 /* ---- Settings: sticky save bar ----------------------------------------------
    A capsule that follows the page instead of a button pair that scrolls out of
