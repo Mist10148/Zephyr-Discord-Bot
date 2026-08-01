@@ -901,6 +901,11 @@ select.text-input { appearance: auto; }
 }
 @media (max-width: 859px) { .save-bar { bottom: 78px; } }
 
+/* ---- Kitchen sink ------------------------------------------------------------ */
+.tier-row { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+.tier-row p { margin: 4px 0 0; font-size: 13px; }
+.glyph-row { color: var(--accent); align-items: center; }
+
 /* ---- Audit ------------------------------------------------------------------ */
 .audit-group { margin-bottom: 22px; }
 .audit-time { flex: none; min-width: 38px; font-family: var(--font-mono); font-size: 12.5px; font-weight: 500; line-height: 1; color: var(--text-faint); }

@@ -5,7 +5,8 @@ Source of truth: `website/frontend/src/App.tsx` (route table), `src/routes/*` (s
 `src/components/ios/index.tsx` (primitives), `src/styles/theme.css` (tokens).
 
 **12 screens** — 4 public, 7 authenticated (1 list + 6 per-server), 1 catch-all.
-Plus 3 global chrome layers (top bar, command palette, sheets) that render *over* screens.
+Plus 4 global chrome layers (top bar, mobile tab bar, command palette, sheets) that render
+*over* or *around* screens.
 
 ---
 
@@ -17,11 +18,21 @@ Wraps every route. Renders above the page's own `<main className="app">`.
 | Slot | Content |
 | --- | --- |
 | Left | Wordmark link to `/` — glyph `❍` (`.brand-mark`) + "Zephyr" (`.brand-name`) |
-| Right | "Servers" link → `/g` (**only** when `pathname` starts with `/g`), then `ThemeToggle` |
+| Right | "Servers" link → `/g` (**only** when `pathname` starts with `/g`), the ⌘K palette trigger (hidden on `/login`), then `ThemeToggle` |
 
-- Glass surface so the aurora shows through it. Sticky, full-bleed, inner content constrained.
+- Glass surface (regular tier) so the aurora shows through it. Sticky, full-bleed, inner
+  content constrained to 1080px.
+- Also renders the `.aurora` layer — three independently drifting blobs, fixed, `aria-hidden`.
 - `ThemeToggle`: single icon button, inline sun/moon SVG (`currentColor`, no icon dep),
   `aria-pressed`, spring `scale: .9` on tap, haptic on press.
+
+### 0.1b `TabBar` — mobile bottom navigation
+Rendered from `App.tsx`, below 860px only, hidden on `/login`.
+
+- Four tabs: **Home** `/` · **Weather** `/weather` · **Servers** `/g` · **System** `/kitchen-sink`.
+- **Servers stays active anywhere under `/g`**, including guild sub-pages.
+- Sticky (not fixed) with thick glass and a safe-area-aware bottom pad; `#root` is a flex
+  column so it can be the last item in normal flow.
 
 ### 0.2 `CommandPalette` — ⌘K / Ctrl-K overlay
 Mounted on every route **except** `/login`.
@@ -41,8 +52,13 @@ Uses the **thick** blur tier so it reads heavier than a card.
 Wraps the body of all six `/g/:guildId/*` screens.
 
 - Sections: **Overview** (`end`), **Music**, **Weather**, **AI**, **Settings**, **Audit**.
-- ≥860px: sticky left rail. <860px: horizontally scrolling pill row at the top.
-- Active state via `NavLink` → `.nav-link.active`.
+  (The rail says "Weather", not "Weather alerts" — the longer label wraps at 208px.)
+- ≥860px: a 208px sticky rail at `top: 82px`, headed by the server's icon + name (resolved
+  from the same `['guild', guildId]` query key `GuildOverview` uses, so it is usually cached).
+  <860px: the same nav as a horizontally scrolling pill row above the content.
+- **One nav element serves both layouts** — the rail is first in the DOM, so the shell
+  simply stacks at phone width. No duplicate landmark.
+- Active state via `NavLink` → `.pill.active`.
 
 ---
 
@@ -61,7 +77,7 @@ Wraps the body of all six `/g/:guildId/*` screens.
      - offline → `Bot offline` (`.off`)
    - Actions: primary **"Check the weather"** → `/weather`; secondary **"Open dashboard"** → `/g`
 2. **Feature grid** — 3 interactive glass cards (`.glass.glass-interactive.feature-card`), each with
-   an `<h2>`, muted body, and an "Open ›" affordance (`.feature-go` + `.chevron`):
+   an accent icon, an `<h2>`, muted body, and an "Open ›" affordance (`.feature-go` + `.chevron`):
 
 | Card | Body |
 | --- | --- |
@@ -90,16 +106,22 @@ Status pill is live data, not decoration — its three states must stay visually
    - no hits → row "No matching places"
 4. **Loading** → `Skeleton lines={5}`
 5. **Current conditions card** (`GlassSurface.current-weather`)
-   - Head: `<h2>` place name (+ country), `.current-desc` description; right side `.current-temp` = big `26°`
-   - Meta row: `Feels like N°`, and `Air quality · <band>` when present
-6. **7-day grid** (`WidgetGrid`) — one `GlassSurface` per day: `.day-name`, `.stat-value` = `max°` with
-   a `.day-low` ` / min°`, and a muted description.
-7. Footer link **"Back home"** → `/`
+   - Head: `<h2>` place name with a faint `, Country` suffix, `.current-desc` description,
+     the 64px `SunCloudIcon`, then `.current-temp` = serif `31°`
+   - **Chip strip**: `Feels like N°` · `Air quality · <band>` (when present) ·
+     **`Heat index advisory`** in danger tone, from `class_suspension.level` — shown only
+     for `possible` / `likely` / `certain`, with `reason` as the tooltip
+6. **7-day grid** (`.day-grid`) — one thin-glass `.day-card` per day: uppercase `.day-name`,
+   a 28px sun/cloud/rain glyph from `weatherGlyph(weather_code)`, serif `max°` with a
+   `.day-low` ` / min°`, and a muted description.
+7. `BackLink` → `/`
 
 ### Design notes
-Two densities on one page: a hero-weight current card, then a uniform widget grid.
-`.current-temp` and `.stat-value` are the numeric display styles — they should share a ramp.
-This is the best candidate screen for weather iconography, which the current design has none of.
+Two densities on one page: a hero-weight current card, then a uniform day grid.
+Day names come from splitting the API's local date string, **not** `new Date(iso)` — parsing
+as UTC and formatting in the viewer's zone can shift the whole forecast by a day.
+Glyphs map from `weather_code` (WMO), never `description` or `icon`: the code is the stable
+field, the other two are prose and an emoji that change when wording is tuned server-side.
 
 ---
 
@@ -112,16 +134,22 @@ before and after any visual change.
 
 ### Content, in order
 1. `LargeTitleHeader` — "Design system" / *"Every glass primitive, shown in {theme} appearance."*
-2. **Buttons** (`.transport` row): `Toggle appearance` (primary, flips the real theme context),
-   `Secondary`, `Danger`, `Disabled`
-3. **Segmented control** — `Today | Tomorrow | Week`
-4. **Widget cards** — `Weather / 26° / Partly cloudy`, `Air quality / Good / AQI 24`
-5. **Interactive card** — "Hover me" glass card with the lift + chevron
-6. **Inset list** — five rows exercising each trailing slot:
-   `Toggle`, `Volume` (Slider), `Stepper`, `Navigable row` (leading avatar + chevron), `Button row`
-7. **Loading** — `Skeleton lines={3}`
-8. **Feedback** — `CapsuleToast` neutral ("Saved") and error ("Something went wrong.")
-9. Footer link "Back home"
+2. **Buttons** — `Toggle appearance` (primary, flips the real theme context), `Secondary`,
+   `Danger`, `Disabled`
+3. **Transport** — the 52px primary circle plus pause / skip / shuffle / stop `IconButton`s
+4. **Weather glyphs** — sun / cloud / rain
+5. **Segmented control** — `Today | Tomorrow | Week`
+6. **Widget cards** — `Weather / 26° / Partly cloudy`, `Air quality / Good / AQI 24`
+7. **Glass tiers** — thin / regular / thick side by side, the only place the three are
+   directly comparable
+8. **Interactive card** — "Hover me" glass card with the lift + chevron
+9. **Inset list** — six rows exercising each slot: `Toggle`, `Volume` (Slider), `Stepper`,
+   `Checkbox row` (`pressed`, no chevron), `Navigable row` (leading avatar + chevron), `Value row`
+10. **Chips and badges** · **Status dots** (ok / off / unknown)
+11. **Fields** — a normal inline field and one in its invalid state with the inline error
+12. **Loading** — `Skeleton lines={3}`
+13. **Feedback** — success / neutral / error `CapsuleToast` and the login error banner
+14. `BackLink` "Back home"
 
 ### Design notes
 **Any new primitive must be added here.** This page is the contract — if a redesign adds a
@@ -137,7 +165,8 @@ component and doesn't render it here, the regression surface silently rots.
 - While `/me` is pending → `Skeleton lines={4}` (deliberate: prevents a button flash for
   already-signed-in visitors, who are then `<Navigate>`d to `next`).
 - `LargeTitleHeader` — **"Sign in"** / *"Manage the Discord servers you already administer."*
-- **Error toast** (`CapsuleToast tone="error"`) when `?error=` is present. Eleven mapped messages:
+- **Error banner** (`.error-banner`, `role="alert"` — a danger-tinted pill with an `!` badge)
+  when `?error=` is present. Eleven mapped messages:
 
 | Code | Message |
 | --- | --- |
@@ -409,76 +438,126 @@ Deliberately not the marketing page — it catches things like `/g/1/musci`.
 
 # Design system reference
 
+The system is **"Warm glass"** — see [DESIGN.md](DESIGN.md) for the principles and the
+performance/accessibility budget. This section is the component and token index.
+
 ## Primitives (`src/components/ios/index.tsx`)
 
 | Component | Role |
 | --- | --- |
-| `GlassSurface` | Frosted card. `interactive` adds a hover lift for link/button cards. |
-| `PressableButton` | `primary` / `secondary` / `danger`. Spring `scale .96` tap, `y: -1` hover. **Not polymorphic** — real links are plain `<a className="ios-button">`. |
-| `Sheet` | Radix bottom sheet, overlay + grabber. |
-| `SegmentedControl` | `role="group"`, `aria-pressed` per segment. |
-| `ListGroup` / `ListRow` | Inset list. Row = leading slot + label/detail + trailing children + chevron (when `to`/`onClick`). Renders as `Link`, `button`, or `div`. |
-| `Toggle` | Pill switch, `aria-pressed`. |
+| `GlassSurface` | Frosted card. `tier` = `thin` / `regular` / `thick`; always emits `data-glass`. `interactive` adds the hover lift. |
+| `PressableButton` | `primary` / `secondary` / `danger`, plus `.small` / `.soft` / `.block`. Spring `scale .96` tap, `y: -1` hover. **Not polymorphic** — real links are plain `<a className="ios-button">`. |
+| `IconButton` | Circular icon control (transport, row deletes). Requires a `label`. |
+| `Sheet` | Radix bottom sheet, thick glass, grabber, `sheetUp` animation. |
+| `SegmentedControl` | `role="group"`, `aria-pressed` per segment, optional `labels` map. |
+| `ListGroup` / `ListRow` | Opaque inset list. Row = leading slot + label/detail + trailing children + chevron. Renders as `Link`, `button`, or `div`; `pressed` makes it an `aria-pressed` toggle with no chevron. |
+| `Chevron` | The `›` affordance. |
+| `Toggle` | 46×28 pill switch, `aria-pressed`. |
 | `Slider` | `input[type=range]`, `aria-label` + `aria-valuetext`. |
 | `Stepper` | `−` / value / `+`. |
-| `LargeTitleHeader` | `h1` + optional subtitle. |
-| `CapsuleToast` | `neutral` (`role=status`) / `error` (`role=alert`). |
-| `Skeleton` | `n` shimmer lines, `aria-busy`. |
+| `LargeTitleHeader` | Serif `h1` + optional subtitle and faint note. |
+| `SectionLabel` | The uppercase eyebrow above a group of rows. |
+| `BackLink` | The `‹ Back` affordance — a real `Link`, so it survives a deep link. |
+| `CapsuleToast` | `neutral` (`role=status`) / `success` / `error` (`role=alert`), with a badge. |
+| `Skeleton` | `n` shimmer bars, `aria-busy`. |
 | `WidgetGrid` | Responsive card grid. |
-| `TabBar`, `DynamicIsland`, `PullToRefresh` | **Defined but unused** — dead primitives. |
+
+**Icons** live in `src/components/icons.tsx` and all draw in `currentColor`: weather
+(`SunIcon`, `CloudIcon`, `RainIcon`, `SunCloudIcon`), home features, transport
+(`PlayIcon`, `PauseIcon`, `SkipIcon`, `ShuffleIcon`, `StopIcon`), tab bar, and the
+sun/moon pair for the theme toggle.
+
+**Other components:** `AppShell` (top bar + aurora), `TabBar` (mobile nav),
+`GuildShell`/`GuildNav`, `CommandPalette`, `PlaylistPanel`, `ErrorNote`,
+`DiscordAvatar`, `RequireAuth`.
+
+**Helpers:** `src/lib/weather-icons.ts` (WMO code → glyph, AQI band label, heat
+advisory test) and `src/lib/audit-groups.ts` (local-day grouping, time formatting).
 
 ## Tokens (`src/styles/theme.css`)
 
 **Shape** `--radius-control 12px` · `--radius-card 22px` · `--radius-sheet 34px` · `--radius-pill 999px`
 **Motion** `--dur-fast .14s` · `--dur .22s` · `--ease cubic-bezier(.2,.8,.2,1)`
-**Blur** `--blur-thin 12px` · `--blur-regular 20px` · `--blur-thick 34px`
+**Blur** `--blur-thin 12px` · `--blur-regular 22px` · `--blur-thick 34px`
+**Type** `--font-sans` (system/SF) · `--font-serif` (Source Serif 4) · `--font-mono`
 
 | Token | Light | Dark |
 | --- | --- | --- |
-| `--bg` | `#e9f0fb` | `#080b16` |
-| `--aurora-1` (sky) | `rgba(120,170,245,.55)` | `rgba(49,86,129,.70)` |
-| `--aurora-2` (violet) | `rgba(178,150,232,.45)` | `rgba(78,54,90,.62)` |
-| `--aurora-3` (teal) | `rgba(120,214,200,.42)` | `rgba(31,91,87,.55)` |
-| `--text` | `#0c1526` | `#f4f6fb` |
-| `--text-muted` | `#5a6474` | `#9aa4b6` |
-| `--text-faint` | `#8a93a3` | `#6a7383` |
-| `--surface-glass` | `rgba(255,255,255,.62)` | `rgba(255,255,255,.08)` |
-| `--surface-glass-border` | `rgba(255,255,255,.7)` | `rgba(255,255,255,.14)` |
-| `--surface-1` | `#ffffff` | `#141826` |
-| `--surface-2` | `#eef2f9` | `#1b2030` |
-| `--surface-3` | `#e2e8f2` | `#262c3e` |
-| `--hairline` | `rgba(12,21,38,.09)` | `rgba(255,255,255,.10)` |
-| `--accent` | `#0a84ff` | `#0a84ff` |
-| `--accent-strong` | `#0060df` | `#409cff` |
-| `--success` | `#12a150` | `#30d158` |
-| `--danger` | `#e5484d` | `#ff453a` |
-| `--link` | `#0a68d6` | `#8ab4ff` |
+| `--bg` / `--bg-2` | `#F0EEE6` / `#F6F4EE` | `#1A1917` / `#201F1C` |
+| `--aurora-1` (clay) | `rgba(204,107,76,.34)` | `rgba(168,80,48,.44)` |
+| `--aurora-2` (sand) | `rgba(226,178,132,.40)` | `rgba(126,92,58,.40)` |
+| `--aurora-3` (breeze) | `rgba(140,166,154,.34)` | `rgba(66,90,82,.40)` |
+| `--text` | `#191917` | `#F5F3EE` |
+| `--text-muted` | `#6B6A62` | `#A8A49A` |
+| `--text-faint` | `#9B9890` | `#7B776D` |
+| `--surface-glass` | `rgba(255,255,255,.60)` | `rgba(255,255,255,.07)` |
+| `--surface-glass-border` | `rgba(255,255,255,.78)` | `rgba(255,255,255,.13)` |
+| `--glass-solid` | `#FBF9F4` | `#26241F` |
+| `--surface-1` | `#FFFFFF` | `#24221F` |
+| `--surface-2` | `#F4F1EA` | `#2C2A25` |
+| `--surface-3` | `#E8E4DA` | `#36332D` |
+| `--hairline` | `rgba(25,25,23,.10)` | `rgba(255,255,255,.10)` |
+| `--accent` | `#CC6B4C` | `#E08A66` |
+| `--accent-strong` | `#AF5333` | `#F2A585` |
+| `--success` | `#3F8F63` | `#62C48A` |
+| `--danger` | `#C8443A` | `#F0776A` |
+| `--link` | `#A8543A` | `#F0A183` |
 
-Fonts: `-apple-system, BlinkMacSystemFont, Inter, Segoe UI, system-ui` / mono `ui-monospace, SFMono-Regular, SF Mono, Menlo`.
+## Responsive behaviour
+
+**The breakpoint is 860px**, used consistently everywhere:
+
+| Below 860px | At or above |
+| --- | --- |
+| `TabBar` visible (Home / Weather / Servers / System) | Tab bar hidden; top bar carries the same destinations |
+| `GuildNav` is a scrolling pill row above the content | 208px sticky rail at `top: 82px`, headed by the server icon + name |
+| Save bar sits at `bottom: 78px` (clears the tab bar) | `bottom: 16px` |
+| Aurora blur radii drop to 48–56px | 90–110px |
+| `.app` reserves ~5.5rem bottom padding for the pinned tab bar | 2.5rem |
+
+The prototype's phone bezel, fake status bar and desktop/mobile toggle pill are
+prototype scaffolding and are deliberately **not** in the app — the mobile layout is
+plain responsive CSS.
 
 ## Rules a redesign must not break
 
-1. **Glass, surgically.** Cards, sheets, top bar, palette only. Never glass-in-glass.
-   **Dense list rows stay opaque.**
+1. **Glass, surgically.** Cards, sheets, top bar, tab bar, palette, save bar. Never
+   glass-in-glass. **Dense list rows stay opaque.**
 2. **Tokens, not literals.** No component writes a hex value.
-3. **Theme is one class** — `.dark` on `<html>`. `localStorage['zephyr-theme']` wins over OS.
-   The pre-paint snippet in `index.html` must stay in step with `resolveTheme` in
-   `src/lib/theme-context.ts`, or the page flashes on load.
-4. **Motion budget.** `motion` springs on tap/press; CSS transitions for hover/theme.
+3. **`data-glass` on every glass surface** — one `prefers-reduced-transparency` rule
+   covers them all.
+4. **Theme is one class** — `.dark` on `<html>`. `localStorage['zephyr-theme']` wins over
+   OS. The pre-paint snippet in `index.html` must stay in step with `resolveTheme` in
+   `src/lib/theme-context.ts`.
+5. **Motion budget.** `motion` springs on tap/press; CSS transitions for hover/theme.
    Everything off under `prefers-reduced-motion`. The aurora animates `transform` only.
-5. **Transparency budget.** Every glass surface must have an opaque fallback under
-   `prefers-reduced-transparency`.
 6. **Focus.** One `:focus-visible` ring covers every custom control.
 7. **`/kitchen-sink` is the contract.** New primitive → new section there.
+8. **Structural rules of the repo:** hooks live in `.ts` files and non-component theme
+   members in `theme-context.ts` (`eslint --max-warnings=0` makes
+   `react-refresh/only-export-components` a CI failure); specs live in `test/`, never
+   `src/`.
 
-## Known weak points (redesign targets)
+## Fixed in the redesign
 
-- Transport controls are text glyphs (`❙❙ ▶︎ ⏭ 🔀 ⏹`), not icons — Music screen.
-- Rows with 3 trailing controls overflow on phones — Weather alerts, Music queue.
-- `GuildAI` uses unstyled `<input>`/`<textarea>` and an inline confirm instead of a `Sheet`.
-- `GuildSettings` signals field errors by swapping `detail` text — no colour, icon, or focus move;
-  Save/Discard scroll out of view.
-- `GuildOverview` renders an empty glass card when neither caveat applies, and has no visual
-  separation between the read-only facts list and the navigation list.
-- `TabBar`, `DynamicIsland`, `PullToRefresh` are dead code.
-- Weather has no iconography at all.
+Every item on the old "known weak points" list is now resolved:
+
+- Transport controls are SVG icons in circular buttons, not text glyphs.
+- Rows with three trailing controls fit at 414px — deletes are 30px circles and
+  secondary actions are `.small` pills.
+- `GuildAI`'s form uses the real field vocabulary, and the purge confirmation is a
+  `Sheet` like every other destructive flow.
+- `GuildSettings` flags invalid fields on the control itself with `aria-invalid`, a
+  danger border and a message stating the rule; Save/Discard live in a sticky capsule.
+- `GuildOverview` no longer renders an empty caveat card, and its two lists are
+  separated by `SectionLabel`s.
+- `TabBar` is real; `DynamicIsland` and `PullToRefresh` are deleted.
+- Weather has full iconography, plus the heat-index advisory the API always sent.
+- The audit log groups by day and badges its source.
+
+## Open
+
+- `website/security.py` sets `script-src 'self'` with no hash or nonce, which blocks the
+  pre-paint theme snippet in `index.html` in production. The no-flash guarantee in
+  `DESIGN.md` therefore does not hold on the deployed site. Needs a CSP change, not a
+  frontend one.

@@ -1,60 +1,119 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useTheme } from '../lib/theme-context'
-import { CapsuleToast, GlassSurface, LargeTitleHeader, ListGroup, ListRow, PressableButton, SegmentedControl, Skeleton, Slider, Stepper, Toggle, WidgetGrid } from '../components/ios'
+import { BackLink, CapsuleToast, Chevron, GlassSurface, IconButton, LargeTitleHeader, ListGroup, ListRow, PressableButton, SectionLabel, SegmentedControl, Skeleton, Slider, Stepper, Toggle, WidgetGrid } from '../components/ios'
+import { CloudIcon, PauseIcon, PlayIcon, RainIcon, ShuffleIcon, SkipIcon, StopIcon, SunIcon } from '../components/icons'
 
 // The design-system review page: every primitive on one screen, in whichever theme
 // is active, so a visual regression shows up here first. It drives the real theme
 // context (not a raw class toggle) so it exercises the same path the app uses.
+//
+// This page is the contract. A primitive that is not rendered here is one nobody
+// will notice breaking -- add every new one.
 export function KitchenSink() {
   const { theme, toggle } = useTheme()
   const [segment, setSegment] = useState('Today')
   const [on, setOn] = useState(true)
   const [volume, setVolume] = useState(60)
   const [count, setCount] = useState(2)
+  const [checked, setChecked] = useState(true)
 
-  return <main className="app">
+  return <main className="app sink">
     <LargeTitleHeader title="Design system" subtitle={`Every glass primitive, shown in ${theme} appearance.`} />
 
-    <div className="transport">
+    <SectionLabel>Buttons</SectionLabel>
+    <div className="actions">
       <PressableButton onClick={toggle}>Toggle appearance</PressableButton>
       <PressableButton variant="secondary">Secondary</PressableButton>
       <PressableButton variant="danger">Danger</PressableButton>
       <PressableButton disabled>Disabled</PressableButton>
     </div>
 
-    <h2>Segmented control</h2>
+    <SectionLabel>Transport</SectionLabel>
+    <div className="transport">
+      <IconButton variant="primary" size={52} label="Play"><PlayIcon size={18} /></IconButton>
+      <IconButton label="Pause"><PauseIcon /></IconButton>
+      <IconButton label="Skip"><SkipIcon /></IconButton>
+      <IconButton label="Shuffle"><ShuffleIcon /></IconButton>
+      <IconButton variant="danger" label="Stop"><StopIcon /></IconButton>
+    </div>
+
+    <SectionLabel>Weather glyphs</SectionLabel>
+    <div className="actions glyph-row">
+      <SunIcon /><CloudIcon /><RainIcon />
+    </div>
+
+    <SectionLabel>Segmented control</SectionLabel>
     <SegmentedControl values={['Today', 'Tomorrow', 'Week']} value={segment} onChange={setSegment} />
 
-    <h2>Widget cards</h2>
+    <SectionLabel>Widget cards</SectionLabel>
     <WidgetGrid>
       <GlassSurface><h2>Weather</h2><p className="stat-value">26°</p><small className="muted">Partly cloudy</small></GlassSurface>
       <GlassSurface><h2>Air quality</h2><p className="stat-value">Good</p><small className="muted">AQI 24</small></GlassSurface>
     </WidgetGrid>
 
-    <h2>Interactive card</h2>
-    <Link to="/kitchen-sink" className="glass glass-interactive feature-card">
+    <SectionLabel>Glass tiers</SectionLabel>
+    <div className="tier-row">
+      <GlassSurface tier="thin"><b>Thin</b><p className="muted">Day cards, notices</p></GlassSurface>
+      <GlassSurface tier="regular"><b>Regular</b><p className="muted">Content cards, top bar</p></GlassSurface>
+      <GlassSurface tier="thick"><b>Thick</b><p className="muted">Sheets, palette, tab bar</p></GlassSurface>
+    </div>
+
+    <SectionLabel>Interactive card</SectionLabel>
+    <Link to="/kitchen-sink" className="glass glass-regular glass-interactive feature-card" data-glass="1">
       <h2>Hover me</h2>
-      <p className="muted">A glass surface with the interactive lift, used for tap targets.</p>
-      <span className="feature-go">Open<i className="chevron" aria-hidden /></span>
+      <p>A glass surface with the interactive lift, used for tap targets.</p>
+      <span className="feature-go">Open<Chevron /></span>
     </Link>
 
-    <h2>Inset list</h2>
+    <SectionLabel>Inset list</SectionLabel>
     <ListGroup>
-      <ListRow label="Toggle" detail="A pill switch"><Toggle checked={on} onChange={setOn} /></ListRow>
-      <ListRow label="Volume" detail={`${volume}%`}><Slider label="Volume" value={volume} onChange={setVolume} /></ListRow>
-      <ListRow label="Stepper" detail="Increment / decrement"><Stepper value={count} onChange={setCount} /></ListRow>
-      <ListRow label="Navigable row" detail="with a chevron and a leading slot" leading={<span className="guild-icon">ZB</span>} to="/kitchen-sink" />
-      <ListRow label="Button row" onClick={() => setOn(value => !value)} />
+      <ListRow label="Toggle" detail="A pill switch"><span className="row-actions"><Toggle label="Demo" checked={on} onChange={setOn} /></span></ListRow>
+      <ListRow label="Volume"><span className="row-actions"><span className="row-value mono">{volume}%</span><Slider label="Volume" value={volume} onChange={setVolume} /></span></ListRow>
+      <ListRow label="Stepper" detail="Increment / decrement"><span className="row-actions"><Stepper value={count} onChange={setCount} /></span></ListRow>
+      <ListRow label="Checkbox row" detail="A toggle, not a destination" leading={<span className={`checkbox ${checked ? 'on' : ''}`.trim()} aria-hidden>✓</span>} pressed={checked} onClick={() => setChecked(value => !value)} />
+      <ListRow label="Navigable row" detail="with a chevron and a leading slot" leading={<span className="guild-icon mono">ZB</span>} to="/kitchen-sink" className="strong-row" />
+      <ListRow label="Value row"><span className="row-value">Asia/Manila</span></ListRow>
     </ListGroup>
 
-    <h2>Loading</h2>
+    <SectionLabel>Chips and badges</SectionLabel>
+    <div className="chip-strip">
+      <span className="chip">Feels like 38°</span>
+      <span className="chip">Air quality · Good</span>
+      <span className="chip warn">Heat index advisory</span>
+      <span className="badge accent">Dashboard</span>
+      <span className="badge">Discord</span>
+    </div>
+
+    <SectionLabel>Status dots</SectionLabel>
+    <div className="chip-strip">
+      <span className="chip"><i className="dot ok" aria-hidden />Present</span>
+      <span className="chip"><i className="dot off" aria-hidden />Absent</span>
+      <span className="chip"><i className="dot unknown" aria-hidden />Unknown</span>
+    </div>
+
+    <SectionLabel>Fields</SectionLabel>
+    <ListGroup>
+      <ListRow label="Prefix" detail="1–5 characters">
+        <span className="row-actions"><input className="text-input inline w-prefix" aria-label="Prefix" defaultValue="z!" /></span>
+      </ListRow>
+      <ListRow label="Timezone" detail="e.g. Asia/Manila">
+        <span className="row-actions"><input className="text-input inline w-tz invalid" aria-invalid aria-label="Timezone" defaultValue="Manila" /></span>
+        <p className="field-error" role="alert"><i className="toast-badge" aria-hidden>!</i>Not an IANA name — use Region/City.</p>
+      </ListRow>
+    </ListGroup>
+
+    <SectionLabel>Loading</SectionLabel>
     <Skeleton lines={3} />
 
-    <h2>Feedback</h2>
-    <CapsuleToast>Saved</CapsuleToast>
-    <CapsuleToast tone="error">Something went wrong.</CapsuleToast>
+    <SectionLabel>Feedback</SectionLabel>
+    <div className="stack">
+      <CapsuleToast tone="success">Saved</CapsuleToast>
+      <CapsuleToast>Paused subscriptions keep their settings.</CapsuleToast>
+      <CapsuleToast tone="error">Something went wrong.</CapsuleToast>
+      <div className="error-banner" role="alert"><i aria-hidden>!</i><span>You cancelled the Discord sign-in.</span></div>
+    </div>
 
-    <p><Link to="/">Back home</Link></p>
+    <BackLink to="/">Back home</BackLink>
   </main>
 }
