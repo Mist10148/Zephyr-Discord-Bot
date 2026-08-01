@@ -1,8 +1,8 @@
 import { useEffect } from 'react'
-import { Link, Navigate, useSearchParams } from 'react-router-dom'
+import { Navigate, useSearchParams } from 'react-router-dom'
 import { loginUrl, safeNext, useMe } from '../lib/auth'
 import { haptic } from '../lib/haptics'
-import { CapsuleToast, GlassSurface, LargeTitleHeader, Skeleton } from '../components/ios'
+import { BackLink, GlassSurface, LargeTitleHeader, Skeleton } from '../components/ios'
 
 // Only failures arrive as a query parameter; success is silent, and the SPA learns
 // it by calling /me. Keep this in step with website/api/auth.py.
@@ -34,19 +34,19 @@ export function Login() {
 
   // Render the skeleton first so an already-signed-in visitor does not see the
   // button flash before being redirected.
-  if (me.isPending) return <main className="app"><Skeleton lines={4} /></main>
+  if (me.isPending) return <main className="app narrow"><Skeleton lines={4} /></main>
   if (me.data) return <Navigate to={next} replace />
 
-  return <main className="app">
+  return <main className="app narrow">
     <LargeTitleHeader title="Sign in" subtitle="Manage the Discord servers you already administer." />
-    {error && <CapsuleToast tone="error">{MESSAGES[error] ?? 'Sign-in failed. Please try again.'}</CapsuleToast>}
+    {error && <div className="error-banner" role="alert"><i aria-hidden>!</i><span>{MESSAGES[error] ?? 'Sign-in failed. Please try again.'}</span></div>}
     <GlassSurface>
       <p>Sign in with Discord to manage the servers you already administer.</p>
       <p className="muted">Zephyr reads your username and your server list. Nothing else, and it never posts as you.</p>
       {/* A real link, not a button: full-page navigation to Flask, which keeps
           keyboard, middle-click and copy-link behaviour that <Link> cannot give. */}
-      <p><a className="ios-button primary" href={loginUrl(next)} onClick={() => haptic()}>Continue with Discord</a></p>
+      <a className="ios-button block" href={loginUrl(next)} onClick={() => haptic()}>Continue with Discord</a>
     </GlassSurface>
-    <p><Link to="/">Back</Link></p>
+    <BackLink to="/">Back</BackLink>
   </main>
 }

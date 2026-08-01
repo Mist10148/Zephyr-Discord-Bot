@@ -217,6 +217,7 @@ body {
 .app.narrow { max-width: 560px; }
 .app.medium { max-width: 720px; }
 .app.sink   { max-width: 760px; }
+.app.centred { text-align: center; padding-top: 4rem; }
 
 a { color: var(--link); text-underline-offset: 2px; }
 a:hover { color: var(--accent-strong); text-decoration: underline; }
