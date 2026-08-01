@@ -4,12 +4,15 @@ import { ThemeToggle } from './ThemeToggle'
 
 // A single sticky top bar above every page. It is the app-wide navigation: the
 // wordmark returns home, a contextual link jumps to the server list once the user
-// is in the dashboard, and the theme toggle lives on the right. Pages still render
-// their own <main className="app"> beneath it, so this wraps rather than replaces
-// their layout. The bar is glass so the aurora shows through it.
-export function AppShell({ children }: { children: ReactNode }) {
+// is in the dashboard, and the palette trigger and theme toggle live on the right.
+// Pages still render their own <main className="app"> beneath it, so this wraps
+// rather than replaces their layout. The bar is glass so the aurora shows through.
+export function AppShell({ children, onOpenPalette }: { children: ReactNode; onOpenPalette(): void }) {
   const { pathname } = useLocation()
   const inDashboard = pathname.startsWith('/g')
+  // The palette is not mounted on the sign-in screen, so its trigger must not be
+  // offered there either.
+  const showPalette = pathname !== '/login'
   return (
     <>
       {/* Three independently drifting blobs rather than one shared gradient, so the
@@ -21,8 +24,17 @@ export function AppShell({ children }: { children: ReactNode }) {
             <span className="brand-mark" aria-hidden>❍</span>
             <span className="brand-name">Zephyr</span>
           </Link>
+          <div className="appbar-spacer" />
           <nav className="appbar-nav">
             {inDashboard && <Link to="/g" className="nav-link">Servers</Link>}
+            {/* ⌘K on its own is a secret. The pill makes the shortcut discoverable
+                and gives pointer users a way into the palette at all. */}
+            {showPalette && (
+              <button type="button" className="palette-trigger" onClick={onOpenPalette} title="Search commands" aria-label="Search commands">
+                <span className="lens" aria-hidden />
+                <kbd aria-hidden>⌘K</kbd>
+              </button>
+            )}
             <ThemeToggle />
           </nav>
         </div>
