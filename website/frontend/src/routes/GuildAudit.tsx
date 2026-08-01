@@ -40,6 +40,7 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
     {/* Dashboard is accent-tinted and everything else neutral: the question this
         page exists to answer is "was that us, or was it done in Discord?" */}
     <span className={`badge ${source === 'Dashboard' ? 'accent' : ''}`.trim()}>{source}</span>
+    {entry.payload != null && <details className="audit-details"><summary>Details</summary><pre>{typeof entry.payload === 'string' ? entry.payload : JSON.stringify(entry.payload, null, 2)}</pre></details>}
   </div>
 }
 

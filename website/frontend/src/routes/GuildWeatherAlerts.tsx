@@ -6,6 +6,7 @@ import { haptic } from '../lib/haptics'
 import { useGuildMeta } from '../lib/player'
 import { ErrorNote } from '../components/ErrorNote'
 import { GuildShell } from '../components/GuildNav'
+import { ConfirmSheet } from '../components/ConfirmSheet'
 import { BackLink, CapsuleToast, GlassSurface, IconButton, LargeTitleHeader, ListGroup, ListRow, PressableButton, SegmentedControl, Sheet, Skeleton, Toggle } from '../components/ios'
 import type { SubKind, SubPreview, WeatherSub, WeatherSubList } from '../types/api'
 
@@ -22,7 +23,7 @@ const KIND_LABELS: Record<SubKind, string> = {
 
 function describe(sub: WeatherSub) {
   const when = sub.schedule_local_time ? ` at ${sub.schedule_local_time} (${sub.tz})` : ` (${sub.tz})`
-  return `${sub.location} → #${sub.channel_id}${when}${sub.enabled ? '' : ' · paused'}`
+  return `${sub.location} → #${sub.channel_id}${when}${sub.enabled ? '' : ' · paused'}${sub.last_run_at ? ` · Last posted ${new Date(sub.last_run_at).toLocaleString()}` : ''}`
 }
 
 function PreviewSheet({ guildId, sub, onClose }: { guildId: string | undefined; sub: WeatherSub; onClose(): void }) {
@@ -63,6 +64,7 @@ function CreateSheet({ guildId, kinds, onDone }: { guildId: string | undefined; 
   const [channelId, setChannelId] = useState('')
   const [at, setAt] = useState('08:00')
   const [tz, setTz] = useState('')
+  const [units, setUnits] = useState<'metric' | 'imperial'>('metric')
 
   const create = useMutation({
     mutationFn: () => api<WeatherSub>(`/guilds/${guildId}/weather-subs`, {
@@ -72,7 +74,7 @@ function CreateSheet({ guildId, kinds, onDone }: { guildId: string | undefined; 
         // A daily digest needs a time and the others must not carry one; the API
         // refuses both mistakes, so the form should not make them.
         ...(kind === 'daily' ? { schedule_local_time: at } : {}),
-        ...(tz ? { tz } : {}),
+        ...(tz ? { tz } : {}), units,
       },
     }),
     onSuccess: () => { client.invalidateQueries({ queryKey: ['weather-subs', guildId] }); onDone() },
@@ -114,6 +116,7 @@ function CreateSheet({ guildId, kinds, onDone }: { guildId: string | undefined; 
           <input className="text-input full" value={tz} placeholder="Asia/Manila" onChange={event => setTz(event.target.value)} />
         </label>
       </div>
+      <label className="field"><span>Units</span><SegmentedControl values={['metric', 'imperial']} labels={{ metric: 'Metric', imperial: 'Imperial' }} value={units} onChange={value => setUnits(value as 'metric' | 'imperial')} /></label>
       <p className="note">{KIND_HELP[kind]}</p>
       {!tz && <p className="muted small-note">Leave the timezone empty to use the place's own.</p>}
       {!meta.data && !meta.isPending && <p className="muted small-note">Zephyr is not reachable, so its channels cannot be listed. You can still paste a channel id.</p>}
@@ -132,12 +135,14 @@ export function GuildWeatherAlerts() {
   const subs = useQuery({ queryKey: ['weather-subs', guildId], queryFn: () => api<WeatherSubList>(`/guilds/${guildId}/weather-subs`), enabled: !!guildId })
   const [creating, setCreating] = useState(false)
   const [previewing, setPreviewing] = useState<WeatherSub | null>(null)
+  const [deleting, setDeleting] = useState<WeatherSub | null>(null)
 
   const invalidate = () => client.invalidateQueries({ queryKey: ['weather-subs', guildId] })
   const toggle = useMutation({
     mutationFn: ({ id, enabled }: { id: number; enabled: boolean }) =>
       api(`/guilds/${guildId}/weather-subs/${id}`, { method: 'PATCH', body: { enabled } }),
-    onSuccess: invalidate,
+    onMutate: async ({ id, enabled }) => { await client.cancelQueries({ queryKey: ['weather-subs', guildId] }); const previous = client.getQueryData<WeatherSubList>(['weather-subs', guildId]); if (previous) client.setQueryData<WeatherSubList>(['weather-subs', guildId], { ...previous, subscriptions: previous.subscriptions.map(sub => sub.id === id ? { ...sub, enabled } : sub) }); return { previous } },
+    onError: (_error, _values, context) => { if (context?.previous) client.setQueryData(['weather-subs', guildId], context.previous) }, onSettled: invalidate,
   })
   const remove = useMutation({
     mutationFn: (id: number) => api(`/guilds/${guildId}/weather-subs/${id}`, { method: 'DELETE' }),
@@ -166,7 +171,7 @@ export function GuildWeatherAlerts() {
           <span className="row-actions">
             <Toggle label={`${sub.kind_label} enabled`} checked={sub.enabled} onChange={enabled => { haptic(15); toggle.mutate({ id: sub.id, enabled }) }} />
             <PressableButton variant="secondary" className="small" onClick={() => setPreviewing(sub)}>Preview</PressableButton>
-            <IconButton variant="danger" size={30} label={`Delete ${sub.kind_label} for ${sub.location}`} onClick={() => { haptic(15); remove.mutate(sub.id) }}>×</IconButton>
+            <IconButton variant="danger" size={30} label={`Delete ${sub.kind_label} for ${sub.location}`} onClick={() => setDeleting(sub)}>×</IconButton>
           </span>
         </ListRow>)}
       </ListGroup>}
@@ -185,6 +190,7 @@ export function GuildWeatherAlerts() {
     <Sheet open={previewing !== null} onOpenChange={open => !open && setPreviewing(null)} label="Subscription preview">
       {previewing && <PreviewSheet guildId={guildId} sub={previewing} onClose={() => setPreviewing(null)} />}
     </Sheet>
+    <ConfirmSheet open={deleting !== null} onOpenChange={open => !open && setDeleting(null)} title="Delete weather subscription" description={`Stop and remove the ${deleting?.kind_label ?? ''} for ${deleting?.location ?? ''}?`} confirmLabel="Delete subscription" pending={remove.isPending} onConfirm={() => deleting && remove.mutate(deleting.id, { onSuccess: () => setDeleting(null) })} />
 
     <BackLink to={`/g/${guildId}`}>Back to the server</BackLink>
   </GuildShell></main>

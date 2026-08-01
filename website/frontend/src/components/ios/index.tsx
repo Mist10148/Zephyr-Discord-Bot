@@ -100,8 +100,8 @@ export function Toggle({ checked, onChange, label }: { checked: boolean; onChang
   return <button type="button" className={`toggle ${checked ? 'on' : ''}`} onClick={() => onChange(!checked)} aria-pressed={checked} aria-label={label}><i /></button>
 }
 
-export function Slider({ value, onChange, label }: { value: number; onChange(value: number): void; label?: string }) {
-  return <input className="slider" type="range" value={value} onChange={event => onChange(+event.target.value)} aria-label={label} aria-valuetext={String(value)} />
+export function Slider({ value, onChange, onCommit, label, min = 0, max = 100, step = 1 }: { value: number; onChange(value: number): void; onCommit?: () => void; label?: string; min?: number; max?: number; step?: number }) {
+  return <input className="slider" type="range" value={value} min={min} max={max} step={step} onChange={event => onChange(+event.target.value)} onPointerUp={onCommit} onKeyUp={event => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) onCommit?.() }} aria-label={label} aria-valuetext={String(value)} />
 }
 
 export function Stepper({ value, onChange }: { value: number; onChange(value: number): void }) {

@@ -8,7 +8,8 @@ import { api } from '../lib/api'
 import { haptic } from '../lib/haptics'
 import { formatDuration, usePlaylist, usePlaylists } from '../lib/player'
 import { ErrorNote } from './ErrorNote'
-import { GlassSurface, IconButton, ListGroup, ListRow, PressableButton, Sheet, Skeleton } from './ios'
+import { ConfirmSheet } from './ConfirmSheet'
+import { GlassSurface, IconButton, ListGroup, ListRow, PressableButton, Sheet, Skeleton, Toggle } from './ios'
 import type { PlaylistTrack } from '../types/api'
 
 function SortableTrack({ id, track, onRemove }: { id: string; track: PlaylistTrack; onRemove(): void }) {
@@ -31,13 +32,14 @@ function PlaylistEditor({ playlistId, onClose }: { playlistId: number; onClose()
   const client = useQueryClient()
   const playlist = usePlaylist(playlistId)
   const [tracks, setTracks] = useState<PlaylistTrack[] | null>(null)
+  const [isPublic, setIsPublic] = useState(false)
   const sensors = useSensors(useSensor(PointerSensor), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }))
 
   // Editing is local until saved, so a drag is not undone by a refetch mid-gesture.
-  useEffect(() => { setTracks(playlist.data ? playlist.data.tracks : null) }, [playlist.data])
+  useEffect(() => { setTracks(playlist.data ? playlist.data.tracks : null); setIsPublic(!!playlist.data?.is_public) }, [playlist.data])
 
   const save = useMutation({
-    mutationFn: (next: PlaylistTrack[]) => api(`/playlists/${playlistId}`, { method: 'PATCH', body: { tracks: next } }),
+    mutationFn: (next: PlaylistTrack[]) => api(`/playlists/${playlistId}`, { method: 'PATCH', body: { tracks: next, is_public: isPublic } }),
     onSuccess: () => { client.invalidateQueries({ queryKey: ['playlist', playlistId] }); client.invalidateQueries({ queryKey: ['playlists'] }) },
   })
 
@@ -55,10 +57,11 @@ function PlaylistEditor({ playlistId, onClose }: { playlistId: number; onClose()
     setTracks(arrayMove(tracks, from, to))
   }
 
-  const dirty = JSON.stringify(tracks) !== JSON.stringify(playlist.data!.tracks)
+  const dirty = JSON.stringify(tracks) !== JSON.stringify(playlist.data!.tracks) || isPublic !== playlist.data!.is_public
   return <>
     <h2>Edit — {playlist.data!.name}</h2>
     <p>Drag to reorder, or use the handle with arrow keys.</p>
+    <ListGroup><ListRow label="Shared playlist" detail="Allow other members to see and queue it"><Toggle label="Shared playlist" checked={isPublic} onChange={setIsPublic} /></ListRow></ListGroup>
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
       <SortableContext items={tracks.map(key)} strategy={verticalListSortingStrategy}>
         <ListGroup>
@@ -107,6 +110,7 @@ export function PlaylistPanel({ guildId }: { guildId: string | undefined }) {
   const playlists = usePlaylists(guildId)
   const [editing, setEditing] = useState<number | null>(null)
   const [importing, setImporting] = useState(false)
+  const [deleting, setDeleting] = useState<number | null>(null)
 
   const load = useMutation({
     mutationFn: (playlistId: number) => api(`/playlists/${playlistId}/load`, { method: 'POST', body: { guild_id: guildId } }),
@@ -135,7 +139,7 @@ export function PlaylistPanel({ guildId }: { guildId: string | undefined }) {
           <span className="row-actions">
             <PressableButton className="small soft" onClick={() => { haptic(8); load.mutate(playlist.id) }}>Queue</PressableButton>
             {playlist.mine && <PressableButton variant="secondary" className="small" onClick={() => setEditing(playlist.id)}>Edit</PressableButton>}
-            {playlist.mine && <IconButton variant="danger" size={30} label={`Delete ${playlist.name}`} onClick={() => { haptic(15); remove.mutate(playlist.id) }}>×</IconButton>}
+            {playlist.mine && <IconButton variant="danger" size={30} label={`Delete ${playlist.name}`} onClick={() => setDeleting(playlist.id)}>×</IconButton>}
           </span>
         </ListRow>)}
       </ListGroup>)}
@@ -149,5 +153,6 @@ export function PlaylistPanel({ guildId }: { guildId: string | undefined }) {
     <Sheet open={importing} onOpenChange={setImporting} label="Import from Spotify">
       <ImportForm guildId={guildId} onDone={() => setImporting(false)} />
     </Sheet>
+    <ConfirmSheet open={deleting !== null} onOpenChange={open => !open && setDeleting(null)} title="Delete playlist" description="This removes the playlist and its saved tracks. This cannot be undone." confirmLabel="Delete playlist" pending={remove.isPending} onConfirm={() => deleting !== null && remove.mutate(deleting, { onSuccess: () => setDeleting(null) })} />
   </section>
 }

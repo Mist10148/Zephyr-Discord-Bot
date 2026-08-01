@@ -32,6 +32,14 @@ export function usePlayerAction(guildId: string | undefined) {
     // The bot republishes its snapshot before answering, so by the time this
     // resolves a refetch reads the result of the press rather than the state
     // before it -- no optimistic update needed, and none that can be wrong.
+    onMutate: async ({ action, args }) => {
+      if (action !== 'autoplay') return undefined
+      await client.cancelQueries({ queryKey: ['player', guildId] })
+      const previous = client.getQueryData<Player>(['player', guildId])
+      if (previous && typeof args?.enabled === 'boolean') client.setQueryData<Player>(['player', guildId], { ...previous, autoplay: args.enabled })
+      return { previous }
+    },
+    onError: (_error, _vars, context) => { if (context?.previous) client.setQueryData(['player', guildId], context.previous) },
     onSettled: () => client.invalidateQueries({ queryKey: ['player', guildId] }),
   })
 }
