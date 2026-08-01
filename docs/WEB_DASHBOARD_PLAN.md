@@ -232,9 +232,22 @@ Tracked as tasks #1–#8 in the session task list. Dependency graph:
 | 6 | 5 — Weather alerts | #4 | Subscriptions + auto-announce — **shipped** |
 | 7 | 6 — AI | #4 | `/summarize` + memory |
 | 8 | 7 — Hardening | #5, #6, #7 | Production-ready |
+| 9 | 8 — UX correctness | #8 | No dead or misbehaving controls |
+| 10 | 9 — Feedback & vocabulary | #8 | Every action confirms; no raw machine values |
+| 11 | 10 — Layout & density | #8 | A real desktop layout, not a stretched phone |
+| 12 | 11 — Navigation & IA | #8 | Every screen reachable, named once |
+| 13 | 12 — Public site layer | #8 | A website, not a dashboard behind a URL |
 
 **#1 and #2 are independent** — the data layer and the design system can be built in
 parallel. #5, #6 and #7 are also mutually independent once auth lands.
+
+**Phases 8–12 are post-release polish**, opened after a read-through of the shipped
+frontend found dead controls, silent mutations and a desktop layout that only works at
+phone width. They are independent of each other except that **9.1 (the toast host) unblocks
+8.4**, so do Phase 8 first and 9.1 immediately after. Task-level detail — symptom, fix,
+files and done-when for every item — lives in
+[`ENHANCEMENTS.md`](ENHANCEMENTS.md), which is the working reference; the summaries below
+exist so this document stays the authority on what phases exist.
 
 **Phase 0 — Data layer** *(blocks everything)*
 Postgres + sync SQLAlchemy 2.0 with `create_all()` (Alembic is deferred to Phase 3).
@@ -270,6 +283,36 @@ Web: persona editor, token/quota dashboard, memory inspector + purge.
 a11y pass (keyboard path for the widget grid — drag-and-drop needs a menu fallback),
 perf pass (budget concurrent `backdrop-filter` elements), rate limiting,
 audit log surfacing, tests for the bridge and the scheduler.
+
+**Phase 8 — UX correctness** *(do first)*
+Six bugs on `/weather` and `/g/:id/music`: a queue button with no handler, effects sliders
+that fire a mutation per drag step (and can exhaust `PLAYER_RATE_LIMIT` in one drag), a
+geocode list that renders "no results" while loading, a geolocation failure with no error
+path, a forecast page with no `isError` branch, and saved places that cannot be deleted.
+
+**Phase 9 — Feedback layer & display vocabulary**
+The app has no toast host — `CapsuleToast` is a static inline block, so mutations are
+silent, errors reflow the page, and the music undo affordance renders below the fold. Build
+one fixed-position region plus `useToast()`, then fix the values that reach the user raw:
+unitless wind and precipitation figures (ambiguous since imperial units shipped), Discord
+snowflakes on the server overview, and snake_case effect names.
+
+**Phase 10 — Layout & density**
+`.app` is a 1600px single column, and `.row-value` is right-aligned, so label/value pairs
+end up ~1400px apart on a monitor. Cap the measure of row content, give Music a two-column
+arrangement at ≥1200px, and finish the shaped skeletons D7 only half-delivered.
+
+**Phase 11 — Navigation & IA**
+`/commands` has no entry point in the entire UI; `/settings` is called "Appearance" in the
+top bar and "System" in the tab bar; two root destinations carry "back home" links; and the
+internal `/kitchen-sink` page occupies a third of the public hero grid.
+
+**Phase 12 — Public site layer**
+The invite URL only exists behind auth, so a visitor cannot install the bot. No Privacy
+Policy or Terms — which blocks Discord app verification. No Open Graph tags, so links
+pasted into Discord preview as bare URLs. No footer, no `robots.txt`/`sitemap.xml`,
+soft 404s from [`website/spa.py`](../website/spa.py), no rate limits on the public read
+endpoints, and no error tracking or uptime monitoring.
 
 ---
 

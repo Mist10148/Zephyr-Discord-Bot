@@ -343,6 +343,31 @@ Detailed scope per phase: [`WEB_DASHBOARD_PLAN.md`](WEB_DASHBOARD_PLAN.md) §6.
       weather-scheduler delivery, and a Vitest frontend runner), and deployment cleanup
       (automated `alembic upgrade head` pre-deploy step).
 
+**Committed — post-release UX/UI phases**
+
+Opened after a read-through of the shipped frontend. Task-level detail (symptom, fix, files,
+done-when) is in [`ENHANCEMENTS.md`](ENHANCEMENTS.md); scope summaries are in
+[`WEB_DASHBOARD_PLAN.md`](WEB_DASHBOARD_PLAN.md) §6.
+
+- [ ] **Phase 8** — UX correctness: six bugs on `/weather` and the music screen — a queue
+      button with no handler, effects sliders that mutate per drag step, a "no results"
+      state that shows while loading, a silent geolocation failure, a missing `isError`
+      branch, and undeletable saved locations. *Do first.*
+- [ ] **Phase 9** — Feedback layer: a real toast host (mutations are currently silent and
+      the undo affordance renders below the fold), plus the values that reach users raw —
+      unitless wind/precipitation, Discord snowflakes on the server overview, snake_case
+      effect names.
+- [ ] **Phase 10** — Layout and density: cap the measure of row content (label/value pairs
+      strand ~1400px apart at 1600px), a two-column music screen at ≥1200px, and the shaped
+      skeletons Phase 7's a11y work only half-delivered.
+- [ ] **Phase 11** — Navigation and IA: `/commands` currently has no entry point in the UI,
+      `/settings` has two different names, two root destinations carry back links, and the
+      internal design-system page is a public headline feature.
+- [ ] **Phase 12** — Public site layer: an unauthenticated invite path, **Privacy Policy and
+      Terms** *(blocks Discord app verification)*, Open Graph tags, a footer,
+      `robots.txt`/`sitemap.xml`, real 404s, rate limits on the public read endpoints, and
+      error/uptime monitoring.
+
 **Backlog (not scheduled)**
 
 - [ ] Support more music sources (SoundCloud, Bandcamp).

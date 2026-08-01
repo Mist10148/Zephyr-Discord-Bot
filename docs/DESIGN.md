@@ -31,10 +31,11 @@ after any visual change.
   (`localStorage['zephyr-theme']`) wins; otherwise follow the OS. `src/lib/theme.tsx`'s
   `ThemeProvider` keeps the class, storage and OS preference in sync; `ThemeToggle`
   flips it.
-- **No flash on load:** the inline snippet in `index.html` sets the class before the
-  bundle runs, mirroring `resolveTheme`. Keep the two in step if the rule changes.
-  (Note: `website/security.py` currently sets `script-src 'self'` with no hash or nonce,
-  which blocks that inline snippet in production. Fixing the CSP is a separate change.)
+- **No flash on load:** `public/theme-init.js`, loaded from `index.html` before the bundle,
+  sets the class in advance, mirroring `resolveTheme`. Keep the two in step if the rule
+  changes. It is an **external** file rather than an inline snippet precisely so that
+  `script-src 'self'` in `website/security.py` permits it with no hash or nonce — do not
+  inline it back.
 - Per-scheme `theme-color` meta tags keep the mobile browser chrome matching the page.
 
 ## Token groups (see `theme.css`)
@@ -73,7 +74,31 @@ after any visual change.
   right roles/labels (`aria-pressed` on toggles, segments and checkbox rows,
   `aria-label` on sliders and icon buttons, `aria-invalid` on rejected fields).
 - **Icons:** `src/components/icons.tsx`, all drawing in `currentColor` so one glyph
-  serves accent, muted and danger contexts. No icon font, no runtime dependency.
+  serves accent, muted and danger contexts. No icon font, no runtime dependency. **Never a
+  text emoji in its place** — `☀` and friends render as platform-specific colour glyphs
+  that ignore the palette and differ on every OS.
+
+## Interaction contract
+
+Five rules that came out of the Phase 8–11 review in [ENHANCEMENTS.md](ENHANCEMENTS.md).
+Each existed as an unwritten assumption and was broken somewhere because of that.
+
+- **Every mutation reports back.** Success or failure, an action the user takes must produce
+  visible feedback. Transient feedback belongs to the **toast host** (one fixed region,
+  `useToast()`), never to an inline element in document flow — a status message that reflows
+  the page is a layout bug, and one rendered after a long list is invisible.
+- **A control that does nothing must not exist.** No handler-less buttons; if an affordance
+  cannot be wired, remove it rather than shipping it inert.
+- **Continuous controls commit, they do not stream.** A slider or drag interaction holds a
+  local draft and fires **one** request on release (`Slider`'s `onCommit`). Mutating per
+  `onChange` is both a latency and a rate-limit bug.
+- **No machine values in the UI.** Discord snowflakes, snake_case identifiers, module names
+  and bare dimensioned numbers all get resolved, mapped or unit-suffixed before they reach a
+  user. Falling back to the raw value is acceptable **only** when the lookup is unavailable,
+  and should read as a fallback.
+- **Every query has four states.** Pending, empty, error and data — checked in that order.
+  Testing `data?.length` before `isPending` renders "no results" during a fetch, which is a
+  false negative, not a loading state.
 
 ## Layout
 
@@ -83,6 +108,12 @@ after any visual change.
   headings clamp against the column they occupy rather than the viewport.
 - **The breakpoint is 860px**, used consistently for the tab bar, the guild rail, the
   aurora budget and the save bar offset.
+- **Width goes to gutters and grids, never to rows.** `.app` reaches 1600px, which suits
+  `widget-grid`, `day-grid` and the hourly strip. Row-based content must keep a readable
+  measure instead: `.row-value` is right-aligned, so an uncapped `ListGroup` on a monitor
+  puts a label and its value ~1400px apart. Phase 10.1 in
+  [ENHANCEMENTS.md](ENHANCEMENTS.md) introduces the cap; until it lands, assume any new list
+  inherits the same defect.
 - `TabBar` is the phone's primary navigation (Home / Weather / Servers / System) and is
   hidden above the breakpoint. It is sticky, and `#root` is a flex column so it can be
   the last item in normal flow.

@@ -555,9 +555,58 @@ Every item on the old "known weak points" list is now resolved:
 - Weather has full iconography, plus the heat-index advisory the API always sent.
 - The audit log groups by day and badges its source.
 
+## Rules added after the Phase 8–11 review
+
+9. **Every mutation reports back**, through the toast host — never an inline status element
+   in document flow.
+10. **No handler-less controls**, no per-`onChange` mutations from continuous controls, and
+    **no machine values** (snowflakes, snake_case, bare dimensioned numbers) in the UI.
+11. **Every query renders pending → empty → error → data**, checked in that order.
+12. **Width goes to gutters and grids, not rows.** Row-based content keeps a readable
+    measure regardless of viewport.
+
+See `DESIGN.md` § Interaction contract for the reasoning.
+
+---
+
+# Known defects
+
+This inventory describes what each screen *contains*; the list below records where the
+current implementation is wrong. Task-level detail is in
+[`ENHANCEMENTS.md`](ENHANCEMENTS.md) Phases 8–12, and the ids match.
+
+**`/weather`** — geocode list renders "No matching places" while the query is pending, and
+fires one request per keystroke (8.3) · "Use my location" swallows every error (8.4) · no
+`isError` branch, so a failed forecast renders nothing at all (8.5) · saved places cannot be
+removed and are visually identical to the action button beside them (8.6) · wind and
+precipitation print without units, ambiguous now that imperial shipped (9.2) · the hourly
+strip uses text emoji instead of the icon set, and its precipitation bars have no baseline
+(9.6) · carries a "Back home" link despite being a root tab destination (11.3).
+
+**`/g/:guildId/music`** — the queue row's "Play" button has no `onClick` (8.1) · effects
+sliders mutate on every `onChange` (8.2) · queueing a track gives no confirmation, and the
+undo affordance renders inline after the queue where it is usually below the fold (9.1) ·
+effect names print as `sixteen_d` / `slownrev` (9.4) · the art fallback renders the literal
+words "track art" (9.5) · nine control groups in one column at every width (10.2) · generic
+`Skeleton lines={6}` while loading (10.3).
+
+**`/g/:guildId`** — DJ role and music channels print as raw snowflakes and `enabled_cogs` as
+raw module names (9.3) · long channel lists overflow the row · generic skeleton (10.3).
+
+**`/commands`** — no entry point anywhere in the UI (11.1) · 73 rows in one scroll with no
+category jump list or result count, and aliases are searchable but never shown (11.5) ·
+carries a "Back home" link (11.3).
+
+**`/`** — no way for a visitor to add the bot (12.1) · advertises the internal
+`/kitchen-sink` page as one of three headline features (11.4) · the status pill cannot
+distinguish a cold-starting service from an offline one (12.7).
+
+**Global chrome** — `/settings` is "Appearance" in the top bar and "System" in the tab bar
+(11.2) · no toast host, so `CapsuleToast` is only ever a static inline block (9.1) · no
+footer and no legal pages (12.2, 12.4) · every route shares one `<title>` (12.3).
+
 ## Open
 
-- `website/security.py` sets `script-src 'self'` with no hash or nonce, which blocks the
-  pre-paint theme snippet in `index.html` in production. The no-flash guarantee in
-  `DESIGN.md` therefore does not hold on the deployed site. Needs a CSP change, not a
-  frontend one.
+- Nothing blocking. The CSP concern previously listed here is resolved: the pre-paint theme
+  script is `public/theme-init.js`, an external file, which `script-src 'self'` permits — so
+  the no-flash guarantee holds on the deployed site.

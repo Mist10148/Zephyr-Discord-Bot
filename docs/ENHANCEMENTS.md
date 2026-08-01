@@ -1,14 +1,9 @@
 # Zephyr Web — Enhancement Backlog
 
-A prioritised list of UX/UI improvements and features for the dashboard, written to be
-picked up and implemented directly.
+A prioritised, phased list of UX/UI work for the dashboard and the public site, written
+to be picked up and implemented directly.
 
-> **Frontend release:** API-ready enhancement work, browser-local appearance settings,
-> server discovery, pinned servers, and the command reference are implemented. The
-> actor-name lookup (A3), server-side audit filters (F4), and SSE player stream (E5)
-> remain backend work.
-
-Read [DESIGN.md](DESIGN.md) for the design system rules and [SCREENS.md](SCREENS.md) for
+Read [DESIGN.md](DESIGN.md) for the design-system rules and [SCREENS.md](SCREENS.md) for
 what each screen currently contains. **Every item here must respect the rules in
 DESIGN.md** — tokens not literals, `data-glass` on frosted surfaces, hooks in `.ts`
 files, specs in `test/` not `src/`, and any new primitive added to `/kitchen-sink`.
@@ -16,258 +11,441 @@ files, specs in `test/` not `src/`, and any new primitive added to `/kitchen-sin
 **Effort key:** S = under an hour · M = half a day · L = a day or more
 **Backend:** ✅ = the API already returns everything needed · ⚠️ = needs Flask/bot work
 
----
-
-## A. Correctness gaps
-
-These are arguably bugs rather than enhancements. Do these first.
-
-### A1 — Destructive actions fire with no confirmation · S · ✅
-Deleting a **playlist**, a **weather subscription**, or an **AI persona** mutates
-immediately on click. Only the AI memory purge asks first.
-
-- `components/PlaylistPanel.tsx` — `remove.mutate(playlist.id)`
-- `routes/GuildWeatherAlerts.tsx` — `remove.mutate(sub.id)`
-- `routes/GuildAI.tsx` — `remove.mutate(persona.id)`
-
-Reuse the `Sheet` confirmation pattern already in `GuildAI.tsx` (the purge flow). A
-generic `<ConfirmSheet title description confirmLabel onConfirm />` is worth extracting,
-since it will have four call sites.
-
-### A2 — The command palette does nothing when you pick something · M · ✅
-`components/CommandPalette.tsx` — `onSelect={() => onOpenChange(false)}`. It lists the
-bot's 73 commands and selecting one just closes the dialog.
-
-Decide what it is for, then make it do that. Suggested: make it a **navigation** palette
-first (jump to any screen, switch server, toggle theme) with bot commands as a second
-section that copies `/command` to the clipboard and confirms with a toast. Group results
-using the `categories` array `/commands` already returns.
-
-### A3 — The audit log never shows *who* · M · ⚠️
-The page subtitle says "Who changed what in this server, and from where" and then shows
-only what and where. `AuditEntry.actor_id` is fetched and never rendered.
-
-Rendering the raw snowflake is not useful, so this needs a name lookup — either extend
-`GET /guilds/<id>/audit` to resolve actor names server-side via the bridge, or add a
-small members endpoint the page can join against. Fall back to the raw id when the bot
-is unreachable, the way the channel pickers already do.
-
-### A4 — `payload` is never surfaced · S · ✅
-`AuditEntry.payload` holds what actually changed (e.g. which settings keys). Show it as
-an expandable detail on the row — "Updated server settings" is much less useful than
-"Updated server settings — prefix, timezone".
+Phase numbering continues [WEB_DASHBOARD_PLAN.md](WEB_DASHBOARD_PLAN.md) §6, which ends at
+Phase 7 (hardening).
 
 ---
 
-## B. Free wins — data the API already returns and nothing renders
+## Where things stand
 
-Verified unused: `hourly`, `effects`, `queue_duration_s`, `is_public`, `totals`,
-`cooldown_until`, `last_run_at`, `bot_snapshot_at`, `categories`, `actor_id`.
+**Sections A–F (appendix) are the original API-surfacing backlog and are shipped**, apart
+from three backend items. That work was about rendering data the API already returned.
+What remains is a different class of problem: controls that do not work, actions that give
+no feedback, machine values shown raw, and a layout that only really works at phone width.
 
-### B1 — Hourly forecast strip · M · ✅
-`GET /weather` returns a full `hourly[]` array (48h by default) with temperature,
-apparent temperature, humidity, precipitation probability and wind. The Weather screen
-shows none of it.
+| Phase | Theme | Status |
+|---|---|---|
+| A–F | Surface unused API data, code-splitting, PWA, a11y basics | Shipped, except **A3**, **F4**, **E5** |
+| **8** | **UX correctness — dead and misbehaving controls** | **Not started** |
+| **9** | **Feedback layer and display vocabulary** | **Not started** |
+| **10** | **Layout, density and loading states** | **Not started** |
+| **11** | **Navigation and information architecture** | **Not started** |
+| **12** | **Public site layer** | **Not started** |
 
-Add a horizontally scrolling hour strip between the current card and the 7-day grid:
-hour, glyph, temp, and a precipitation-probability bar. Note the field names are the raw
-Open-Meteo ones (`temperature_2m`, `wind_speed_10m`), unlike `current`.
-
-### B2 — Richer current conditions · S · ✅
-`current` also carries `humidity`, `wind_speed` and `precipitation`; `daily[]` carries
-`feels_like_max/min`, `precipitation_probability` and `wind_speed_max`. Add them as chips
-on the current card and as a detail line per day card.
-
-### B3 — Full air quality · S · ✅
-`air_quality` returns `european_aqi`, `us_aqi`, `pm10`, `pm2_5`, `ozone` and
-`nitrogen_dioxide`. Only the band string is shown. Make the chip open a small popover
-with the pollutant breakdown.
-
-### B4 — AI usage totals and cooldown · S · ✅
-`GET /ai/usage` returns `totals` (prompt/output/total tokens, successful and session
-request counts) and `cooldown_until`. The quota strip shows only RPM/TPM/RPD.
-
-Add the token totals, and — importantly — surface `cooldown_until` as a warning banner
-when set, since that is the state where the bot will refuse to answer.
-
-### B5 — Queue duration · S · ✅
-`Player.queue_duration_s` is fetched and unused. Show it beside the queue heading:
-`Queue (12) · 47m`.
-
-### B6 — Subscription last-run time · S · ✅
-`WeatherSub.last_run_at` is unused. Add "Last posted 4h ago" to each subscription row —
-it is the fastest way to tell a working subscription from a silently broken one.
-
-### B7 — Bot snapshot age · S · ✅
-`Me.bot_snapshot_at` is unused. When the presence snapshot is stale, the dashboard's
-"Zephyr" card should say so rather than implying live data.
-
-### B8 — Playlist visibility · S · ✅
-`is_public` is returned and accepted by POST/PATCH but never exposed. Add a toggle in the
-playlist editor sheet; it is what makes a playlist visible to others in the server.
+**Do Phase 8 first.** Those are bugs a user hits on the two most-used screens.
 
 ---
 
-## C. Features using endpoints that already exist
+# Phase 8 — UX correctness
 
-The UI can trigger 10 of the 15 whitelisted player actions. **Missing: `play`, `seek`,
-`clear`, `move`, `effects`.**
+Dead controls and controls that behave wrongly. None of these need a design decision; each
+has one correct answer. All six are S-sized and concentrated on `/weather` and
+`/g/:id/music`.
 
-### C1 — Search and queue music from the web · L · ✅
-`POST /guilds/<id>/player/play` accepts `{query, mode}` and `mode: "next"` front-queues.
-Today you can only control music that somebody already started in Discord.
+### 8.1 — The queue's "Play" button does nothing · S · ✅
 
-Add a search field above the queue. Note the bot joins **the actor's own** voice channel
-and a channel id in the body is deliberately not accepted — so the UI must explain "join
-a voice channel in Discord first" and handle the 409 refusal that comes back if not.
-This is the single biggest capability gap in the dashboard.
+[`routes/GuildMusic.tsx`](../website/frontend/src/routes/GuildMusic.tsx) — `QueueRow`
+renders `<PressableButton className="small soft">Play</PressableButton>` with **no
+`onClick`**. Every row in the live queue carries a dead button.
 
-### C2 — Scrubbable progress bar · M · ✅
-`seek` takes `{position}`. The progress bar is currently display-only. Make it an
-`input[type=range]` styled as the bar, committing on release, with the local value
-winning until the mutation settles — the same pattern `GuildMusic` already uses for
-volume.
+**Fix:** either wire it to `run('play', { query: track.url ?? track.title, mode: 'next' })`
+— jump-to-this-track expressed with the endpoints that exist — or delete it. Do not leave a
+third state. If wired, relabel it "Play next" so it does not promise an absolute jump the
+bridge cannot perform.
 
-### C3 — Drag to reorder the live queue · M · ✅
-`move` takes `{from, to}`. `PlaylistPanel` already has a working dnd-kit sortable list
-with keyboard support — lift that into a shared `SortableList` and reuse it for the
-queue.
+**Done when:** no button in the queue row is inert, and its label matches its effect.
 
-### C4 — Clear queue · S · ✅
-`clear` exists and returns `{removed: n}`. One button beside the queue heading, behind
-the A1 confirmation.
+### 8.2 — Effects sliders fire one mutation per drag step · S · ✅
 
-### C5 — Audio effects panel · M · ✅
-`effects` accepts `reset`, `pitch`, `bass_boost`, `nightcore`, `vaporwave`, `reverb`,
-`slowed`, `slownrev`, `sixteen_d`, and `Player.effects` reports current state. None of it
-is in the UI. A collapsible panel of toggles plus a pitch/bass slider and a Reset.
+[`routes/GuildMusic.tsx`](../website/frontend/src/routes/GuildMusic.tsx) — the bass-boost
+and pitch sliders call `run('effects', …)` directly from `onChange`. Dragging pitch across
+`0 → 2` at `step .1` issues a request per step, so the control feels like mud and one drag
+can consume most of `PLAYER_RATE_LIMIT` (30 per window, see
+[`website/api/player.py`](../website/api/player.py)) and start returning 429s.
 
-### C6 — Edit a persona · S · ✅
-`PATCH /ai/personas/<id>` exists; the UI can only create and delete. Reuse the create
-form in a Sheet, prefilled.
+**Fix:** use the draft-then-commit pattern already in the same file — local state wins until
+the mutation settles, `onCommit` sends it. `Slider` already accepts `onCommit`; the volume
+row and `ProgressBar` both do this correctly. Copy them.
 
-### C7 — Weather alert thresholds · M · ✅
-`WeatherSub.thresholds` and `default_thresholds` (wind speed, precipitation probability,
-apparent temperature, storm) are returned and accepted by PATCH, but there is no way to
-edit them. Add a threshold section to the subscription sheet, defaulted from
-`default_thresholds`.
+**Done when:** one drag produces one request, and each effects row shows its current numeric
+value the way the volume row shows `50%`.
 
-### C8 — Imperial units · S · ✅
-Both `GET /weather` and weather subscriptions accept `units: metric|imperial`. Nothing
-exposes it. Add a preference (persist in `localStorage` next to the theme) and a per
-subscription override.
+### 8.3 — Geocode results show "No matching places" while still loading · S · ✅
 
-### C9 — Channel memory transcript · M · ✅
-`GET /ai/memory/<channel_id>` returns the conversation **plus its `messages`** (role,
-content, tokens, timestamps). The list only shows counts. Make each row open a Sheet with
-the transcript — it is the only way to see what the bot is actually remembering before
-deciding to purge it.
+[`routes/Weather.tsx`](../website/frontend/src/routes/Weather.tsx) — the results ternary
+tests `places.data?.results?.length`, which is falsy during the fetch, so **every keystroke
+flashes a false "No matching places"**. The same query also fires once per character typed.
 
-### C10 — A browsable command reference · M · ✅
-`GET /commands` returns 73 commands with `aliases`, `args`, `category`, `category_title`
-and `emoji`. All of that is reachable only through the palette. A `/commands` page
-grouped by category would give the public site a real second page.
+**Fix:** branch on `places.isPending` before the empty case, and debounce the input by
+~250ms — key the query on the debounced value, not the raw one, or react-query still sees a
+new key per character.
 
----
+**Done when:** typing a city goes loading → results and never shows a false empty state,
+and the network panel shows roughly one request per pause rather than per keystroke.
 
-## D. Accessibility and interaction polish
+### 8.4 — "Use my location" fails silently · S · ✅
 
-### D1 — Announce player state changes · S · ✅
-Pause/skip/stop change state with no screen-reader feedback. Add an `aria-live="polite"`
-region reflecting the now-playing track and play state.
+[`routes/Weather.tsx`](../website/frontend/src/routes/Weather.tsx) — `locate()` passes
+`() => undefined` as the geolocation error callback. Deny the browser permission, or let it
+time out, and the button is permanently inert with no explanation.
 
-### D2 — Skip to content link · S · ✅
-No way to bypass the top bar by keyboard. Standard visually-hidden-until-focused anchor.
+**Fix:** hold the error in state and surface it through the 9.1 toast host (an `ErrorNote`
+until that lands), distinguishing *denied* ("Location permission is off for this site")
+from *unavailable* ("Could not get a fix — search for your city instead"). Pass
+`{ timeout: 10000 }` as well; the default is no timeout at all.
 
-### D3 — Undo instead of confirm, where it fits · M · ✅
-For queue removal specifically, an "Undo" toast is better than a confirmation dialog —
-the action is cheap to reverse (`play` with `mode: "next"` or re-`move`). Keep A1's
-confirmations for the genuinely destructive ones.
+**Done when:** denying permission produces a visible, actionable message.
 
-### D4 — Optimistic toggles · M · ✅
-Toggles wait for a round trip, so they feel laggy on a slow link. Use react-query's
-`onMutate` to flip immediately and roll back on error. Applies to autoplay and to
-subscription enable/pause.
+### 8.5 — The weather page has no error state · S · ✅
 
-### D5 — A "System" theme option · S · ✅
-The toggle is binary, but `theme-context.ts` already models "no stored choice = follow
-OS". Make that a visible third state (Light / System / Dark) using the existing
-`SegmentedControl`, so users can get back to auto after once choosing.
+[`routes/Weather.tsx`](../website/frontend/src/routes/Weather.tsx) — the forecast block is
+gated on `place && weather.data` and `weather.isError` is never read, so a failed
+`/weather` call renders **nothing at all** below the search field. Every authenticated
+screen handles this with `ErrorNote`; the most-visited public page does not.
 
-### D6 — Error boundary and offline indicator · M · ✅
-A render error currently blanks the page. Add a route-level error boundary, plus an
-offline banner driven by `navigator.onLine` — the app polls every 3s and silently fails
-when the network drops.
+**Fix:** add the `weather.isError` branch with
+`<ErrorNote error={weather.error} onRetry={() => weather.refetch()} />`, matching
+[`routes/GuildMusic.tsx`](../website/frontend/src/routes/GuildMusic.tsx). The geocode query
+needs the same treatment.
 
-### D7 — Shaped skeletons · S · ✅
-`Skeleton` renders generic bars everywhere. Per-screen skeletons that match the final
-layout (card grid, list rows) remove the layout jump on load.
+**Done when:** a forced 500 on `/weather` shows a message and a working Try again.
+
+### 8.6 — Saved weather places cannot be removed · S · ✅
+
+[`routes/Weather.tsx`](../website/frontend/src/routes/Weather.tsx) — `choose()` writes up to
+six places into `localStorage['zephyr-weather-places']` and nothing ever deletes them. They
+also render as `PressableButton variant="secondary"`, visually identical to the **"Use my
+location"** action sitting in the same row, and nothing marks which one is being shown.
+
+**Fix:** give saved places their own chip treatment with an `×`, separate them from the
+action button, and mark the active one (`aria-current="true"` plus the accent token).
+
+**Done when:** a saved place can be removed, and action and data are visually distinct.
 
 ---
 
-## E. Performance and PWA
+# Phase 9 — Feedback layer and display vocabulary
 
-### E1 — Code-split the routes · M · ✅
-The bundle is one **571 KB** chunk (183 KB gzip) and Vite warns about it on every build.
-`React.lazy` per route, with the seven authenticated screens split from the public three,
-would roughly halve first load for the visitors who only ever see the weather page.
+The largest single UX gap in the app, plus the raw machine values that leak through it.
 
-### E2 — Prefetch on hover · S · ✅
-Hovering a server card or nav item could prefetch its query. `queryClient.prefetchQuery`,
-a few lines each.
+### 9.1 — There is no transient feedback anywhere · M · ✅
 
-### E3 — Service worker update prompt · S · ✅
-`registerType: 'autoUpdate'` swaps the bundle silently, so a user can be mid-task when
-assets change. Switch to `prompt` and show a "New version available — reload" toast.
+**Highest-value item in this document.**
 
-### E4 — Offline fallback · M · ✅
-The SPA shell is precached but every screen needs the API. Add an offline view and let
-react-query serve last-known data where it is harmless (weather, command list).
+`CapsuleToast` is a *static inline block*, not a notification, and there is no toast host.
+It has two real call sites (one error note, one advisory line). Consequences:
 
-### E5 — Replace polling with a live stream · L · ⚠️
-`usePlayer` polls every 3s per open tab. An SSE endpoint on the Flask side, fed by the
-Redis pub/sub the bridge already uses, would be both cheaper and more responsive. This is
-the one item here with real backend design work.
+- Queueing a track in [`routes/GuildMusic.tsx`](../website/frontend/src/routes/GuildMusic.tsx)
+  clears the input and **nothing else happens** — confirmation arrives whenever the 3s
+  player poll next lands. Every toggle, save and delete in the app is equally silent.
+- Errors render *in document flow* mid-page: the player's `ErrorNote` is injected between
+  the effects panel and the queue heading, so a failure shoves the page around.
+- The undo affordance is a hand-rolled `<div className="toast success">` placed inline
+  **after** the queue list. With a long queue it spends its entire 5-second life below the
+  fold — so D3's "undo instead of confirm" is implemented but unreachable in practice.
+
+**Fix:** one fixed-position toast region (top-right on desktop, above the tab bar on
+mobile) plus a `useToast()` hook in a `.ts` file, rendered once from `AppShell`. Route
+mutation `onSuccess`/`onError` through it. Keep `CapsuleToast` as the visual — it already
+has the three tones and switches `role` correctly. Move the music undo into it. Stack at
+most three, auto-dismiss neutral and success, keep errors until dismissed, and give the
+region `aria-live="polite"` while errors keep `role="alert"`.
+
+**Done when:** every mutation on every screen produces visible confirmation or visible
+failure, no success/error state changes page layout, and `/kitchen-sink` demonstrates the
+host with toasts stacked.
+
+### 9.2 — Weather numbers carry no units · S · ✅
+
+[`routes/Weather.tsx`](../website/frontend/src/routes/Weather.tsx) renders `Wind {…}`,
+`Rain {…}` and `wind {day.wind_speed_max}` as bare numbers. C8 added a metric/imperial
+preference, so "Wind 12" is now genuinely ambiguous — km/h or mph, mm or inches.
+
+**Fix:** a `formatUnit` helper in `lib/` keyed off `preferences.units`, used for wind,
+precipitation and every other dimensioned value. Temperatures already carry `°`; add the
+scale to the current-conditions card so the page declares its system once.
+
+**Done when:** no dimensioned number renders without its unit in either system.
+
+### 9.3 — Raw Discord snowflakes on the server overview · M · ⚠️
+
+[`routes/GuildOverview.tsx`](../website/frontend/src/routes/GuildOverview.tsx) — the
+Configuration list prints `dj_role_id` and a comma-joined `music_channel_ids` as bare
+19-digit numbers, and `enabled_cogs` as raw Python module names.
+
+This is the same defect as **A3** (`actor_id` in the audit log) on a screen A3 does not
+cover; do them together. `GuildSettings` already resolves channel names through the bridge,
+so the lookup exists — either extend `GET /guilds/<id>` to include resolved names or reuse
+the settings channel/role query here. Fall back to the raw id when the bot is unreachable,
+the way the pickers already do. Map cog keys to the titles `GET /commands` already returns.
+
+Long channel lists must also stop overflowing: `.row-value` is `flex: 0 0 auto` with no
+wrapping, so three channels push the row apart.
+
+**Done when:** the overview shows names, not ids, and degrades to ids only when the bridge
+is down.
+
+### 9.4 — Audio effect names are unmapped identifiers · S · ✅
+
+[`routes/GuildMusic.tsx`](../website/frontend/src/routes/GuildMusic.tsx) labels effects with
+`effect.replace('_', ' ')`, so the UI reads "sixteen d" and "slownrev".
+
+**Fix:** an explicit label map — `sixteen_d` → "16D Audio", `slownrev` → "Slowed + Reverb",
+and so on — plus a one-line `detail` per row saying what the effect does. These are
+unguessable from the name.
+
+**Done when:** no effect row shows a snake_case identifier.
+
+### 9.5 — Now-playing art placeholder prints its own name · S · ✅
+
+[`routes/GuildMusic.tsx`](../website/frontend/src/routes/GuildMusic.tsx) — the fallback is
+`<span className="art-placeholder" aria-hidden>track art</span>`, which renders the literal
+words "track art" where the thumbnail should be. Replace with an icon from
+[`components/icons.tsx`](../website/frontend/src/components/icons.tsx) on a `--surface-2`
+tile.
+
+### 9.6 — The hourly strip uses text emoji · S · ✅
+
+[`routes/Weather.tsx`](../website/frontend/src/routes/Weather.tsx) draws `☀ ☂ ☁` as text
+inside the hour cards while the rest of the app uses the `currentColor` SVG set. Those
+render as platform-specific colour glyphs — off-palette in both themes, different on every
+OS — and DESIGN.md commits to the icon set explicitly.
+
+**Fix:** reuse `DayGlyph`, which is in the same file and already maps `weatherGlyph(code)`
+to the three SVGs.
+
+**Also in the strip:** the precipitation bars are `<i style={{ height: '<n>%' }} />` with no
+baseline or scale, so a bar means nothing on its own — put a hairline track behind each so
+the height reads against a full-scale reference. Their `title` sits on an `aria-hidden`
+element where nobody will hear it; move the number into the accessible name of the hour
+cell.
 
 ---
 
-## F. Bigger features
+# Phase 10 — Layout, density and loading states
 
-### F1 — Guild switcher in the rail · M · ✅
-Changing server means going back to `/g` and picking again. A dropdown on the rail header
-(which already shows the current server's icon and name) using the `guilds` array from
-`/me`, which is already loaded.
+A well-built phone layout currently being stretched to 1600px.
 
-### F2 — Persistent mini-player · M · ✅
-Now-playing state disappears when you leave the Music screen. A compact bar above the tab
-bar on mobile / bottom-right on desktop, visible across all guild screens when
-`player.live`. The unused `DynamicIsland` primitive was removed, but this is what it was
-for — reintroduce it deliberately, and add it to `/kitchen-sink`.
+### 10.1 — List rows are unreadable at desktop width · M · ✅
 
-### F3 — Saved locations and geolocation · M · ✅
-The Weather screen re-types a city every visit. Persist recent searches in `localStorage`
-and add a "Use my location" button (`navigator.geolocation` → the existing lat/lon
-query). Note `Permissions-Policy` in `website/security.py` already allows
-`geolocation=(self)`.
+[`styles/theme.css`](../website/frontend/src/styles/theme.css) — `.app` is
+`max-width: 1600px` and every screen is a single column. `.row-label` is `flex: 1 1 auto`
+and `.row-value` is `flex: 0 0 auto; text-align: right`, so on a wide monitor a label sits
+at the far left and its value at the far right with ~1400px of nothing between them; the
+eye cannot associate the pair. This hits the overview facts list, settings, audit rows and
+every `ListGroup` in the app.
 
-### F4 — Audit filtering · M · ⚠️
-Filter by action type, source and date. The endpoint currently only supports
-`limit`/`before`, so server-side filtering needs new query params; client-side filtering
-of the loaded pages is a cheaper first step.
+Widening the shell widened the gaps *inside rows*, which is the opposite of the intent.
 
-### F5 — Dashboard activity feed · M · ✅
-The new `/g` dashboard has room for a "recent activity" column drawing the newest few
-audit entries across servers. Would need one request per guild today — consider a
-combined endpoint if it feels slow.
+**Fix:** cap the measure of row-based content — `.list-group { max-width: 760px }` behind a
+token so it is set once — while leaving grids (`widget-grid`, `day-grid`, the hourly strip)
+free to use the full width.
+
+**Done when:** at 1600px every label/value pair reads as a pair, and grids still fill the
+shell.
+
+### 10.2 — Music is one flat scroll of nine control groups · M · ✅
+
+[`routes/GuildMusic.tsx`](../website/frontend/src/routes/GuildMusic.tsx) stacks search → now
+playing → transport → loop/volume/autoplay → eight effects → queue → playlists in one
+column at every width. On desktop that is a very long scroll with the queue permanently
+below the fold while half the viewport sits empty.
+
+**Fix:** two columns at ≥1200px — player, transport and effects left; search, queue and
+playlists right. The 860px breakpoint stays as it is; this is a third, wider arrangement,
+not a change to the existing one. Reuse the `GuildShell` grid rather than inventing a
+second layout mechanism.
+
+**Done when:** at 1440px the queue is visible without scrolling past the player.
+
+### 10.3 — Skeletons still have one generic shape · S · ✅
+
+D7 is marked shipped, but `Skeleton` in
+[`components/ios/index.tsx`](../website/frontend/src/components/ios/index.tsx) is still a
+single component rendering `lines` identical bars, and the two heaviest screens
+(`GuildMusic`, `GuildOverview`) plus the route-level Suspense fallback in `App.tsx` all call
+`Skeleton lines={6}`. The layout still jumps on load.
+
+**Fix:** shaped variants matching the real layouts — card grid, list rows, now playing. Add
+each to `/kitchen-sink`.
+
+**Done when:** loading `GuildMusic` and `GuildOverview` causes no visible reflow once data
+arrives.
+
+---
+
+# Phase 11 — Navigation and information architecture
+
+Four S-sized fixes and one M.
+
+### 11.1 — `/commands` is unreachable · S · ✅
+
+The command reference — 73 commands, shipped as **C10** — has **no entry point in the UI**.
+It is absent from `TABS` in [`components/TabBar.tsx`](../website/frontend/src/components/TabBar.tsx),
+from the nav in [`components/AppShell.tsx`](../website/frontend/src/components/AppShell.tsx),
+and from `FEATURES` in [`routes/Home.tsx`](../website/frontend/src/routes/Home.tsx) — which
+instead advertises the internal design-system page as one of three cards. Only the ⌘K
+palette can reach it.
+
+**Fix:** add it to the top-bar nav and the home feature grid. Taking the `/kitchen-sink`
+slot is the natural swap — see 11.4.
+
+### 11.2 — One destination, two names · S · ✅
+
+`/settings` is labelled **"Appearance"** in the top bar and **"System"** in the tab bar.
+Pick one. "Appearance" describes the contents; "System" does not.
+
+### 11.3 — Back links on top-level destinations · S · ✅
+
+`/weather` and `/commands` are primary tab destinations, and both end with
+`<BackLink to="/">Back home</BackLink>` while the tab bar is showing Home. A back
+affordance on a root destination reads as a bug. Keep `BackLink` on guild sub-pages, where
+it is correct.
+
+### 11.4 — The design-system page is a public headline feature · S · ✅
+
+[`routes/Home.tsx`](../website/frontend/src/routes/Home.tsx) gives `/kitchen-sink` one of
+three cards on the landing page, selling an internal review surface to prospective users.
+The route stays — it is the design contract — but not as a third of the hero grid. Replace
+that card with Commands or Music and demote `/kitchen-sink` to a footer or `/settings` link.
+
+### 11.5 — `/commands` needs in-page navigation · M · ✅
+
+[`routes/Commands.tsx`](../website/frontend/src/routes/Commands.tsx) renders 73 rows across
+every category as one long scroll with no category jump list and no result count. Aliases
+are in the Fuse search keys but never displayed, so searching an alias returns a hit with no
+visible reason for the match.
+
+**Fix:** a sticky category chip row that scrolls to each section, an "N of 73" count while
+filtering, and each command's aliases in the row detail. Copy-to-clipboard on the row would
+mirror what the palette already does with a selected command.
+
+---
+
+# Phase 12 — Public site layer
+
+Everything above assumes a visitor already knows what Zephyr is. This phase is what makes
+the deployment a website rather than a dashboard behind a URL. **12.1 and 12.2 are the only
+items here that block anything real** — 12.2 blocks Discord app verification.
+
+### 12.1 — A visitor cannot add the bot · S · ⚠️
+
+`invite_url` is returned only by `GET /api/v1/me` and rendered only in
+[`routes/Guilds.tsx`](../website/frontend/src/routes/Guilds.tsx) — behind auth. Someone
+landing on `/` is offered "Check the weather" and "Open dashboard" and no way to install
+Zephyr. For a bot site that is the primary conversion action.
+
+**Fix:** include the invite URL in the unauthenticated `GET /api/v1/status` response,
+derived from `DISCORD_CLIENT_ID` + `DISCORD_INVITE_PERMISSIONS` exactly as
+[`website/api/me.py`](../website/api/me.py) does, and make "Add Zephyr to Discord" the
+primary hero button.
+
+### 12.2 — No Privacy Policy or Terms · M · ⚠️
+
+Neither exists anywhere in the repo. Discord requires both URLs for app verification, and
+the service genuinely processes personal data: Discord user ids, OAuth tokens in Redis,
+per-channel AI conversation memory, and audit rows carrying `actor_id`.
+
+**Fix:** `/privacy` and `/terms` routes plus a documented data-deletion path — ideally
+self-service, at minimum a stated contact route. The AI memory purge already implements
+deletion for the largest data category, so describe it. Link both from the footer (12.4)
+and register them on the Discord application.
+
+### 12.3 — No link previews, and one title for every route · S · ✅
+
+[`website/frontend/index.html`](../website/frontend/index.html) has no Open Graph or Twitter
+card tags, so a link to the site pasted **into Discord** renders as a bare URL. For a
+Discord bot that is the highest-leverage missing markup on the site.
+
+**Fix:** `og:title`/`description`/`image`/`url` and `twitter:card=summary_large_image`, with
+a 1200×630 image generated from the design tokens the way
+[`scripts/generate_icons.py`](../scripts/generate_icons.py) generates the PWA icons.
+
+Separately, every route shares one static `<title>` ("Zephyr Weather"), so browser history
+and tabs cannot tell `/commands` from `/weather`. Add per-route title, description and
+canonical.
+
+### 12.4 — No footer · S · ✅
+
+No support-server link, no repository link, no legal links, no copyright. This is where most
+of the "is this a real product" signal lives, and where 12.2's pages get linked from.
+
+### 12.5 — Crawlers and soft 404s · M · ✅
+
+No `robots.txt` or `sitemap.xml` in
+[`website/frontend/public/`](../website/frontend/public/) — add both, disallowing `/g/*`,
+`/login` and `/kitchen-sink`. The SPA is lazy-loaded with no prerendering, so a crawler gets
+an empty shell; build-time prerendering of the four public routes is the right scale of fix,
+not SSR.
+
+Separately, [`website/spa.py`](../website/spa.py) serves `index.html` with **HTTP 200** for
+every unknown path, so `/nonsense` is an indexable soft 404 that renders `NotFound`. Return
+404 for paths outside the known route table.
+
+### 12.6 — Public endpoints are unguarded · M · ⚠️
+
+`rate_limit()` in [`website/api/guard.py`](../website/api/guard.py) is used by
+[`website/api/player.py`](../website/api/player.py) only. On a public origin `/weather` and
+`/geocode` (which spend an upstream Open-Meteo quota), `/ai/*` (a free-tier Gemini key) and
+`/auth/login` are all unlimited.
+
+**Fix:** per-IP limits on the public read endpoints and a tighter one on `/auth/login`.
+`TRUST_PROXY` and `ProxyFix` are already wired, so the client address is trustworthy behind
+Render.
+
+### 12.7 — Operational blind spots · M · ⚠️
+
+No error tracking (a production 500 is invisible), no analytics (no way to know whether
+anyone visits), no uptime monitoring. Render's free web tier also spins down, so a cold
+visitor sees the home status pill read "Bot offline" while the service wakes — the pill
+should distinguish *waking* from *offline*.
+
+If analytics are added, choose a cookieless option so no consent banner is needed, and note
+that `connect-src 'self'` in [`website/security.py`](../website/security.py) must then be
+widened deliberately.
 
 ---
 
 ## Suggested order
 
-1. **A1–A4** — the correctness gaps, especially the missing confirmations.
-2. **B5, B6, B7, B4** — small, high signal-to-noise wins.
-3. **C1, C2, C4** — real music control from the web, the biggest capability gap.
-4. **E1** — code splitting, before the bundle grows further.
-5. **D5, D6, D1** — accessibility and resilience.
-6. **F1, F2** — navigation and continuity.
-7. Everything else by appetite.
+1. **Phase 8** — the six correctness bugs. All S, all unambiguous.
+2. **9.1** — the toast host. Everything after it gets to use it, and 8.4 wants it.
+3. **9.2–9.6** — units and vocabulary; the cheapest visible quality gain in the app.
+4. **10.1** — the list measure cap. One rule, fixes every screen on desktop.
+5. **11.1–11.4** — four S-sized IA fixes.
+6. **12.1–12.4** — the public layer. 12.2 blocks Discord verification, so start it before
+   you need it.
+7. **10.2, 10.3, 11.5, 12.5–12.7** — by appetite.
+8. **A3, F4, E5** — the three original backend items, still open.
+
+---
+
+# Appendix — Sections A–F (shipped)
+
+Retained for reference. These were about surfacing data the API already returned; all are
+implemented except **A3** (audit actor-name lookup), **F4** (server-side audit filters) and
+**E5** (SSE player stream), which remain backend work and are folded into the ordering
+above.
+
+**A. Correctness gaps** — A1 destructive-action confirmations (`ConfirmSheet`, four call
+sites) · A2 command palette navigates and copies · A3 ⚠️ audit actor names · A4 audit
+`payload` detail.
+
+**B. Unused API data** — B1 hourly strip · B2 richer current conditions · B3 full air
+quality · B4 AI token totals and `cooldown_until` banner · B5 queue duration · B6
+subscription `last_run_at` · B7 `bot_snapshot_at` staleness · B8 playlist `is_public`.
+
+**C. Features on existing endpoints** — C1 search and queue from the web · C2 scrubbable
+progress bar · C3 drag-reorder the live queue · C4 clear queue · C5 effects panel · C6 edit
+persona · C7 alert thresholds · C8 imperial units · C9 memory transcript · C10 command
+reference page.
+
+**D. Accessibility and interaction** — D1 player `aria-live` · D2 skip link · D3 undo toast
+*(shipped but unreachable — see 9.1)* · D4 optimistic toggles · D5 Light/System/Dark · D6
+error boundary and offline banner · D7 shaped skeletons *(partial — see 10.3)*.
+
+**E. Performance and PWA** — E1 route code-splitting · E2 prefetch on hover · E3 service
+worker update prompt · E4 offline fallback · E5 ⚠️ SSE player stream.
+
+**F. Bigger features** — F1 guild switcher · F2 persistent mini-player · F3 saved locations
+and geolocation *(see 8.4, 8.6)* · F4 ⚠️ audit filtering · F5 dashboard activity feed.
