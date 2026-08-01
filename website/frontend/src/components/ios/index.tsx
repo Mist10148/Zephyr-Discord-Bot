@@ -78,16 +78,19 @@ export function ListGroup({ children, className = '' }: { children: ReactNode; c
 
 // `label` widens from string to ReactNode, so both existing call sites still compile
 // and still take the plain <div> branch. `to`/`onClick` add the chevron for free.
-export function ListRow({ label, detail, leading, to, onClick, children, className = '' }: { label: ReactNode; detail?: ReactNode; leading?: ReactNode; to?: string; onClick?: () => void; children?: ReactNode; className?: string }) {
+// `pressed` turns the row into a toggle rather than a destination: it carries
+// aria-pressed and drops the chevron, because a chevron promises navigation and a
+// row that ticks a checkbox in place does not navigate anywhere.
+export function ListRow({ label, detail, leading, to, onClick, pressed, children, className = '' }: { label: ReactNode; detail?: ReactNode; leading?: ReactNode; to?: string; onClick?: () => void; pressed?: boolean; children?: ReactNode; className?: string }) {
   const inner = <>
     {leading && <span className="row-leading">{leading}</span>}
     <span className="row-label">{label}{detail !== undefined && <small>{detail}</small>}</span>
     {children}
-    {(to ?? onClick) ? <Chevron /> : null}
+    {(to ?? onClick) && pressed === undefined ? <Chevron /> : null}
   </>
   const cls = `list-row ${className}`.trim()
   if (to) return <Link className={cls} to={to}>{inner}</Link>
-  if (onClick) return <button className={cls} type="button" onClick={onClick}>{inner}</button>
+  if (onClick) return <button className={cls} type="button" aria-pressed={pressed} onClick={onClick}>{inner}</button>
   return <div className={cls}>{inner}</div>
 }
 
