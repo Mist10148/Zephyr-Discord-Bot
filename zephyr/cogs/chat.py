@@ -28,10 +28,12 @@ from zephyr.services.gemini import (
     format_datetime_for_user,
     generate_gemini_response,
     generate_utility_response,
+    reset_conversation,
     send_response,
     MODEL_LIMITS,
     DEFAULT_CHAT_MODEL,
 )
+from zephyr.db import audit
 
 
 # Persistence runs in a worker thread; serialize the state mutation and write.
@@ -257,6 +259,60 @@ class ChatCog(commands.Cog):
             return
         response = await generate_gemini_response(server_id, user_id, final_message, image_url, channel_id=interaction.channel_id)
         await send_response(interaction.followup, response, interaction)
+
+    @app_commands.command(name="forget", description="Make the AI forget this channel's conversation.")
+    async def forget(self, interaction: discord.Interaction):
+        """Reset both memory layers for this channel.
+
+        Gated on Manage Messages in a guild, because the memory is shared by
+        everyone in the channel: one person's reset erases what the whole channel
+        taught the bot, which makes it a moderation action rather than a personal
+        preference like /output. Manage Messages already means "clean up this
+        channel's content" and is channel-scoped, so a channel moderator can act
+        without server-wide power. A DM has one participant and needs no check.
+
+        Checked by hand rather than with @app_commands.checks.has_permissions for
+        two reasons: Discord's DM permission set never contains manage_messages,
+        so the decorator would block the DM case entirely; and this cog has no
+        cog_app_command_error, so the resulting CheckFailure would surface as an
+        unhandled error instead of a readable reply. interaction.permissions is
+        the resolved channel-level set Discord ships with the interaction, so it
+        works even when the member or channel is not cached.
+        """
+        if interaction.guild is not None and not interaction.permissions.manage_messages:
+            await interaction.response.send_message(
+                "❌ You need the **Manage Messages** permission here to reset the AI's memory of this channel.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        server_id = interaction.guild.id if interaction.guild else None
+        result = await reset_conversation(server_id, interaction.user.id, interaction.channel_id)
+
+        if result["error"]:
+            await interaction.followup.send(
+                "⚠️ I cleared my working memory, but the stored copy could not be deleted. Please try again shortly.",
+                ephemeral=True,
+            )
+            return
+        if not result["purged"] and not result["cached"]:
+            await interaction.followup.send("There is nothing to forget in this channel yet.", ephemeral=True)
+            return
+
+        # Guilds only. The audit log is read per guild, so a DM row would be
+        # written where nothing can ever read it, and a private conversation with
+        # a single participant has nobody to be accountable to.
+        if server_id:
+            await asyncio.to_thread(
+                audit.record, "ai.memory.purge",
+                actor_id=str(interaction.user.id), guild_id=str(server_id),
+                payload={"channel_id": str(interaction.channel_id)}, source="discord",
+            )
+        await interaction.followup.send(
+            "🧹 Forgot this channel's conversation. The next message starts fresh.",
+            ephemeral=True,
+        )
 
     @app_commands.command(name="summarize", description="Privately summarize recent messages in this channel.")
     @app_commands.describe(messages="How many recent messages to summarize (5-100)")

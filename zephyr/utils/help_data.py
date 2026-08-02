@@ -143,6 +143,7 @@ HELP_CATEGORIES = [
         title="Chat & AI",
         commands=[
             HelpEntry("/prompt <message>", "Ask Gemini a question (supports images)"),
+            HelpEntry("/forget", "Make the AI forget this channel's conversation"),
             HelpEntry("/settings", "Customize AI model and response format"),
             HelpEntry("/output", "Quickly switch between embed and text replies"),
             HelpEntry("/token", "Show Gemini usage stats"),

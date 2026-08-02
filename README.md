@@ -128,6 +128,7 @@ Zephyr-Discord-Bot/
 | Command | Description |
 |---------|-------------|
 | `/prompt <message> [attachment]` | Ask the AI (supports image & `.txt` attachments) |
+| `/forget` | Reset the AI's memory of this channel (needs **Manage Messages**) |
 | `/settings` | Choose the Gemini model & response format |
 | `/output` | Quickly toggle embed vs. plain-text replies |
 | `/token` | Show this session's Gemini usage / rate-limit status |
