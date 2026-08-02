@@ -18,6 +18,7 @@ from discord.ext import commands
 from google.genai import types
 
 from zephyr.services.gemini import (
+    clear_history_for_context,
     gemini_async_client,
     get_context_settings,
     set_context_settings,
@@ -131,7 +132,19 @@ class ChatCog(commands.Cog):
         self.bot = bot
 
     def bridge_actions(self):
-        return {"ai.usage": self._bridge_usage}
+        return {"ai.usage": self._bridge_usage, "ai.memory.purge": self._bridge_purge_memory}
+
+    async def _bridge_purge_memory(self, guild, actor_id, args):
+        """Drop the in-process buffer after the dashboard deleted the stored row.
+
+        The web tier owns the durable delete and its authorization; this process
+        owns the half of the memory that exists nowhere else. Without this, a
+        dashboard purge is undone by the next message in the guild, because the
+        read path falls back to the buffer whenever a channel has no row.
+        """
+        if guild is None:
+            raise LookupError("Zephyr is not in that server.")
+        return {"cleared": clear_history_for_context(guild.id, None)}
 
     async def _bridge_usage(self, guild, actor_id, args):
         model = (args or {}).get("model") or DEFAULT_CHAT_MODEL

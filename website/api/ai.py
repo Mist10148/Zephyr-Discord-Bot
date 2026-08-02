@@ -6,6 +6,11 @@ from website.api.guard import guild_scoped
 from website.api.player import bridge_call
 from zephyr.db import ai as ai_db
 from zephyr.db import audit
+from zephyr.services import bridge
+
+# The purge has already committed by the time this is sent, so it waits only
+# briefly: the bot's answer is needed for promptness, never for correctness.
+MEMORY_CACHE_TIMEOUT = 2.0
 
 def _body():
     body = request.get_json(silent=True)
@@ -73,10 +78,28 @@ def memory_detail(guild_id, channel_id):
     if not conversation or str(conversation.get("guild_id")) != str(guild_id): return error("not_found", "Memory not found.", 404)
     return jsonify(conversation)
 
+def _clear_bot_memory_cache(guild_id, channel_id):
+    """Best-effort: ask the running bot to drop its in-process buffer too.
+
+    The stored row is only half the memory. The bot keeps a rolling buffer per
+    guild and falls back to it whenever a channel has no row, so a purge that
+    stops at the database is undone by the next message. This cannot be a hard
+    dependency, unlike bridge_call: the delete is already durable, and reporting
+    a completed purge as a failure would invite a retry that then 404s.
+    """
+    redis_url = current_app.config["REDIS_URL"]
+    if not redis_url:
+        return
+    try:
+        bridge.send_command("ai.memory.purge", guild_id=guild_id, actor_id=g.zephyr_session.user_id, args={"channel_id": str(channel_id)}, timeout=MEMORY_CACHE_TIMEOUT, url=redis_url)
+    except Exception as exc:
+        print(f"[AI] Could not clear the bot's memory buffer for channel {channel_id}: {exc}")
+
 @api.delete("/guilds/<guild_id>/ai/memory/<channel_id>")
 @guild_scoped
 def purge_memory(guild_id, channel_id):
     if not ai_db.purge_conversation(guild_id, channel_id, database_url=current_app.config["DATABASE_URL"]): return error("not_found", "Memory not found.", 404)
+    _clear_bot_memory_cache(guild_id, channel_id)
     _audit(guild_id, "ai.memory.purge", {"channel_id": channel_id})
     return "", 204
 
