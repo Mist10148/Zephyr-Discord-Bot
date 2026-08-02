@@ -115,9 +115,19 @@ def list_conversations(guild_id, *, database_url=None):
 
 
 def purge_conversation(guild_id, channel_id, *, database_url=None):
+    """Delete one channel's conversation, scoped to whoever is entitled to it.
+
+    ``guild_id=None`` means *the DM scope*, not "no scope". ``append_exchange``
+    stores DM rows with a NULL guild_id, and ``str(None)`` only ever matched the
+    literal string "None", so before this a DM conversation could never be purged
+    at all. Keeping it a scope rather than a bypass is what preserves the
+    guarantee the web endpoint leans on: a guild caller still cannot reach another
+    guild's channel or a DM, and a DM caller cannot reach a guild's channel.
+    """
+    scope = AIConversation.guild_id.is_(None) if guild_id is None else AIConversation.guild_id == str(guild_id)
     engine = get_engine(database_url)
     with engine.begin() as conn:
-        row = conn.execute(select(AIConversation.id).where(AIConversation.guild_id == str(guild_id), AIConversation.channel_id == str(channel_id))).scalar_one_or_none()
+        row = conn.execute(select(AIConversation.id).where(scope, AIConversation.channel_id == str(channel_id))).scalar_one_or_none()
         if row is None:
             return False
         conn.execute(delete(AIMessage).where(AIMessage.conversation_id == row))

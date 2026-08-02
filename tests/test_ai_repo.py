@@ -20,3 +20,22 @@ def test_conversation_is_guild_scoped_and_compactable(db_url):
     assert len(saved["messages"]) == 4
     assert ai.purge_conversation("1", "10", database_url=db_url)
     assert ai.load_conversation("10", database_url=db_url) is None
+
+
+def test_a_dm_conversation_can_be_purged(db_url):
+    """A DM row stores a NULL guild_id, which ``str(None) == "None"`` never matched."""
+    ai.append_exchange("20", None, "hello", "hi", database_url=db_url)
+
+    assert ai.load_conversation("20", database_url=db_url)["guild_id"] is None
+    assert ai.purge_conversation("1", "20", database_url=db_url) is False
+    assert ai.purge_conversation(None, "20", database_url=db_url) is True
+    assert ai.load_conversation("20", database_url=db_url) is None
+
+
+def test_a_purge_cannot_cross_scopes(db_url):
+    ai.append_exchange("30", "1", "question", "answer", database_url=db_url)
+
+    assert ai.purge_conversation("2", "30", database_url=db_url) is False
+    # The DM scope must not be a back door into a guild's channel either.
+    assert ai.purge_conversation(None, "30", database_url=db_url) is False
+    assert ai.load_conversation("30", database_url=db_url) is not None
