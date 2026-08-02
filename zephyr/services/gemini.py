@@ -275,6 +275,20 @@ def save_history_for_context(server_id=None, user_id=None, history=None):
     conversation_history[key] = normalize_history_entries(history)
 
 
+def clear_history_for_context(server_id=None, user_id=None):
+    """Drop the in-process rolling buffer for one context; True if there was one.
+
+    The key is per-guild (or per-DM), never per-channel, so clearing one guild
+    channel also drops the buffer the guild's *other* channels would fall back
+    to. Deliberate rather than overlooked: that buffer is already shared across
+    the guild's channels -- every exchange anywhere in the guild overwrites it --
+    and it is only ever read when a channel has no stored row, so dropping it can
+    only reduce cross-channel bleed.
+    """
+    key = get_context_key(server_id, user_id)
+    return conversation_history.pop(key, None) is not None
+
+
 def history_to_contents(history):
     contents = []
     for item in history:
@@ -632,6 +646,40 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
         print(f"[Gemini error] {selected_model}: {exc}")
         traceback.print_exc()
         return "An unexpected error occurred while generating a response. Please try again in a moment."
+
+
+async def reset_conversation(server_id, user_id, channel_id):
+    """Forget one channel's conversation in *both* layers.
+
+    Memory lives in a durable row and in an in-process buffer, and the read path
+    above falls back to the buffer whenever the row is absent. Deleting only the
+    row therefore forgets nothing: the next message finds no row, reloads up to
+    MAX_HISTORY_MESSAGES turns out of the buffer, and append_exchange writes them
+    straight back into a fresh row.
+
+    Stored row first, buffer second. The other order is a wider hole, not a
+    smaller one: an interleaved message would read the still-present row, load the
+    *whole* history into the buffer, and do it moments before the row is deleted.
+    Row-first bounds an interleaved read to the buffer's ten turns, which are then
+    dropped anyway.
+
+    The buffer is cleared even when the database call fails. An unreachable
+    database is a reason to report a partial reset, not a reason to leave ten
+    remembered turns sitting in memory. Returns
+    ``{"purged": bool, "cached": bool, "error": str | None}``.
+
+    Takes no Discord types, so the command layer stays a thin wrapper and this
+    stays directly testable.
+    """
+    purged, error = False, None
+    if channel_id is not None:
+        try:
+            purged = await asyncio.to_thread(ai_db.purge_conversation, server_id, channel_id)
+        except Exception as exc:
+            error = str(exc)
+            print(f"[Gemini] Could not purge the stored conversation for channel {channel_id}: {exc}")
+    cached = clear_history_for_context(server_id, user_id)
+    return {"purged": purged, "cached": cached, "error": error}
 
 
 async def generate_utility_response(server_id, user_id, prompt, *, instruction):
