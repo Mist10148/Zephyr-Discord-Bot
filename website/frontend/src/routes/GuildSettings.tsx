@@ -49,6 +49,7 @@ export function GuildSettings() {
   useEffect(() => { setDraft(settings.data ? draftOf(settings.data) : null) }, [settings.data])
 
   const save = useMutation({
+    meta: { success: 'Settings saved' },
     mutationFn: (patch: Partial<Draft>) => api<Settings>(`/guilds/${guildId}/settings`, { method: 'PATCH', body: patch }),
     onSuccess: data => {
       client.setQueryData(['guild-settings', guildId], data)
@@ -130,7 +131,7 @@ export function GuildSettings() {
       </ListGroup>
       : <GlassSurface tier="thin"><p className="muted">Zephyr is not reachable, so its channels cannot be listed. Music commands are allowed in every channel while this is unset.</p></GlassSurface>}
 
-    {save.error && !invalidField && <ErrorNote error={save.error} onRetry={() => save.reset()} />}
+    
 
     {/* Sticky: on a form this long the actions used to scroll out of reach, so a
         change made at the bottom meant hunting for the button that saves it. */}

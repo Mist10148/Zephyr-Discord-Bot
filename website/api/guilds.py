@@ -222,7 +222,36 @@ def guild_audit(guild_id: str):
     except Exception as exc:
         print(f"[Guilds] Could not read the audit log for {guild_id}: {exc}")
         return error("audit_unavailable", "Could not read the audit log.", 503)
-    return jsonify({"id": guild_id, **page})
+    return jsonify({"id": guild_id, **page, "actors": _actor_names(guild_id, page.get("entries") or [])})
+
+
+def _actor_names(guild_id: str, entries: list[dict]) -> dict:
+    """Display names for the actors on this page, keyed by id.
+
+    The log stores an ``actor_id`` and nothing else, so every row read "Changed
+    by 403285930202595340". The web tier has no gateway connection and stores no
+    Discord token, so the bot is the only thing that can put a name to an id.
+
+    Asked once per page for the distinct set rather than per row: a page of
+    fifty entries is usually two or three people. Failure is not an error --
+    an unreachable bot returns ``{}`` and the client falls back to the raw id,
+    exactly as the settings pickers already degrade. An audit log that 503s
+    because a name lookup failed would be a strictly worse page.
+    """
+    ids = sorted({str(entry["actor_id"]) for entry in entries if entry.get("actor_id")})
+    if not ids:
+        return {}
+    redis_url = current_app.config["REDIS_URL"]
+    if not redis_url:
+        return {}
+    try:
+        answer = bridge.send_command(
+            "meta.members", guild_id=guild_id, args={"ids": ids}, url=redis_url
+        )
+    except Exception as exc:
+        print(f"[Guilds] Could not resolve audit actors for {guild_id}: {exc}")
+        return {}
+    return {member["id"]: member for member in answer.get("members") or [] if member.get("id")}
 
 
 @api.get("/guilds/<guild_id>/meta")

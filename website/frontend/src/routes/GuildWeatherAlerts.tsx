@@ -67,6 +67,7 @@ function CreateSheet({ guildId, kinds, onDone }: { guildId: string | undefined; 
   const [units, setUnits] = useState<'metric' | 'imperial'>('metric')
 
   const create = useMutation({
+    meta: { success: 'Subscription created' },
     mutationFn: () => api<WeatherSub>(`/guilds/${guildId}/weather-subs`, {
       method: 'POST',
       body: {
@@ -120,7 +121,7 @@ function CreateSheet({ guildId, kinds, onDone }: { guildId: string | undefined; 
       <p className="note">{KIND_HELP[kind]}</p>
       {!tz && <p className="muted small-note">Leave the timezone empty to use the place's own.</p>}
       {!meta.data && !meta.isPending && <p className="muted small-note">Zephyr is not reachable, so its channels cannot be listed. You can still paste a channel id.</p>}
-      {create.error && <ErrorNote error={create.error} onRetry={() => create.reset()} />}
+      
     </div>
     <div className="sheet-actions">
       <PressableButton variant="secondary" onClick={onDone}>Cancel</PressableButton>
@@ -139,12 +140,14 @@ export function GuildWeatherAlerts() {
 
   const invalidate = () => client.invalidateQueries({ queryKey: ['weather-subs', guildId] })
   const toggle = useMutation({
+    meta: { success: 'Subscription updated' },
     mutationFn: ({ id, enabled }: { id: number; enabled: boolean }) =>
       api(`/guilds/${guildId}/weather-subs/${id}`, { method: 'PATCH', body: { enabled } }),
     onMutate: async ({ id, enabled }) => { await client.cancelQueries({ queryKey: ['weather-subs', guildId] }); const previous = client.getQueryData<WeatherSubList>(['weather-subs', guildId]); if (previous) client.setQueryData<WeatherSubList>(['weather-subs', guildId], { ...previous, subscriptions: previous.subscriptions.map(sub => sub.id === id ? { ...sub, enabled } : sub) }); return { previous } },
     onError: (_error, _values, context) => { if (context?.previous) client.setQueryData(['weather-subs', guildId], context.previous) }, onSettled: invalidate,
   })
   const remove = useMutation({
+    meta: { success: 'Subscription removed' },
     mutationFn: (id: number) => api(`/guilds/${guildId}/weather-subs/${id}`, { method: 'DELETE' }),
     onSuccess: invalidate,
   })
@@ -176,8 +179,8 @@ export function GuildWeatherAlerts() {
         </ListRow>)}
       </ListGroup>}
 
-    {toggle.error && <ErrorNote error={toggle.error} onRetry={() => toggle.reset()} />}
-    {remove.error && <ErrorNote error={remove.error} onRetry={() => remove.reset()} />}
+    
+    
     {/* Pausing is not deleting, and the difference is worth stating: a paused
         subscription keeps its place and its thresholds. */}
     {subs.data.subscriptions.some(sub => !sub.enabled) && <CapsuleToast>Paused subscriptions keep their settings.</CapsuleToast>}

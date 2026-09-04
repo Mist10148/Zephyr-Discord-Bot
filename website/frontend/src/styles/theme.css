@@ -434,7 +434,12 @@ a.list-row:hover, button.list-row:hover { background: var(--surface-2); text-dec
 .row-label small { font-size: 12.5px; font-weight: 400; color: var(--text-muted); }
 .row-label.strong { font-weight: 600; font-size: 15px; }
 .row-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; margin-left: auto; }
-.row-value { flex: 0 0 auto; font-size: 14px; color: var(--text-muted); text-align: right; }
+/* min-width:0 and shrink allowed, so a long value wraps inside the row
+   instead of pushing the label away from it -- three music channels used
+   to force the pair apart with the name at the far left and the list at
+   the far right. */
+.row-value { flex: 0 1 auto; min-width: 0; font-size: 14px; color: var(--text-muted); text-align: right; overflow-wrap: anywhere; }
+.row-value .faint { color: var(--text-faint); }
 .chevron { flex: 0 0 auto; color: var(--text-faint); font-size: 18px; line-height: 1; }
 
 /* An error takes a full basis so it always wraps onto its own line under the
@@ -524,6 +529,41 @@ a.list-row:hover, button.list-row:hover { background: var(--surface-2); text-dec
   color: var(--danger); box-shadow: none;
 }
 .toast.error .toast-badge { background: var(--danger); font-size: 11px; }
+.toast-action {
+  flex: none; margin-left: 4px; padding: 4px 10px;
+  border: 1px solid currentColor; border-radius: var(--radius-pill);
+  background: none; color: inherit;
+  font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.toast-dismiss {
+  flex: none; margin: -4px -8px -4px 2px; padding: 4px 6px;
+  border: 0; background: none; color: inherit;
+  font-size: 15px; line-height: 1; opacity: .55; cursor: pointer;
+}
+.toast-dismiss:hover { opacity: 1; }
+
+/* The notification region. Fixed, so a toast arriving never changes the page
+   height -- feedback that reflows the document is the defect this replaces.
+   Offsets and z-index copied from .mini-player so the two cannot collide:
+   above the tab bar on a phone, top-right on desktop. Not a flex child of
+   #root, which is a column flex container.
+
+   pointer-events is none on the region and auto on each toast, so the empty
+   region never swallows a click on the page beneath it. The region stays
+   mounted while empty: a live region inserted at the same moment as its content
+   is not reliably announced. */
+.toast-region {
+  position: fixed; z-index: 30; pointer-events: none;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
+  right: 16px; bottom: 76px; left: 16px;
+}
+.toast-region > * { pointer-events: auto; max-width: min(420px, 100%); }
+.toast-region .toast { margin: 0; }
+@media (min-width: 860px) {
+  /* Top-right on desktop: the eye is already near the top bar after a click on
+     it, and the bottom-right corner belongs to the mini-player. */
+  .toast-region { top: 74px; bottom: auto; left: auto; }
+}
 
 /* ---- Widget grid ------------------------------------------------------------ */
 /* auto-FILL, not auto-fit: with only two stat cards, auto-fit stretches each one
@@ -822,6 +862,10 @@ select.text-input { appearance: auto; }
 
 /* ---- Weather ---------------------------------------------------------------- */
 .current-weather { padding: 24px; margin-bottom: 18px; }
+/* The scale, declared once beside the hero reading rather than repeated on
+   every number. Sized well down: the temperature is the thing being read, and
+   "26.9 °C" with both at the same weight reads as two facts. */
+.temp-scale { font-size: .38em; font-weight: 500; vertical-align: super; margin-left: 1px; letter-spacing: 0; }
 .weather-tools { display: flex; flex-wrap: wrap; gap: 8px; margin: -4px 0 14px; }
 /* Saved places. Deliberately not .ios-button: an action and a piece of saved
    data reading identically is the defect this replaces, so the chip borrows
@@ -859,7 +903,7 @@ select.text-input { appearance: auto; }
 .day-temp { margin: 0; font-family: var(--font-serif); font-size: 22px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
 .day-low { font-size: 15px; font-weight: 400; color: var(--text-faint); }
 .day-desc { display: block; margin-top: 6px; font-size: 12px; color: var(--text-muted); }
-.hourly-strip { display: flex; gap: 8px; overflow-x: auto; padding: 2px 0 16px; margin-bottom: 6px; }.hour-card { position: relative; min-width: 70px; min-height: 110px; display: grid; justify-items: center; align-content: space-between; padding: 10px; border: 1px solid var(--surface-glass-border); border-radius: var(--radius-control); background: var(--surface-glass); overflow: hidden; font-size: 12px; }.hour-card b { color: var(--text-muted); font-weight: 600; }.hour-card strong { font-family: var(--font-serif); font-size: 18px; }.hour-card i { position: absolute; bottom: 0; left: 0; right: 0; background: var(--accent-soft); z-index: -1; }.air-detail summary { cursor: pointer; }.air-detail div { position: absolute; z-index: 2; margin-top: 8px; width: 240px; padding: 10px; border: 1px solid var(--hairline); border-radius: var(--radius-control); background: var(--surface-1); color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+.hourly-strip { display: flex; gap: 8px; overflow-x: auto; padding: 2px 0 16px; margin-bottom: 6px; }.hour-card { position: relative; min-width: 70px; min-height: 110px; display: grid; justify-items: center; align-content: space-between; padding: 10px; border: 1px solid var(--surface-glass-border); border-radius: var(--radius-control); background: var(--surface-glass); overflow: hidden; font-size: 12px; }.hour-card b { color: var(--text-muted); font-weight: 600; }.hour-card strong { font-family: var(--font-serif); font-size: 18px; }.hour-glyph { display: grid; place-items: center; color: var(--text-muted); }.hour-glyph svg { width: 20px; height: 20px; }/* The track is the full scale; the fill is the reading against it. */.hour-rain { position: absolute; inset: auto 0 0 0; height: 100%; background: color-mix(in oklab, var(--text-faint) 12%, transparent); z-index: -1; }.hour-rain i { position: absolute; bottom: 0; left: 0; right: 0; background: var(--accent-soft); }.air-detail summary { cursor: pointer; }.air-detail div { position: absolute; z-index: 2; margin-top: 8px; width: 240px; padding: 10px; border: 1px solid var(--hairline); border-radius: var(--radius-control); background: var(--surface-1); color: var(--text-muted); font-size: 12px; line-height: 1.5; }
 
 /* ---- Login ------------------------------------------------------------------ */
 .error-banner {
@@ -940,12 +984,13 @@ select.text-input { appearance: auto; }
 .now-playing .art { flex: none; width: 74px; height: 74px; border-radius: 16px; object-fit: cover; }
 /* Diagonal hatch rather than a grey block: it reads as "no artwork" instead of
    "artwork that failed to load". */
+/* A plain --surface-2 tile with an icon. The diagonal hatch and the 8px mono
+   type were there to make the words "track art" fit, which is not a thing a
+   placeholder should be doing. */
 .art-placeholder {
   display: grid; place-items: center; flex: none;
-  width: 74px; height: 74px; border-radius: 16px; padding: 4px;
-  background: repeating-linear-gradient(135deg, var(--surface-3) 0 6px, var(--surface-2) 6px 12px);
-  font-family: var(--font-mono); font-size: 8px; font-weight: 500; line-height: 1.2;
-  color: var(--text-faint); text-align: center;
+  width: 74px; height: 74px; border-radius: 16px;
+  background: var(--surface-2); color: var(--text-faint);
 }
 .now-playing .meta { flex: 1; min-width: 0; }
 .now-playing h2 { margin: 0; font-size: 20px; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1024,7 +1069,7 @@ select.text-input { appearance: auto; }
   .text-input, .search-input, .slider, [cmdk-item],
   .theme-toggle, .nav-link, .palette-trigger, .back-link,
   .guild-nav .pill, .tab-bar a, .brand,
-  .place-chip-name, .place-chip-remove
+  .place-chip-name, .place-chip-remove, .toast-dismiss, .toast-action
 ):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;

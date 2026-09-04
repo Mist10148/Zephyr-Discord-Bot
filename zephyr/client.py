@@ -173,7 +173,7 @@ class ZephyrBot(commands.Bot):
         without a restart -- the cost is a dictionary build per command, which is
         nothing next to the round trip that produced it.
         """
-        actions = {"meta.guild": self._bridge_guild_meta}
+        actions = {"meta.guild": self._bridge_guild_meta, "meta.members": self._bridge_member_names}
         for cog in self.cogs.values():
             provider = getattr(cog, "bridge_actions", None)
             if callable(provider):
@@ -236,6 +236,44 @@ class ZephyrBot(commands.Bot):
                 {"id": str(channel.id), "name": channel.name} for channel in guild.voice_channels
             ],
         }
+
+    async def _bridge_member_names(self, guild, actor_id, args):
+        """Display names for a bounded set of user ids.
+
+        For the audit log, which stores an ``actor_id`` and nothing else -- so
+        every row read "Changed by 403285930202595340". Deliberately *not* folded
+        into ``meta.guild``: that is read whenever a settings page opens, and a
+        guild's whole member list is unbounded, while the audit page holds at
+        most a page of rows and therefore a small set of distinct actors.
+
+        Names come from the cache first and only then from the API, and a lookup
+        that fails is simply omitted rather than raising -- the caller falls back
+        to the raw id, which is worse than a name and much better than an error
+        page. The cap is a hard limit because this is reachable from the web.
+        """
+        if guild is None:
+            raise LookupError("Zephyr is not in that server.")
+
+        ids = [str(value) for value in (args.get("ids") or [])][:50]
+        members = {}
+        for raw_id in ids:
+            try:
+                user_id = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            member = guild.get_member(user_id)
+            if member is None:
+                try:
+                    member = await guild.fetch_member(user_id)
+                except Exception:
+                    # Left the guild, or never was in it. The id stands.
+                    continue
+            members[raw_id] = {
+                "id": raw_id,
+                "name": member.display_name,
+                "avatar_url": member.display_avatar.url if member.display_avatar else None,
+            }
+        return {"members": list(members.values())}
 
     async def _publish_guilds(self):
         """Publish the guild list for the web dashboard.

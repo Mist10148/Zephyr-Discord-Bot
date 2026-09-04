@@ -9,6 +9,7 @@ import { ErrorNote } from '../components/ErrorNote'
 import { useTheme } from '../lib/theme-context'
 import { useDebounced } from '../lib/use-debounced'
 import { MAX_WEATHER_PLACES, WEATHER_PLACES_KEY } from '../lib/preferences'
+import { formatUnit, unitLabel } from '../lib/units'
 
 type Place = { name: string; country?: string; latitude: number; longitude: number }
 type Weather = {
@@ -140,13 +141,13 @@ export function Weather() {
             <p className="current-desc">{weather.data.current.description}</p>
           </div>
           <SunCloudIcon className="hero-icon" />
-          <div className="current-temp">{weather.data.current.temperature}°</div>
+          <div className="current-temp">{weather.data.current.temperature}<span className="temp-scale">{unitLabel(preferences.units, 'temperature')}</span></div>
         </div>
         <div className="chip-strip">
           {weather.data.current.feels_like !== null && <span className="chip">Feels like {weather.data.current.feels_like}°</span>}
           {weather.data.current.humidity != null && <span className="chip">Humidity {weather.data.current.humidity}%</span>}
-          {weather.data.current.wind_speed != null && <span className="chip">Wind {weather.data.current.wind_speed}</span>}
-          {weather.data.current.precipitation != null && <span className="chip">Rain {weather.data.current.precipitation}</span>}
+          {weather.data.current.wind_speed != null && <span className="chip">Wind {formatUnit(weather.data.current.wind_speed, preferences.units, 'speed')}</span>}
+          {weather.data.current.precipitation != null && <span className="chip">Rain {formatUnit(weather.data.current.precipitation, preferences.units, 'length')}</span>}
           {air && <details className="chip air-detail"><summary>Air quality · {air}</summary><div>EU {weather.data.air_quality?.european_aqi ?? '—'} · US {weather.data.air_quality?.us_aqi ?? '—'}<br />PM2.5 {weather.data.air_quality?.pm2_5 ?? '—'} · PM10 {weather.data.air_quality?.pm10 ?? '—'}<br />Ozone {weather.data.air_quality?.ozone ?? '—'} · NO₂ {weather.data.air_quality?.nitrogen_dioxide ?? '—'}</div></details>}
           {/* Surfaced from class_suspension, which the API has always computed and
               the old UI never showed. It is the one thing on this page a reader
@@ -155,7 +156,24 @@ export function Weather() {
         </div>
       </GlassSurface>
 
-      {weather.data.hourly.length > 0 && <section className="hourly-strip" aria-label="Hourly forecast">{weather.data.hourly.slice(0, 24).map(hour => <div className="hour-card" key={hour.time_local}><b>{hour.time_local.slice(11, 16)}</b><span>{weatherGlyph(hour.weather_code) === 'sun' ? '☀' : weatherGlyph(hour.weather_code) === 'rain' ? '☂' : '☁'}</span><strong>{hour.temperature_2m}°</strong><i style={{ height: `${hour.precipitation_probability}%` }} title={`${hour.precipitation_probability}% precipitation`} /></div>)}</section>}
+      {weather.data.hourly.length > 0 && <section className="hourly-strip" aria-label="Hourly forecast">{weather.data.hourly.slice(0, 24).map(hour => (
+        // The accessible name carries everything the card shows, including the
+        // precipitation figure -- that number used to live in a `title` on an
+        // aria-hidden background element, where nobody would ever hear it.
+        <div className="hour-card" key={hour.time_local} role="group" aria-label={`${hour.time_local.slice(11, 16)}, ${hour.temperature_2m}${unitLabel(preferences.units, 'temperature')}, ${hour.precipitation_probability}% chance of rain`}>
+          <b aria-hidden>{hour.time_local.slice(11, 16)}</b>
+          {/* The icon set, not a text emoji: DayGlyph was already in this file,
+              forty lines up, doing exactly this for the day cards. Platform
+              colour glyphs are off-palette in both themes and different on
+              every OS -- DESIGN.md commits to the currentColor set by name. */}
+          <span className="hour-glyph" aria-hidden><DayGlyph glyph={weatherGlyph(hour.weather_code)} /></span>
+          <strong aria-hidden>{hour.temperature_2m}°</strong>
+          {/* A hairline track behind the fill, so the height reads against a
+              full-scale reference. On its own a bar means nothing: 40% and 90%
+              are just two heights with nothing to compare them to. */}
+          <span className="hour-rain" aria-hidden><i style={{ height: `${hour.precipitation_probability}%` }} /></span>
+        </div>
+      ))}</section>}
 
       <div className="day-grid">
         {weather.data.daily.map(day => (
@@ -163,7 +181,7 @@ export function Weather() {
             <b className="day-name">{dayName(day.time_local)}</b>
             <span className={`day-icon ${weatherGlyph(day.weather_code)}`}><DayGlyph glyph={weatherGlyph(day.weather_code)} /></span>
             <p className="day-temp">{day.temp_max}°<span className="day-low"> / {day.temp_min}°</span></p>
-            <small className="day-desc">{day.description}<br />Feels {day.feels_like_min}–{day.feels_like_max}° · {day.precipitation_probability}% rain · wind {day.wind_speed_max}</small>
+            <small className="day-desc">{day.description}<br />Feels {day.feels_like_min}–{day.feels_like_max}° · {day.precipitation_probability}% rain · wind {formatUnit(day.wind_speed_max, preferences.units, 'speed')}</small>
           </GlassSurface>
         ))}
       </div>

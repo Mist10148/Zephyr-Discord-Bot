@@ -2,7 +2,7 @@ import { useInfiniteQuery } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
 import { api } from '../lib/api'
 import { groupByDay, timeOfDay } from '../lib/audit-groups'
-import type { AuditEntry, AuditPage } from '../types/api'
+import type { AuditActor, AuditEntry, AuditPage } from '../types/api'
 import { ErrorNote } from '../components/ErrorNote'
 import { GuildShell } from '../components/GuildNav'
 import { BackLink, GlassSurface, LargeTitleHeader, ListGroup, PressableButton, SectionLabel, Skeleton } from '../components/ios'
@@ -32,11 +32,14 @@ function sourceLabel(source: string) {
   return source === 'web' ? 'Dashboard' : source === 'discord' ? 'Discord' : source
 }
 
-function AuditRow({ entry }: { entry: AuditEntry }) {
+function AuditRow({ entry, actor }: { entry: AuditEntry; actor?: AuditActor }) {
   const source = sourceLabel(entry.source)
   return <div className="list-row">
     <span className="audit-time">{timeOfDay(entry.created_at)}</span>
-    <span className="row-label">{actionLabel(entry.action)}</span>
+    {/* The name when the bot could supply one, the id when it could not -- and
+        the fallback reads as a fallback rather than as a value, so nobody
+        mistakes a 19-digit number for something meaningful. */}
+    <span className="row-label">{actionLabel(entry.action)}<small>{actor ? actor.name : <span className="mono faint">{entry.actor_id}</span>}</small></span>
     {/* Dashboard is accent-tinted and everything else neutral: the question this
         page exists to answer is "was that us, or was it done in Discord?" */}
     <span className={`badge ${source === 'Dashboard' ? 'accent' : ''}`.trim()}>{source}</span>
@@ -59,6 +62,9 @@ export function GuildAudit() {
   if (query.error) return <main className="app"><LargeTitleHeader title="Audit log" /><ErrorNote error={query.error} onRetry={() => query.refetch()} /><BackLink to={`/g/${guildId}`}>Back to the server</BackLink></main>
 
   const entries = query.data.pages.flatMap(page => page.entries)
+  // Merged across pages: each page resolves only its own actors, and the
+  // same person appears on several.
+  const actors = Object.assign({}, ...query.data.pages.map(page => page.actors ?? {}))
   // Grouping happens over the flattened list, not per page, so a day that
   // straddles a pagination boundary stays one group rather than two.
   const groups = groupByDay(entries)
@@ -69,7 +75,7 @@ export function GuildAudit() {
       ? <GlassSurface tier="thin"><p className="muted">Nothing has been changed here yet. Settings edits and player actions from the dashboard show up here.</p></GlassSurface>
       : groups.map(group => <div className="audit-group" key={group.key}>
         <SectionLabel>{group.date}</SectionLabel>
-        <ListGroup>{group.entries.map(entry => <AuditRow key={entry.id} entry={entry} />)}</ListGroup>
+        <ListGroup>{group.entries.map(entry => <AuditRow key={entry.id} entry={entry} actor={actors[entry.actor_id]} />)}</ListGroup>
       </div>)}
     {query.hasNextPage && <div className="actions">
       <PressableButton variant="secondary" disabled={query.isFetchingNextPage} onClick={() => query.fetchNextPage()}>
