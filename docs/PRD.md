@@ -18,7 +18,7 @@
 
 Zephyr is a modular, multi-purpose Discord bot built for community servers. It bundles a weather service, a Groovy-style music player, a Google Gemini AI chat companion, text-to-speech, and a small Flask companion website — all organized into clean, self-contained cogs.
 
-The bot is written in Python 3.13 using `discord.py`, exposes **108 slash commands** (including aliases) and **13 prefix commands**, and runs on Windows, macOS, or Linux. It can be run locally, in Docker, or deployed to cloud platforms such as Render, Heroku, AWS, and Vercel.
+The bot is written in Python 3.13 using `discord.py`, exposes **114 slash commands** (including aliases) and **13 prefix commands**, and runs on Windows, macOS, or Linux. It can be run locally, in Docker, or deployed to cloud platforms such as Render, Heroku, AWS, and Vercel.
 
 ---
 
@@ -203,7 +203,7 @@ the dashboard.
 
 ## 7. Command Inventory
 
-### 7.1 Slash commands (108 total, including aliases)
+### 7.1 Slash commands (114 total, including aliases)
 
 | Category | Commands |
 |----------|----------|
@@ -219,6 +219,7 @@ the dashboard.
 | **TTS & Voice** | `/say`, `/language`, `/disconnect` |
 | **Reminders** | `/remindme`, `/reminders`, `/reminder-cancel` |
 | **Welcome & Farewell** | `/welcome`, `/farewell`, `/greeting-preview` |
+| **Tags** | `/tag`, `/tag-create`, `/tag-edit`, `/tag-delete`, `/tag-list`, `/tag-info` |
 | **Activity & Levels** | `/rank`, `/leaderboard`, `/activity-today`, `/activity`, `/activity-ignore` |
 | **Starboard** | `/starboard`, `/starboard-ignore` |
 | **Moderation** | `/warn`, `/timeout`, `/untimeout`, `/kick`, `/ban`, `/unban`, `/purge`, `/cases`, `/case`, `/reason`, `/modlog` |
@@ -470,7 +471,7 @@ Deliberate departures from the plan are recorded in
 
 ## Appendix: Counts at a Glance
 
-- **Slash commands:** 108 (including aliases)
+- **Slash commands:** 114 (including aliases)
 - **Prefix commands:** 13
 - **Cogs:** 6
 - **Entry points:** 2 (`run_bot.py`, `run_web.py`)

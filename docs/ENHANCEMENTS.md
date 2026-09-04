@@ -39,7 +39,7 @@ running code, and every defect in Phase 13 was confirmed in the source rather th
 | **12** | **Public site layer** | **Shipped** |
 | **13** | **Bot correctness and observability** | **Shipped** |
 | **14** | **Bot functionality gaps** | **Shipped** |
-| **15** | **New bot features** | **15.1–15.7 shipped**, 15.8 remaining |
+| **15** | **New bot features** | ✅ **shipped** (15.1–15.8) |
 | **16** | **Discord-side presentation** | **Not started** |
 | **17** | **Code quality and infrastructure** | **17.3 shipped**, rest not started |
 
@@ -644,7 +644,7 @@ reuse — the top three are mostly wiring.
 | 15.5 ✅ | **Welcome / farewell messages** | `on_guild_join` exists; needs per-guild config the dashboard can edit | M |
 | 15.6 ✅ | **Starboard / highlights** | `guild_settings` plus one reaction listener | M |
 | 15.7 ✅ | **Activity stats or leveling** | Feeds 12.7's analytics and the still-empty dashboard activity feed (F5) | L |
-| 15.8 | **Tags / custom responses** | Natural pairing with the existing persona editor (C6) | M |
+| 15.8 ✅ | **Tags / custom responses** | Natural pairing with the existing persona editor (C6) | M |
 
 **15.2 is the only item here that unblocks something else** — schedule it with 12.2, since
 Discord verification wants a stated deletion path and this is the self-service version of it.
