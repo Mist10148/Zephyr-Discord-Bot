@@ -447,3 +447,32 @@ class ModCase(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class GuildGreeting(Base):
+    """Welcome and farewell messages for one guild.
+
+    A table of its own rather than more columns on ``guilds``, for two reasons.
+    The obvious one is width: this is seven columns that only matter to one
+    feature, and ``guilds`` is already read on every settings page and by three
+    bulk readers on hot paths.  The other is that a greeting is the only setting
+    here with a *body* -- free text somebody wrote -- and mixing a Text column
+    into a row that is otherwise short scalars makes every one of those reads
+    carry it.
+
+    ``guild_id`` is the primary key, so there is exactly one row per guild and
+    the upsert needs no uniqueness reasoning.
+    """
+
+    __tablename__ = "guild_greetings"
+
+    guild_id: Mapped[str] = mapped_column(String, primary_key=True)
+    welcome_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    welcome_channel_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    welcome_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    farewell_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    farewell_channel_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    farewell_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
