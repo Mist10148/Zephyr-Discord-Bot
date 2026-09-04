@@ -3,9 +3,12 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { airQualityLabel, heatAdvisory, weatherGlyph } from '../lib/weather-icons'
 import type { WeatherGlyph } from '../lib/weather-icons'
-import { BackLink, GlassSurface, LargeTitleHeader, ListGroup, ListRow, PressableButton, Skeleton } from '../components/ios'
+import { BackLink, CapsuleToast, GlassSurface, LargeTitleHeader, ListGroup, ListRow, PressableButton, Skeleton } from '../components/ios'
 import { CloudIcon, RainIcon, SunCloudIcon, SunIcon } from '../components/icons'
+import { ErrorNote } from '../components/ErrorNote'
 import { useTheme } from '../lib/theme-context'
+import { useDebounced } from '../lib/use-debounced'
+import { MAX_WEATHER_PLACES, WEATHER_PLACES_KEY } from '../lib/preferences'
 
 type Place = { name: string; country?: string; latitude: number; longitude: number }
 type Weather = {
@@ -33,18 +36,53 @@ function dayName(dateLocal: string) {
   return new Date(year, month - 1, day).toLocaleDateString(undefined, { weekday: 'short' })
 }
 
+const samePlace = (a: Place, b: Place) => a.latitude === b.latitude && a.longitude === b.longitude
+
+function readSavedPlaces(): Place[] {
+  try {
+    const items = JSON.parse(localStorage.getItem(WEATHER_PLACES_KEY) ?? '[]')
+    return Array.isArray(items) ? items.slice(0, MAX_WEATHER_PLACES) : []
+  } catch { return [] }
+}
+
+function writeSavedPlaces(places: Place[]) {
+  try { localStorage.setItem(WEATHER_PLACES_KEY, JSON.stringify(places)) } catch { /* storage can be unavailable */ }
+}
+
 export function Weather() {
   const [query, setQuery] = useState('Iloilo City')
   const [place, setPlace] = useState<Place | null>(null)
-  const [saved, setSaved] = useState<Place[]>(() => { try { const items = JSON.parse(localStorage.getItem('zephyr-weather-places') ?? '[]'); return Array.isArray(items) ? items.slice(0, 6) : [] } catch { return [] } })
+  const [saved, setSaved] = useState<Place[]>(readSavedPlaces)
+  const [locateError, setLocateError] = useState<string | null>(null)
   const { preferences } = useTheme()
-  const places = useQuery({ queryKey: ['geocode', query], queryFn: () => api<{ results: Place[] }>(`/geocode?q=${encodeURIComponent(query)}`), enabled: query.length >= 2 })
+  // Keyed on the debounced value, not the raw one: react-query sees a new key
+  // per character otherwise, so the query flips back to pending on every letter
+  // and the geocoder is called once per keystroke.
+  const search = useDebounced(query)
+  const places = useQuery({ queryKey: ['geocode', search], queryFn: () => api<{ results: Place[] }>(`/geocode?q=${encodeURIComponent(search)}`), enabled: search.length >= 2 })
   const weather = useQuery({ queryKey: ['weather', place, preferences.units], queryFn: () => api<Weather>(`/weather?lat=${place!.latitude}&lon=${place!.longitude}&units=${preferences.units}`), enabled: !!place })
 
   const air = airQualityLabel(weather.data?.air_quality?.european_band)
   const advisory = heatAdvisory(weather.data?.class_suspension?.level)
-  const choose = (next: Place) => { setPlace(next); const updated = [next, ...saved.filter(item => item.latitude !== next.latitude || item.longitude !== next.longitude)].slice(0, 6); setSaved(updated); try { localStorage.setItem('zephyr-weather-places', JSON.stringify(updated)) } catch { /* ignore */ } }
-  const locate = () => navigator.geolocation?.getCurrentPosition(position => choose({ name: 'Your location', latitude: position.coords.latitude, longitude: position.coords.longitude }), () => undefined)
+  const choose = (next: Place) => { setPlace(next); const updated = [next, ...saved.filter(item => !samePlace(item, next))].slice(0, MAX_WEATHER_PLACES); setSaved(updated); writeSavedPlaces(updated) }
+  const forget = (target: Place) => { const updated = saved.filter(item => !samePlace(item, target)); setSaved(updated); writeSavedPlaces(updated) }
+  const locate = () => {
+    setLocateError(null)
+    if (!navigator.geolocation) { setLocateError('This browser cannot report your location — search for your city instead.'); return }
+    navigator.geolocation.getCurrentPosition(
+      position => { setLocateError(null); choose({ name: 'Your location', latitude: position.coords.latitude, longitude: position.coords.longitude }) },
+      // Denied and unavailable need different words: one is a setting the
+      // person can change, the other is not, and "could not get your location"
+      // sends someone hunting through browser settings for a GPS fix that was
+      // never going to arrive.
+      error => setLocateError(error.code === error.PERMISSION_DENIED
+        ? 'Location permission is off for this site — allow it in your browser, or search for your city.'
+        : 'Could not get a fix on your location — search for your city instead.'),
+      // The default is no timeout at all, so a device that never resolves
+      // leaves the button looking inert forever.
+      { timeout: 10000, maximumAge: 300000 },
+    )
+  }
 
   return <main className="app">
     <LargeTitleHeader title="Weather" subtitle="Search any city for live conditions and the week ahead." />
@@ -53,21 +91,46 @@ export function Weather() {
       <span className="lens" aria-hidden />
       <input className="search-input" aria-label="Search city" value={query} onChange={event => { setQuery(event.target.value); setPlace(null) }} placeholder="Search a city…" />
     </div>
-    <div className="weather-tools"><PressableButton variant="secondary" className="small" onClick={locate}>Use my location</PressableButton>{saved.map(item => <PressableButton key={`${item.latitude}:${item.longitude}`} variant="secondary" className="small" onClick={() => choose(item)}>{item.name}</PressableButton>)}</div>
+    {/* The action and the data used to be the same control in the same row, so
+        "Use my location" was indistinguishable from a saved city. They are now
+        separated, and a saved place is a chip that can be removed. */}
+    <div className="weather-tools"><PressableButton variant="secondary" className="small" onClick={locate}>Use my location</PressableButton></div>
+    {saved.length > 0 && (
+      <ul className="place-chips" aria-label="Saved places">
+        {saved.map(item => {
+          const active = !!place && samePlace(place, item)
+          return <li key={`${item.latitude}:${item.longitude}`} className="place-chip" data-active={active || undefined}>
+            <button type="button" className="place-chip-name" aria-current={active || undefined} onClick={() => choose(item)}>{item.name}</button>
+            <button type="button" className="place-chip-remove" aria-label={`Remove ${item.name}`} onClick={() => forget(item)}>×</button>
+          </li>
+        })}
+      </ul>
+    )}
+    {locateError && <div className="stack"><CapsuleToast tone="error">{locateError}</CapsuleToast></div>}
 
     {!place && (
       <ListGroup>
-        {places.data?.results?.length
-          ? places.data.results.map(result => (
-              <ListRow key={`${result.latitude}:${result.longitude}`} label={`${result.name}${result.country ? `, ${result.country}` : ''}`}>
-                <span className="row-actions"><PressableButton className="small" onClick={() => choose(result)}>Use</PressableButton></span>
-              </ListRow>
-            ))
-          : <ListRow label={query.length < 2 ? 'Type at least two letters' : 'No matching places'} />}
+        {/* Four states, checked in order: pending, error, empty, data. Testing
+            `data?.length` first made every keystroke flash "No matching
+            places", because the length is falsy while the fetch is in flight. */}
+        {search.length < 2
+          ? <ListRow label="Type at least two letters" />
+          : places.isPending
+            ? <ListRow label="Searching…" />
+            : places.isError
+              ? <ListRow label="Could not search for places"><span className="row-actions"><PressableButton className="small" onClick={() => places.refetch()}>Try again</PressableButton></span></ListRow>
+              : places.data?.results?.length
+                ? places.data.results.map(result => (
+                    <ListRow key={`${result.latitude}:${result.longitude}`} label={`${result.name}${result.country ? `, ${result.country}` : ''}`}>
+                      <span className="row-actions"><PressableButton className="small" onClick={() => choose(result)}>Use</PressableButton></span>
+                    </ListRow>
+                  ))
+                : <ListRow label="No matching places" />}
       </ListGroup>
     )}
 
     {place && weather.isPending && <Skeleton lines={5} />}
+    {place && weather.isError && <ErrorNote error={weather.error} onRetry={() => weather.refetch()} />}
 
     {place && weather.data && <>
       <GlassSurface className="current-weather">

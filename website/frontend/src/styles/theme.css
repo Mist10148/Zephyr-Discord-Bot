@@ -823,6 +823,26 @@ select.text-input { appearance: auto; }
 /* ---- Weather ---------------------------------------------------------------- */
 .current-weather { padding: 24px; margin-bottom: 18px; }
 .weather-tools { display: flex; flex-wrap: wrap; gap: 8px; margin: -4px 0 14px; }
+/* Saved places. Deliberately not .ios-button: an action and a piece of saved
+   data reading identically is the defect this replaces, so the chip borrows
+   .chip's shape and never its button styling. The active one takes the accent
+   as well as aria-current, since a screen-reader-only cue would leave a sighted
+   user with no way to tell which city is on screen. */
+.place-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: -4px 0 14px; padding: 0; list-style: none; }
+.place-chip {
+  display: inline-flex; align-items: center; overflow: hidden;
+  border-radius: var(--radius-pill); background: var(--surface-2);
+  font-size: 13px; font-weight: 500;
+}
+.place-chip-name { padding: 7px 4px 7px 13px; border: 0; background: none; color: var(--text-muted); font: inherit; cursor: pointer; }
+.place-chip-remove {
+  display: grid; place-items: center; width: 26px; height: 30px;
+  padding: 0 9px 0 3px; border: 0; background: none;
+  color: var(--text-faint); font-size: 15px; line-height: 1; cursor: pointer;
+}
+.place-chip-remove:hover { color: var(--danger); }
+.place-chip[data-active] { background: var(--accent-soft); }
+.place-chip[data-active] .place-chip-name { color: var(--accent-strong); font-weight: 600; }
 .current-weather-head { display: flex; align-items: flex-start; gap: 18px; flex-wrap: wrap; }
 .current-weather-head > .place { flex: 1; min-width: 180px; }
 .current-weather h2 { margin: 0 0 4px; font-size: 24px; line-height: 1.15; letter-spacing: -.015em; }
@@ -1003,7 +1023,8 @@ select.text-input { appearance: auto; }
   .segmented button, .stepper button, .drag-handle,
   .text-input, .search-input, .slider, [cmdk-item],
   .theme-toggle, .nav-link, .palette-trigger, .back-link,
-  .guild-nav .pill, .tab-bar a, .brand
+  .guild-nav .pill, .tab-bar a, .brand,
+  .place-chip-name, .place-chip-remove
 ):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
