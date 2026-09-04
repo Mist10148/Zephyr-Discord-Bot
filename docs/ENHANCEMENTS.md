@@ -41,7 +41,7 @@ running code, and every defect in Phase 13 was confirmed in the source rather th
 | **14** | **Bot functionality gaps** | **Shipped** |
 | **15** | **New bot features** | ✅ **shipped** (15.1–15.8) |
 | **16** | **Discord-side presentation** | ✅ **shipped** (16.1–16.3) |
-| **17** | **Code quality and infrastructure** | **17.3 shipped**, rest not started |
+| **17** | **Code quality and infrastructure** | **17.2–17.4 shipped**, 17.1 partly (engine split; command surface not) |
 
 **Phases 8 to 14 are shipped**, apart from Phase 15's remaining seven features. Next are those,
 then Phase 16 (the embed factory, deliberately after 15 so it migrates ~120 sites once) and
@@ -698,7 +698,7 @@ second edit.
 
 # Phase 17 — Code quality and infrastructure
 
-### 17.1 — Two files hold a third of the codebase · L
+### 17.1 ◐ — Two files hold a third of the codebase · L
 
 [`zephyr/cogs/music.py`](../zephyr/cogs/music.py) is **2,589 lines** and holds `Track`,
 `YTDLSource`, `SongQueue`, `VoiceState`, `NowPlayingView`, twenty `_bridge_*` handlers and
@@ -713,7 +713,37 @@ them is avoidable pain.
 
 **Done when:** no module in `zephyr/` exceeds ~600 lines and the test suite is unchanged.
 
-### 17.2 — Error tracking and uptime, bot side · M
+**Partly shipped, and the unshipped half is named here rather than quietly dropped.**
+
+Done: the engine is out. `zephyr/music/` holds `common.py` (207), `queue.py` (63),
+`sources.py` (403), `state.py` (476) and `views.py` (280) — every one inside the 600-line
+target — and the suite is unchanged: 1,358 tests, no spec edited except one stale path
+string. `zephyr/cogs/music/__init__.py` re-exports the lot, so all twenty-odd
+`from zephyr.cogs.music import …` imports still resolve, and `discord` itself is re-exported
+because three tests patch `zephyr.cogs.music.discord.FFmpegPCMAudio`.
+
+The seam was already in the code: `VoiceState`'s own docstring says it takes *callbacks*
+rather than a back reference to the cog, "so this class still knows nothing about Redis and
+nothing about the button view's permission model". The split follows that boundary exactly.
+
+**Not done: the command surface.** `zephyr/cogs/music/__init__.py` is 1,933 lines — the
+~90 command methods, the listeners and the bridge handlers. Getting *that* under 600 means
+splitting the cog class across mixins. It would work (`CogMeta` collects app commands across
+the MRO), and it is the highest-risk change left in this document for a purely
+readability-shaped gain: ninety commands whose registration, autocompletes and permission
+decorators all depend on being collected correctly. **`zephyr/cogs/weather.py` (1,042) is
+untouched for the same reason.** Both are capped by
+[`tests/test_music_package.py`](../tests/test_music_package.py) at their current size, so
+neither can grow without somebody deciding to raise the ceiling.
+
+Two things about the split are worth knowing before moving anything else.
+`EMPTY_CHANNEL_GRACE_SECONDS` and `list_playlists` stay defined in the cog module because a
+module-level name is read through its *own* module's globals — patching a re-export would
+apply to a name nothing reads, and the test would pass while testing nothing. And the engine
+must never import `zephyr.cogs`; a guard asserts it, because that direction would make the
+two one module again with extra files.
+
+### 17.2 ✅ — Error tracking and uptime, bot side · M
 
 The bot half of 12.7. Once 13.2 exists, attaching Sentry (or equivalent) to the logging
 config covers both processes at once, and 13.1's handler is the natural capture point. A
@@ -738,7 +768,7 @@ the case where the double path bites and it had to be fixed before them, not aft
 for a database already built by `create_all` — a one-time `alembic stamp head` — is in
 [DEPLOYMENT.md](DEPLOYMENT.md), since no test can detect that state.
 
-### 17.4 — No end-to-end test on the frontend · M
+### 17.4 ✅ — No end-to-end test on the frontend · M
 
 The frontend suite covers `lib/` helpers and the `ios/` primitives. Every defect in Phase 8
 is a *wiring* defect — a button with no `onClick`, a query keyed on the wrong value, an error
@@ -751,6 +781,14 @@ class.
 stubbed bridge so no live bot is needed.
 
 **Done when:** a button rendered without a handler fails CI.
+
+**Shipped.** Twenty-three Playwright specs in [`website/frontend/e2e/`](../website/frontend/e2e)
+over the real Flask app serving the real built bundle, plus a fourth CI job. Writing them
+found four real things — a service worker swallowing every route stub, a five-migrations-stale
+development database, a hand-written fixture that diverged from the response shape, and two
+wrong assumptions in the first draft of the specs themselves. The job is the only one with a
+service container, which is an argued exception to `conftest.py`'s no-services rule and is
+recorded there.
 
 ---
 
