@@ -181,6 +181,16 @@ HELP_CATEGORIES = [
         ],
     ),
     HelpCategory(
+        key="greetings",
+        emoji="👋",
+        title="Welcome & Farewell",
+        commands=[
+            HelpEntry("/welcome [channel] [message]", "Set the welcome message (Manage Server)"),
+            HelpEntry("/farewell [channel] [message]", "Set the farewell message (Manage Server)"),
+            HelpEntry("/greeting-preview", "See how your greetings will look"),
+        ],
+    ),
+    HelpCategory(
         key="moderation",
         emoji="🛡️",
         title="Moderation",

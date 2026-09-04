@@ -18,7 +18,7 @@
 
 Zephyr is a modular, multi-purpose Discord bot built for community servers. It bundles a weather service, a Groovy-style music player, a Google Gemini AI chat companion, text-to-speech, and a small Flask companion website — all organized into clean, self-contained cogs.
 
-The bot is written in Python 3.13 using `discord.py`, exposes **98 slash commands** (including aliases) and **13 prefix commands**, and runs on Windows, macOS, or Linux. It can be run locally, in Docker, or deployed to cloud platforms such as Render, Heroku, AWS, and Vercel.
+The bot is written in Python 3.13 using `discord.py`, exposes **101 slash commands** (including aliases) and **13 prefix commands**, and runs on Windows, macOS, or Linux. It can be run locally, in Docker, or deployed to cloud platforms such as Render, Heroku, AWS, and Vercel.
 
 ---
 
@@ -203,7 +203,7 @@ the dashboard.
 
 ## 7. Command Inventory
 
-### 7.1 Slash commands (98 total, including aliases)
+### 7.1 Slash commands (101 total, including aliases)
 
 | Category | Commands |
 |----------|----------|
@@ -218,6 +218,7 @@ the dashboard.
 | **Chat & AI** | `/prompt`, `/settings`, `/output`, `/token`, `/image-gen`, `/generate` |
 | **TTS & Voice** | `/say`, `/language`, `/disconnect` |
 | **Reminders** | `/remindme`, `/reminders`, `/reminder-cancel` |
+| **Welcome & Farewell** | `/welcome`, `/farewell`, `/greeting-preview` |
 | **Moderation** | `/warn`, `/timeout`, `/untimeout`, `/kick`, `/ban`, `/unban`, `/purge`, `/cases`, `/case`, `/reason`, `/modlog` |
 | **Privacy** | `/export-my-data`, `/delete-my-data` |
 | **Help** | `/help`, `/helpmusic`, `/helpchat`, `/helpweather` |
@@ -467,7 +468,7 @@ Deliberate departures from the plan are recorded in
 
 ## Appendix: Counts at a Glance
 
-- **Slash commands:** 98 (including aliases)
+- **Slash commands:** 101 (including aliases)
 - **Prefix commands:** 13
 - **Cogs:** 6
 - **Entry points:** 2 (`run_bot.py`, `run_web.py`)
