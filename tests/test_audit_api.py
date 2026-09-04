@@ -128,3 +128,36 @@ class TestActorNames:
         body = client.get("/api/v1/guilds/1/audit").get_json()
         assert body["actors"] == {}
         assert calls == []
+
+
+class TestFilterQuery:
+    """F4's API half: allow-listed query parameters, not free text."""
+
+    def _seed(self, db_url):
+        from zephyr.db import audit
+
+        audit.record(guild_id="1", actor_id="900000000000000001", action="player.volume", source="web", database_url=db_url)
+        audit.record(guild_id="1", actor_id="900000000000000002", action="settings.update", source="web", database_url=db_url)
+
+    def test_action_prefix_narrows_the_page(self, client, logged_in, fake_redis, db_url):
+        self._seed(db_url)
+        body = client.get("/api/v1/guilds/1/audit?action=player").get_json()
+        assert [entry["action"] for entry in body["entries"]] == ["player.volume"]
+
+    def test_actor_id_must_be_an_id(self, client, logged_in, fake_redis, db_url):
+        response = client.get("/api/v1/guilds/1/audit?actor_id=not-an-id")
+        assert response.status_code == 400
+        assert response.get_json()["error"]["code"] == "invalid_query"
+
+    def test_source_is_allow_listed(self, client, logged_in, fake_redis, db_url):
+        # Anything else is a client bug, not something to hand to a WHERE.
+        assert client.get("/api/v1/guilds/1/audit?source=web").status_code == 200
+        response = client.get("/api/v1/guilds/1/audit?source=carrier-pigeon")
+        assert response.status_code == 400
+
+    def test_an_over_long_action_is_truncated_not_rejected(self, client, logged_in, fake_redis, db_url):
+        # A 4KB LIKE pattern is a table scan; a truncated one is simply a filter
+        # that matches nothing, which is the honest answer to a nonsense query.
+        response = client.get(f"/api/v1/guilds/1/audit?action={'x' * 500}")
+        assert response.status_code == 200
+        assert response.get_json()["entries"] == []

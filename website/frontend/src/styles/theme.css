@@ -501,6 +501,13 @@ a.list-row:hover, button.list-row:hover { background: var(--surface-2); text-dec
 .command-section { scroll-margin-top: 116px; }
 .command-aliases { color: var(--text-faint); }
 
+/* The audit filters. A row rather than a form: nothing is submitted, each
+   change is its own query. Capped to the row measure so it lines up with the
+   list it filters. `.field` already supplies the stacked label and its type, so
+   only the row itself and the control width are new here. */
+.audit-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; max-width: var(--measure-rows); margin-bottom: 16px; }
+.audit-filters select { min-width: 150px; }
+
 /* ---- Toggle ----------------------------------------------------------------- */
 .toggle {
   display: flex; justify-content: flex-start; flex: none;
