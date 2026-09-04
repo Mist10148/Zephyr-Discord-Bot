@@ -13,7 +13,7 @@ Zephyr started life as a single 3,000-line script and was rebuilt into a maintai
 
 - **Weather** — current conditions, forecasts, air quality, typhoon alerts, and a heat-index
   "class suspension" predictor. Every weather command works as both a slash command and a classic
-  prefix command, and `/setlocation` gives each person their own default city.
+  `z!` prefix command, and `/setlocation` gives each person their own default city.
 - **Weather subscriptions** — daily digests on a schedule you choose, plus severe-weather and
   class-suspension watches that stay quiet until there is something worth saying.
 - **Music** — a Groovy-style player streaming from **YouTube** and **Spotify**, with a queue,
@@ -88,7 +88,7 @@ Zephyr-Discord-Bot/
 
 ## 🤖 Commands
 
-### 🌦️ Weather  *(available as both `/slash` and prefix commands)*
+### 🌦️ Weather  *(available as both `/slash` and `z!` prefix commands)*
 | Command | Description |
 |---------|-------------|
 | `/weather <city>` | Current weather, air quality & precipitation |

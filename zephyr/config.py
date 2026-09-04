@@ -72,6 +72,17 @@ DB_AUTO_CREATE: bool | None = (
     else _DB_AUTO_CREATE_RAW.lower() in {"1", "true", "yes"}
 )
 
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+# Read here rather than in zephyr/core/logging.py so every environment-driven
+# value lives in one file, matching the rest of this module.
+LOG_LEVEL = (os.getenv("LOG_LEVEL") or "INFO").upper()
+# Plain lines locally, JSON in the cloud, because a log platform can index a
+# level and a logger name but not prose. RENDER is the same signal TRUST_PROXY
+# already keys off.
+LOG_FORMAT = (os.getenv("LOG_FORMAT") or ("json" if os.getenv("RENDER") else "plain")).lower()
+
 # Optional custom path for the local settings file (useful for mounted volumes).
 SETTINGS_PATH = os.getenv("SETTINGS_PATH") or str(PROJECT_ROOT / "settings.json")
 
@@ -130,6 +141,15 @@ DISCORD_INVITE_PERMISSIONS = os.getenv("DISCORD_INVITE_PERMISSIONS", "3197952")
 # Single source of truth for the cog list: the bot loads these, and the web tier
 # reports them as a guild's default enabled_cogs without importing the client.
 ENABLED_COGS = ("weather", "weather_alerts", "music", "voice_tts", "chat", "help")
+
+# The prefix for the 13 classic text commands.
+#
+# It was "/", which meant every message beginning with a slash was *also* parsed
+# as a prefix command: a mistyped "/pley" raised CommandNotFound on a code path
+# with no handler, and the 13 real prefix commands were indistinguishable from
+# the 75 slash commands in the client UI.  "z!" is unambiguous and unlikely to
+# collide with another bot in the same server.
+COMMAND_PREFIX = os.getenv("COMMAND_PREFIX") or "z!"
 
 # The dashboard needs an OAuth application *and* Redis (sessions are shared
 # across gunicorn workers).  Without all three, only the public weather site runs.

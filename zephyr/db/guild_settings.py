@@ -24,6 +24,7 @@ WRITABLE_COLUMNS = (
     "default_volume",
     "dj_role_id",
     "music_channel_ids",
+    "tts_language",
 )
 
 _COLUMNS = (
@@ -35,6 +36,7 @@ _COLUMNS = (
     Guild.dj_role_id,
     Guild.music_channel_ids,
     Guild.enabled_cogs,
+    Guild.tts_language,
 )
 
 
@@ -87,6 +89,23 @@ def read_dj_role_id(guild_id: str, *, database_url: str | None = None) -> str | 
         return connection.execute(
             select(Guild.dj_role_id).where(Guild.id == str(guild_id))
         ).scalar_one_or_none()
+
+
+def read_tts_languages(*, database_url: str | None = None) -> dict[str, str]:
+    """Every guild's TTS language, keyed by guild id.
+
+    Same shape and the same reason as ``read_dj_roles``: /say reads this on
+    every invocation, and a query per invocation would put the database on the
+    critical path of speaking a sentence.  Guilds with no override are absent
+    rather than present-and-null, so a caller's ``.get(id, default)`` is the
+    whole fallback.
+    """
+    engine = get_engine(database_url)
+    with engine.connect() as connection:
+        rows = connection.execute(
+            select(Guild.id, Guild.tts_language).where(Guild.tts_language.is_not(None))
+        ).mappings().all()
+    return {str(row["id"]): str(row["tts_language"]) for row in rows}
 
 
 def read_dj_roles(*, database_url: str | None = None) -> dict[str, str]:

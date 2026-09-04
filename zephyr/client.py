@@ -13,14 +13,18 @@ import time
 import discord
 from discord.ext import commands, tasks
 
-from zephyr.config import ENABLED_COGS, REDIS_URL
+from zephyr.config import COMMAND_PREFIX, ENABLED_COGS, REDIS_URL
 from zephyr.core.opus_loader import load_opus
+from zephyr.core.errors import report as report_command_error
 from zephyr.core.ffmpeg import FFMPEG_PATH
 from zephyr.services import bridge
 from zephyr.services.bridge import write_guild_snapshot
 from zephyr.services.gemini import generate_gemini_response, send_response
 from zephyr.services.storage import storage
+from zephyr.core.logging import get_logger
 
+
+log = get_logger(__name__)
 # Cog extensions to load (every command lives in one of these).  The names come
 # from config so the web tier can report the same list without importing this
 # module -- importing it would drag in the storage singleton.
@@ -37,17 +41,46 @@ async def type_print(text, delay=0.03):
 
 class ZephyrBot(commands.Bot):
     def __init__(self):
-        intents = discord.Intents.all()
+        # Enumerated rather than Intents.all(). `all()` requests every
+        # privileged intent, including presences and typing, which this bot
+        # never reads -- and each one has to be justified to Discord for
+        # verification past 100 guilds. What is actually used:
+        #
+        #   guilds          -- guild/channel/role caches, the snapshot, pickers
+        #   members         -- resolving an audit actor and a DJ role holder
+        #   message_content -- the AI answers mentions and replies
+        #   voice_states    -- the empty-channel listener and the player
+        #   messages        -- on_message at all
+        intents = discord.Intents.none()
+        intents.guilds = True
+        intents.members = True
+        intents.message_content = True
+        intents.voice_states = True
+        intents.guild_messages = True
+        intents.dm_messages = True
+
         super().__init__(
-            command_prefix="/",
+            # Not when_mentioned_or: a mention is already the AI's trigger in
+            # on_message, so accepting it as a prefix too would make
+            # "@Zephyr weather" both ask the AI and run the weather command.
+            command_prefix=COMMAND_PREFIX,
             intents=intents,
-            help_command=commands.DefaultHelpCommand(no_category="General"),
+            # None, not DefaultHelpCommand: zephyr/cogs/help.py provides the
+            # real help surface, and registering both meant two implementations
+            # of /help with one of them unstyled.
+            help_command=None,
         )
         self._synced_count = 0
         self._started_at = time.time()
         self._command_stream = None
 
     async def setup_hook(self):
+        # Every slash command's errors, in one place. Assigned rather than
+        # decorated: `self.tree` is the default CommandTree that
+        # commands.Bot.__init__ built, so there is no module-level tree object
+        # to hang a @tree.error decorator on.
+        self.tree.on_error = self._on_app_command_error
+
         # Voice prerequisites
         load_opus()
         print(f"[Startup] Using FFmpeg: {FFMPEG_PATH}")
@@ -58,14 +91,14 @@ class ZephyrBot(commands.Bot):
                 await self.load_extension(ext)
                 print(f"✅ Loaded {ext}")
             except Exception as e:
-                print(f"⚠️ Failed to load {ext}: {e}")
+                log.exception("Failed to load extension %s", ext)
 
         # Register slash commands with Discord
         try:
             synced = await self.tree.sync()
             self._synced_count = len(synced)
         except Exception as e:
-            print(f"⚠️ Failed to sync commands: {e}")
+            log.exception("Failed to sync the command tree")
 
         if REDIS_URL:
             self._presence_loop.start()
@@ -82,7 +115,7 @@ class ZephyrBot(commands.Bot):
             try:
                 await asyncio.to_thread(bridge.write_presence, {"online": False})
             except Exception as e:
-                print(f"⚠️ Failed to publish the shutdown heartbeat: {e}")
+                log.exception("Failed to publish the shutdown heartbeat")
         storage.close()
         await super().close()
 
@@ -110,7 +143,7 @@ class ZephyrBot(commands.Bot):
                 },
             )
         except Exception as e:
-            print(f"⚠️ Failed to publish presence: {e}")
+            log.exception("Failed to publish presence")
 
     @_presence_loop.before_loop
     async def _before_presence_loop(self):
@@ -134,7 +167,7 @@ class ZephyrBot(commands.Bot):
         except Exception as e:
             # Almost always a dropped connection.  Discard the stream so the next
             # tick resubscribes rather than retrying a dead socket forever.
-            print(f"⚠️ Bridge listener error: {e}")
+            log.exception("Bridge listener failed; reopening the stream")
             self._close_command_stream()
             await asyncio.sleep(5)
             return
@@ -166,6 +199,44 @@ class ZephyrBot(commands.Bot):
             except Exception:
                 pass
 
+    async def _on_app_command_error(self, interaction: discord.Interaction, error: Exception):
+        """Every slash command's last line of defence.
+
+        Before this, an unhandled exception in any of the 75 slash commands
+        produced "The application did not respond" and nothing in any log.
+        """
+        await report_command_error(interaction, error)
+
+    async def on_command_error(self, ctx: commands.Context, error: Exception):
+        """The same for the prefix surface.
+
+        Replaces MusicCog.cog_command_error, which sent a red embed containing
+        str(error) for any failure -- no logging, and no distinction between a
+        cooldown and a crash.
+        """
+        from zephyr.core.errors import GENERIC, new_reference, user_facing_message
+
+        message = user_facing_message(error)
+        if message == "":
+            return
+        if message is None:
+            reference = new_reference()
+            log.error(
+                "Unhandled error in prefix command %s",
+                ctx.command.qualified_name if ctx.command else "unknown",
+                exc_info=error,
+                extra={
+                    "reference": reference,
+                    "guild_id": str(ctx.guild.id) if ctx.guild else None,
+                    "user_id": str(ctx.author.id),
+                },
+            )
+            message = GENERIC.format(reference=reference)
+        try:
+            await ctx.send(message)
+        except discord.HTTPException:
+            log.warning("Could not deliver an error message for %s", ctx.command)
+
     def _bridge_actions(self) -> dict:
         """Every action any loaded cog serves, plus the bot's own.
 
@@ -180,7 +251,7 @@ class ZephyrBot(commands.Bot):
                 try:
                     actions.update(provider())
                 except Exception as e:
-                    print(f"⚠️ Could not collect bridge actions from {cog.__class__.__name__}: {e}")
+                    log.exception("Could not collect bridge actions from %s", cog.__class__.__name__)
         return actions
 
     async def _dispatch_command(self, command: dict):
@@ -204,7 +275,7 @@ class ZephyrBot(commands.Bot):
                     bridge.publish_response, command_id, ok=False, error=str(e) or e.__class__.__name__
                 )
             except Exception as publish_error:
-                print(f"⚠️ Could not answer bridge command {command_id}: {publish_error}")
+                log.exception("Could not answer bridge command %s", command_id)
 
     async def _bridge_guild_meta(self, guild, actor_id, args):
         """Text channels and roles, for the dashboard's pickers.
@@ -292,7 +363,7 @@ class ZephyrBot(commands.Bot):
             ]
             await asyncio.to_thread(write_guild_snapshot, snapshot)
         except Exception as e:
-            print(f"⚠️ Failed to publish the guild snapshot: {e}")
+            log.exception("Failed to publish the guild snapshot")
 
     async def on_ready(self):
         await type_print(f"{self.user} has connected to Discord!")

@@ -12,7 +12,11 @@ from zephyr import config
 # Fail early with a clear message if the OpenWeather key is missing.
 config.validate_web_config()
 
-from website.app import app
+from zephyr.core.logging import configure_logging  # noqa: E402
+
+configure_logging(service="web")
+
+from website.app import app  # noqa: E402
 
 
 def main():

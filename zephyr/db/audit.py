@@ -18,7 +18,10 @@ from sqlalchemy import desc, insert, select
 
 from zephyr.db.models import AuditLog
 from zephyr.db.session import get_engine
+from zephyr.core.logging import get_logger
 
+
+log = get_logger(__name__)
 # Keeps one oversized payload from becoming an unbounded row.  JSON columns have
 # no length limit, and a queue snapshot or an error blob can be large.
 MAX_PAYLOAD_CHARS = 4000
@@ -53,7 +56,7 @@ def record(
                 )
             )
     except Exception as exc:
-        print(f"[Audit] Could not record {action!r}: {exc}")
+        log.exception("Could not record audit action %r", action)
 
 
 def read(

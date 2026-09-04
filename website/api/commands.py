@@ -8,8 +8,11 @@ from flask import current_app, jsonify
 from website.api import api
 from zephyr.services import bridge
 from zephyr.utils.help_data import HELP_CATEGORIES
+from zephyr.core.logging import get_logger
 
 
+
+log = get_logger(__name__)
 def _parse(command: str) -> tuple[list[str], list[dict]]:
     head = command.split("<", 1)[0].split("[", 1)[0].strip()
     aliases = [part.strip() for part in head.split("  /  ")]
@@ -54,7 +57,7 @@ def status():
         try:
             presence = bridge.read_presence(url=redis_url)
         except Exception as exc:
-            print(f"[Status] Could not read presence: {exc}")
+            log.exception("Could not read presence")
 
     if not presence or not presence.get("online"):
         return jsonify({"bot": {"online": False, "guild_count": None, "latency_ms": None,
