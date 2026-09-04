@@ -19,6 +19,7 @@ somebody can check it is complete:
 | `ai_messages` | `author_id` | Their half of a conversation. |
 | `ai_conversations` | -- | Keyed on the *channel*, so shared. Never deleted for one person. |
 | `reminders` | `user_id` | Pending and delivered reminders. |
+| `mod_cases` | `target_id` | Moderation actions taken against them. Exported without the moderator's id, and retained -- see below. |
 | Redis sessions | -- | Keyed on the session id. See `SESSION_CAVEAT`. |
 | Redis quota counters | `user_id` | Today's token spend. |
 | In-process AI buffer | guild / DM | Cleared by the caller; see `zephyr.services.gemini.reset_conversation`. |
@@ -29,6 +30,16 @@ somebody can check it is complete:
 channel and holds several people's messages; deleting the row to erase one
 person's lines would destroy everybody else's. Their `ai_messages` go, and the
 conversation stays.
+
+**It does not delete moderation cases, and it does not name the moderator.**
+Two separate decisions. A case is a server's record of an action it took, and a
+member who could erase their own warning history by running one command has
+been handed a way to launder it -- so cases are retained, on the same
+legitimate-interest reasoning as the audit log. They *are* exported, because
+somebody is entitled to see what a server has recorded about them; but
+``moderator_id`` is omitted from that export. Naming the moderator who banned
+somebody to the person they banned invites retaliation, and it is not
+information the subject needs in order to check the record is accurate.
 
 **It does not delete the audit log's substance.** `audit_log` is a
 security-relevant record of who changed a server's settings, and a server owner
@@ -57,6 +68,7 @@ from zephyr.db.models import (
     AIMessage,
     AuditLog,
     BotUser,
+    ModCase,
     Playlist,
     PlaylistTrack,
     Reminder,
@@ -85,6 +97,7 @@ RETENTION = {
     "AI conversations": "Recent messages per channel, so replies have context. Erasable per channel with /forget, or entirely with /delete-my-data.",
     "Server audit log": "Who changed a server's settings. Retained for the server owner; your id is anonymised if you delete your data.",
     "Reminders": "What you asked to be reminded about and when, kept until it fires or you cancel it.",
+    "Moderation record": "Warnings, timeouts, kicks and bans a server recorded against you. Retained for that server; the moderator's identity is never disclosed to you.",
     "AI usage counters": "Tokens spent today, for rate limiting. Expires automatically within 48 hours.",
     "Sessions": SESSION_CAVEAT,
 }
@@ -144,6 +157,16 @@ def export(user_id: str, *, database_url: str | None = None) -> dict:
             .order_by(AIMessage.id)
         ).mappings().all()
 
+        # No moderator_id: see "It does not delete moderation cases" above.
+        mod_rows = connection.execute(
+            select(
+                ModCase.guild_id, ModCase.case_number, ModCase.action,
+                ModCase.reason, ModCase.duration_seconds, ModCase.created_at,
+            )
+            .where(ModCase.target_id == user_id)
+            .order_by(ModCase.id)
+        ).mappings().all()
+
         reminder_rows = connection.execute(
             select(
                 Reminder.id, Reminder.guild_id, Reminder.channel_id, Reminder.message,
@@ -165,6 +188,7 @@ def export(user_id: str, *, database_url: str | None = None) -> dict:
         "audit_entries": [_serialise(row) for row in audit_rows],
         "ai_messages": [_serialise(row) for row in messages],
         "reminders": [_serialise(row) for row in reminder_rows],
+        "moderation_record": [_serialise(row) for row in mod_rows],
         "notes": {
             "sessions": SESSION_CAVEAT,
             # Said out loud: an export that silently omitted these would look
@@ -173,6 +197,11 @@ def export(user_id: str, *, database_url: str | None = None) -> dict:
                 "Only messages recorded with an author are listed. Messages written "
                 "before Zephyr recorded authorship cannot be attributed to anyone and "
                 "are not included here or in a deletion."
+            ),
+            "moderation_record": (
+                "A server's record of moderation actions is retained for that server "
+                "and is not deleted with the rest of your data. The moderator's "
+                "identity is not disclosed."
             ),
             "shared_conversations": (
                 "A conversation belongs to a channel and holds several people's "

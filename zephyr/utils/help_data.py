@@ -162,12 +162,42 @@ HELP_CATEGORIES = [
         ],
     ),
     HelpCategory(
+        key="reminders",
+        emoji="⏰",
+        title="Reminders",
+        commands=[
+            HelpEntry("/remindme <when> <message>", "Remind you later — e.g. 20m, 2h, 1h30m, 3 days"),
+            HelpEntry("/reminders", "List your pending reminders"),
+            HelpEntry("/reminder-cancel <id>", "Cancel one of your reminders"),
+        ],
+    ),
+    HelpCategory(
+        key="moderation",
+        emoji="🛡️",
+        title="Moderation",
+        commands=[
+            HelpEntry("/warn <member> <reason>", "Warn a member and record a case"),
+            HelpEntry("/timeout <member> <duration>", "Time a member out — e.g. 10m, 2h, 1d"),
+            HelpEntry("/untimeout <member>", "Lift a member's timeout"),
+            HelpEntry("/kick <member>", "Kick a member"),
+            HelpEntry("/ban <user>", "Ban a user, whether or not they are here"),
+            HelpEntry("/unban <user id>", "Lift a ban"),
+            HelpEntry("/purge <amount> [member]", "Bulk-delete recent messages"),
+            HelpEntry("/cases <member>", "A member's moderation history"),
+            HelpEntry("/case <number>", "Look up one case"),
+            HelpEntry("/reason <number> <reason>", "Add or replace a case's reason"),
+            HelpEntry("/modlog [channel]", "Choose where cases are posted"),
+        ],
+    ),
+    HelpCategory(
         key="utility",
         emoji="ℹ️",
         title="Utility & Info",
         commands=[
             HelpEntry("/ping", "Show the bot's latency"),
             HelpEntry("/use", "Link to the web app"),
+            HelpEntry("/export-my-data", "Send you everything Zephyr holds about you"),
+            HelpEntry("/delete-my-data", "Erase everything erasable"),
         ],
     ),
     HelpCategory(

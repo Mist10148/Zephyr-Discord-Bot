@@ -396,3 +396,54 @@ class Reminder(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class ModCase(Base):
+    """One moderation action, numbered per guild.
+
+    ``case_number`` is not the primary key and duplicates it on purpose.  A
+    moderator says "case 12", not "case 4,178", and a global id would leak how
+    busy every other server is.  The unique constraint on
+    ``(guild_id, case_number)`` is what makes the allocation safe: two
+    moderators acting in the same second both read the same maximum, and the
+    loser of that race is rejected by the database and retries rather than
+    silently overwriting.
+
+    Deliberately separate from ``audit_log``.  The audit log records *changes to
+    a server's configuration*, keyed on the actor, and is fail-soft because the
+    change has already happened by the time it is written.  A moderation case is
+    the *record of the action itself*: it is what ``/cases`` reads back, what a
+    reason is later attached to, and losing one would mean a warning that
+    provably never happened.  So this one is not fail-soft.
+
+    ``target_tag`` stores the name as it was.  A banned account cannot be
+    resolved from the gateway afterwards, and a case list of bare snowflakes is
+    unreadable to the person who has to act on it.
+    """
+
+    __tablename__ = "mod_cases"
+    __table_args__ = (
+        # The allocation guard, and the index /cases and /case read through --
+        # a separate index on the same two columns would be redundant.
+        UniqueConstraint("guild_id", "case_number", name="uq_mod_cases_guild_id_case_number"),
+        # "What has this person done before", which is the question a moderator
+        # actually asks before deciding what to do.
+        Index("ix_mod_cases_guild_id_target_id", "guild_id", "target_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    guild_id: Mapped[str] = mapped_column(String, nullable=False)
+    case_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    action: Mapped[str] = mapped_column(String, nullable=False)
+    target_id: Mapped[str] = mapped_column(String, nullable=False)
+    # The display name at the time of the action; see the class docstring.
+    target_tag: Mapped[str | None] = mapped_column(String, nullable=True)
+    moderator_id: Mapped[str] = mapped_column(String, nullable=False)
+    # NULL means no reason was given, which is different from "" and worth
+    # distinguishing: /reason exists to fill exactly this in afterwards.
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Only a timeout has one.
+    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

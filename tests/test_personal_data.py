@@ -13,6 +13,7 @@ from sqlalchemy import select
 
 from zephyr.db import ai as ai_db
 from zephyr.db import audit, personal_data, playlists
+from zephyr.db import mod_cases as mod_repo
 from zephyr.db import reminders as reminders_repo
 from zephyr.db.models import AIMessage, AuditLog, Playlist, PlaylistTrack
 from zephyr.db.session import get_engine
@@ -46,6 +47,10 @@ def seeded(db_url):
             },
             database_url=db_url,
         )
+    mod_repo.record(
+        guild_id="1", action="warn", target_id=ME, moderator_id=SOMEBODY_ELSE,
+        reason="told off", database_url=db_url,
+    )
     return db_url
 
 
@@ -61,6 +66,7 @@ class TestExport:
         assert [entry["action"] for entry in payload["audit_entries"]] == ["settings.update"]
         assert any("my question" in message["content"] for message in payload["ai_messages"])
         assert [row["message"] for row in payload["reminders"]] == ["my reminder"]
+        assert [row["reason"] for row in payload["moderation_record"]] == ["told off"]
 
     def test_it_contains_nobody_elses_data(self, seeded):
         payload = personal_data.export(ME, database_url=seeded)
@@ -69,6 +75,19 @@ class TestExport:
         assert "their question" not in serialised
         assert "their reminder" not in serialised
         assert "Cebu" not in serialised
+
+    def test_a_moderation_record_never_names_the_moderator(self, seeded):
+        """Naming the moderator who acted to the person they acted on invites
+        retaliation, and it is not needed to check the record is accurate.
+
+        SOMEBODY_ELSE is the moderator here, so the general "nobody else's
+        data" assertion above would pass for the wrong reason if this column
+        leaked -- it is asserted on its own.
+        """
+        record = personal_data.export(ME, database_url=seeded)["moderation_record"]
+
+        assert record
+        assert all("moderator_id" not in entry for entry in record)
 
     def test_it_states_what_it_cannot_include(self, seeded):
         """An export that silently omitted these would look complete and not
@@ -132,6 +151,13 @@ class TestDelete:
         # Only the other person's track survives.
         assert titles == ["B"]
 
+    def test_a_moderation_record_survives_a_deletion(self, seeded):
+        """A member who could erase their own warning history by running one
+        command has been handed a way to launder it."""
+        personal_data.delete(ME, database_url=seeded)
+
+        assert mod_repo.count_for_target("1", ME, database_url=seeded) == 1
+
     def test_the_audit_log_is_anonymised_rather_than_deleted(self, seeded):
         """A security-relevant record of who changed a server's settings, which
         the server owner has a legitimate interest in keeping. Removing the
@@ -183,6 +209,7 @@ class TestTheRetentionTable:
             "Dashboard sign-ins", "Weather defaults", "Saved playlists",
             "AI conversations", "Server audit log", "AI usage counters", "Sessions",
             "Reminders",
+            "Moderation record",
         }
 
     def test_the_session_caveat_is_honest_about_the_limitation(self):

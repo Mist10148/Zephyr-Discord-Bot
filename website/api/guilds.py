@@ -41,6 +41,9 @@ DEFAULT_SETTINGS = {
     # is the historical behaviour and stays the default.
     "ai_channel_mode": None,
     "ai_channel_ids": [],
+    # Where moderation cases are posted. None means the modlog is off; cases
+    # are still recorded and readable with /case.
+    "modlog_channel_id": None,
 }
 
 
@@ -185,6 +188,7 @@ CLEANERS = {
     "ai_channel_ids": _clean_snowflake_list,
     "dj_role_id": _clean_snowflake,
     "music_channel_ids": _clean_snowflake_list,
+    "modlog_channel_id": _clean_snowflake,
 }
 
 
