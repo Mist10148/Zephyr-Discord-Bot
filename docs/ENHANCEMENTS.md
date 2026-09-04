@@ -32,7 +32,7 @@ running code, and every defect in Phase 13 was confirmed in the source rather th
 | Phase | Theme | Status |
 |---|---|---|
 | A–F | Surface unused API data, code-splitting, PWA, a11y basics | Shipped, except **A3**, **F4**, **E5** |
-| **8** | **UX correctness — dead and misbehaving controls** | **Not started** |
+| **8** | **UX correctness — dead and misbehaving controls** | **Shipped** |
 | **9** | **Feedback layer and display vocabulary** | **Not started** |
 | **10** | **Layout, density and loading states** | **Not started** |
 | **11** | **Navigation and information architecture** | **Not started** |
@@ -43,8 +43,15 @@ running code, and every defect in Phase 13 was confirmed in the source rather th
 | **16** | **Discord-side presentation** | **Not started** |
 | **17** | **Code quality and infrastructure** | **17.3 shipped**, rest not started |
 
-**Do Phase 8 first**, then **13.1 and 13.2**. Phase 8 is bugs a user hits on the two
-most-used screens; 13.1 and 13.2 are why every bot bug after them is hard to find.
+**Phase 8 is shipped.** Next is **13.1 and 13.2** — they are why every bot bug after
+them is hard to find.
+
+One note carried out of Phase 8 for the phases that follow: the frontend suite now has a
+jsdom baseline and a route harness (`test/setup.ts`, `test/helpers.tsx`), so a route-level spec
+is a few lines rather than a morning. Every Phase 8 spec was checked by reintroducing the
+defect and confirming the spec fails; two did not at first, and both near-misses were
+caused by the same thing — asserting on a substring or on a batched render rather than on
+the exact requests made. Falsify new specs the same way.
 
 ### Baseline, as audited
 
@@ -63,7 +70,7 @@ Dead controls and controls that behave wrongly. None of these need a design deci
 has one correct answer. All six are S-sized and concentrated on `/weather` and
 `/g/:id/music`.
 
-### 8.1 — The queue's "Play" button does nothing · S · ✅
+### 8.1 — The queue's "Play" button does nothing · S · ✅ · **DONE**
 
 [`routes/GuildMusic.tsx`](../website/frontend/src/routes/GuildMusic.tsx) — `QueueRow`
 renders `<PressableButton className="small soft">Play</PressableButton>` with **no
@@ -76,7 +83,7 @@ bridge cannot perform.
 
 **Done when:** no button in the queue row is inert, and its label matches its effect.
 
-### 8.2 — Effects sliders fire one mutation per drag step · S · ✅
+### 8.2 — Effects sliders fire one mutation per drag step · S · ✅ · **DONE**
 
 [`routes/GuildMusic.tsx`](../website/frontend/src/routes/GuildMusic.tsx) — the bass-boost
 and pitch sliders call `run('effects', …)` directly from `onChange`. Dragging pitch across
@@ -91,7 +98,7 @@ row and `ProgressBar` both do this correctly. Copy them.
 **Done when:** one drag produces one request, and each effects row shows its current numeric
 value the way the volume row shows `50%`.
 
-### 8.3 — Geocode results show "No matching places" while still loading · S · ✅
+### 8.3 — Geocode results show "No matching places" while still loading · S · ✅ · **DONE**
 
 [`routes/Weather.tsx`](../website/frontend/src/routes/Weather.tsx) — the results ternary
 tests `places.data?.results?.length`, which is falsy during the fetch, so **every keystroke
@@ -104,7 +111,7 @@ new key per character.
 **Done when:** typing a city goes loading → results and never shows a false empty state,
 and the network panel shows roughly one request per pause rather than per keystroke.
 
-### 8.4 — "Use my location" fails silently · S · ✅
+### 8.4 — "Use my location" fails silently · S · ✅ · **DONE**
 
 [`routes/Weather.tsx`](../website/frontend/src/routes/Weather.tsx) — `locate()` passes
 `() => undefined` as the geolocation error callback. Deny the browser permission, or let it
@@ -117,7 +124,7 @@ from *unavailable* ("Could not get a fix — search for your city instead"). Pas
 
 **Done when:** denying permission produces a visible, actionable message.
 
-### 8.5 — The weather page has no error state · S · ✅
+### 8.5 — The weather page has no error state · S · ✅ · **DONE**
 
 [`routes/Weather.tsx`](../website/frontend/src/routes/Weather.tsx) — the forecast block is
 gated on `place && weather.data` and `weather.isError` is never read, so a failed
@@ -131,7 +138,7 @@ needs the same treatment.
 
 **Done when:** a forced 500 on `/weather` shows a message and a working Try again.
 
-### 8.6 — Saved weather places cannot be removed · S · ✅
+### 8.6 — Saved weather places cannot be removed · S · ✅ · **DONE**
 
 [`routes/Weather.tsx`](../website/frontend/src/routes/Weather.tsx) — `choose()` writes up to
 six places into `localStorage['zephyr-weather-places']` and nothing ever deletes them. They
