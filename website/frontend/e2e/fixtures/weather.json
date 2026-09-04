@@ -1,0 +1,519 @@
+{
+  "air_quality": {
+    "european_aqi": 32,
+    "european_band": "fair",
+    "nitrogen_dioxide": 6.1,
+    "ozone": 44.0,
+    "pm10": 18.2,
+    "pm2_5": 9.4,
+    "us_aqi": 41,
+    "us_band": "good"
+  },
+  "class_suspension": {
+    "level": "possible",
+    "reason": "Dangerous Heat"
+  },
+  "current": {
+    "description": "Partly cloudy",
+    "feels_like": 38.4,
+    "group": "partly-cloudy",
+    "humidity": 74,
+    "icon": "cloud.sun",
+    "precipitation": 0.0,
+    "temperature": 31.2,
+    "time_epoch": 1788570000,
+    "time_local": "2026-09-05T09:00",
+    "weather_code": 2,
+    "wind_speed": 12.6
+  },
+  "daily": [
+    {
+      "description": "Slight rain",
+      "feels_like_max": 40,
+      "feels_like_min": 27,
+      "icon": "cloud.rain",
+      "precipitation_probability": 60,
+      "temp_max": 33,
+      "temp_min": 25,
+      "time_epoch": 1788537600,
+      "time_local": "2026-09-05",
+      "weather_code": 61,
+      "wind_speed_max": 22
+    },
+    {
+      "description": "Partly cloudy",
+      "feels_like_max": 39,
+      "feels_like_min": 27,
+      "icon": "cloud.sun",
+      "precipitation_probability": 20,
+      "temp_max": 32,
+      "temp_min": 25,
+      "time_epoch": 1788624000,
+      "time_local": "2026-09-06",
+      "weather_code": 2,
+      "wind_speed_max": 18
+    },
+    {
+      "description": "Overcast",
+      "feels_like_max": 41,
+      "feels_like_min": 28,
+      "icon": "cloud",
+      "precipitation_probability": 10,
+      "temp_max": 34,
+      "temp_min": 26,
+      "time_epoch": 1788710400,
+      "time_local": "2026-09-07",
+      "weather_code": 3,
+      "wind_speed_max": 16
+    },
+    {
+      "description": "Slight rain",
+      "feels_like_max": 38,
+      "feels_like_min": 26,
+      "icon": "cloud.rain",
+      "precipitation_probability": 70,
+      "temp_max": 31,
+      "temp_min": 24,
+      "time_epoch": 1788796800,
+      "time_local": "2026-09-08",
+      "weather_code": 61,
+      "wind_speed_max": 25
+    },
+    {
+      "description": "Slight rain showers",
+      "feels_like_max": 40,
+      "feels_like_min": 27,
+      "icon": "cloud.rain",
+      "precipitation_probability": 90,
+      "temp_max": 33,
+      "temp_min": 25,
+      "time_epoch": 1788883200,
+      "time_local": "2026-09-09",
+      "weather_code": 80,
+      "wind_speed_max": 30
+    },
+    {
+      "description": "Partly cloudy",
+      "feels_like_max": 39,
+      "feels_like_min": 27,
+      "icon": "cloud.sun",
+      "precipitation_probability": 20,
+      "temp_max": 32,
+      "temp_min": 25,
+      "time_epoch": 1788969600,
+      "time_local": "2026-09-10",
+      "weather_code": 2,
+      "wind_speed_max": 18
+    },
+    {
+      "description": "Mainly clear",
+      "feels_like_max": 40,
+      "feels_like_min": 28,
+      "icon": "cloud.sun",
+      "precipitation_probability": 5,
+      "temp_max": 33,
+      "temp_min": 26,
+      "time_epoch": 1789056000,
+      "time_local": "2026-09-11",
+      "weather_code": 1,
+      "wind_speed_max": 14
+    }
+  ],
+  "hourly": [
+    {
+      "apparent_temperature": 40,
+      "precipitation_probability": 63,
+      "temperature_2m": 34,
+      "time": "2026-09-05T09:00",
+      "time_epoch": 1788570000,
+      "time_local": "2026-09-05T09:00",
+      "weather_code": 61,
+      "wind_speed_10m": 11
+    },
+    {
+      "apparent_temperature": 36,
+      "precipitation_probability": 70,
+      "temperature_2m": 30,
+      "time": "2026-09-05T10:00",
+      "time_epoch": 1788573600,
+      "time_local": "2026-09-05T10:00",
+      "weather_code": 2,
+      "wind_speed_10m": 12
+    },
+    {
+      "apparent_temperature": 37,
+      "precipitation_probability": 77,
+      "temperature_2m": 31,
+      "time": "2026-09-05T11:00",
+      "time_epoch": 1788577200,
+      "time_local": "2026-09-05T11:00",
+      "weather_code": 2,
+      "wind_speed_10m": 13
+    },
+    {
+      "apparent_temperature": 38,
+      "precipitation_probability": 84,
+      "temperature_2m": 32,
+      "time": "2026-09-05T12:00",
+      "time_epoch": 1788580800,
+      "time_local": "2026-09-05T12:00",
+      "weather_code": 61,
+      "wind_speed_10m": 14
+    },
+    {
+      "apparent_temperature": 39,
+      "precipitation_probability": 91,
+      "temperature_2m": 33,
+      "time": "2026-09-05T13:00",
+      "time_epoch": 1788584400,
+      "time_local": "2026-09-05T13:00",
+      "weather_code": 2,
+      "wind_speed_10m": 15
+    },
+    {
+      "apparent_temperature": 40,
+      "precipitation_probability": 98,
+      "temperature_2m": 34,
+      "time": "2026-09-05T14:00",
+      "time_epoch": 1788588000,
+      "time_local": "2026-09-05T14:00",
+      "weather_code": 2,
+      "wind_speed_10m": 16
+    },
+    {
+      "apparent_temperature": 36,
+      "precipitation_probability": 5,
+      "temperature_2m": 30,
+      "time": "2026-09-05T15:00",
+      "time_epoch": 1788591600,
+      "time_local": "2026-09-05T15:00",
+      "weather_code": 61,
+      "wind_speed_10m": 17
+    },
+    {
+      "apparent_temperature": 37,
+      "precipitation_probability": 12,
+      "temperature_2m": 31,
+      "time": "2026-09-05T16:00",
+      "time_epoch": 1788595200,
+      "time_local": "2026-09-05T16:00",
+      "weather_code": 2,
+      "wind_speed_10m": 10
+    },
+    {
+      "apparent_temperature": 38,
+      "precipitation_probability": 19,
+      "temperature_2m": 32,
+      "time": "2026-09-05T17:00",
+      "time_epoch": 1788598800,
+      "time_local": "2026-09-05T17:00",
+      "weather_code": 2,
+      "wind_speed_10m": 11
+    },
+    {
+      "apparent_temperature": 39,
+      "precipitation_probability": 26,
+      "temperature_2m": 33,
+      "time": "2026-09-05T18:00",
+      "time_epoch": 1788602400,
+      "time_local": "2026-09-05T18:00",
+      "weather_code": 61,
+      "wind_speed_10m": 12
+    },
+    {
+      "apparent_temperature": 40,
+      "precipitation_probability": 33,
+      "temperature_2m": 34,
+      "time": "2026-09-05T19:00",
+      "time_epoch": 1788606000,
+      "time_local": "2026-09-05T19:00",
+      "weather_code": 2,
+      "wind_speed_10m": 13
+    },
+    {
+      "apparent_temperature": 36,
+      "precipitation_probability": 40,
+      "temperature_2m": 30,
+      "time": "2026-09-05T20:00",
+      "time_epoch": 1788609600,
+      "time_local": "2026-09-05T20:00",
+      "weather_code": 2,
+      "wind_speed_10m": 14
+    },
+    {
+      "apparent_temperature": 37,
+      "precipitation_probability": 47,
+      "temperature_2m": 31,
+      "time": "2026-09-05T21:00",
+      "time_epoch": 1788613200,
+      "time_local": "2026-09-05T21:00",
+      "weather_code": 61,
+      "wind_speed_10m": 15
+    },
+    {
+      "apparent_temperature": 38,
+      "precipitation_probability": 54,
+      "temperature_2m": 32,
+      "time": "2026-09-05T22:00",
+      "time_epoch": 1788616800,
+      "time_local": "2026-09-05T22:00",
+      "weather_code": 2,
+      "wind_speed_10m": 16
+    },
+    {
+      "apparent_temperature": 39,
+      "precipitation_probability": 61,
+      "temperature_2m": 33,
+      "time": "2026-09-05T23:00",
+      "time_epoch": 1788620400,
+      "time_local": "2026-09-05T23:00",
+      "weather_code": 2,
+      "wind_speed_10m": 17
+    },
+    {
+      "apparent_temperature": 40,
+      "precipitation_probability": 68,
+      "temperature_2m": 34,
+      "time": "2026-09-06T00:00",
+      "time_epoch": 1788624000,
+      "time_local": "2026-09-06T00:00",
+      "weather_code": 61,
+      "wind_speed_10m": 10
+    },
+    {
+      "apparent_temperature": 36,
+      "precipitation_probability": 75,
+      "temperature_2m": 30,
+      "time": "2026-09-06T01:00",
+      "time_epoch": 1788627600,
+      "time_local": "2026-09-06T01:00",
+      "weather_code": 2,
+      "wind_speed_10m": 11
+    },
+    {
+      "apparent_temperature": 37,
+      "precipitation_probability": 82,
+      "temperature_2m": 31,
+      "time": "2026-09-06T02:00",
+      "time_epoch": 1788631200,
+      "time_local": "2026-09-06T02:00",
+      "weather_code": 2,
+      "wind_speed_10m": 12
+    },
+    {
+      "apparent_temperature": 38,
+      "precipitation_probability": 89,
+      "temperature_2m": 32,
+      "time": "2026-09-06T03:00",
+      "time_epoch": 1788634800,
+      "time_local": "2026-09-06T03:00",
+      "weather_code": 61,
+      "wind_speed_10m": 13
+    },
+    {
+      "apparent_temperature": 39,
+      "precipitation_probability": 96,
+      "temperature_2m": 33,
+      "time": "2026-09-06T04:00",
+      "time_epoch": 1788638400,
+      "time_local": "2026-09-06T04:00",
+      "weather_code": 2,
+      "wind_speed_10m": 14
+    },
+    {
+      "apparent_temperature": 40,
+      "precipitation_probability": 3,
+      "temperature_2m": 34,
+      "time": "2026-09-06T05:00",
+      "time_epoch": 1788642000,
+      "time_local": "2026-09-06T05:00",
+      "weather_code": 2,
+      "wind_speed_10m": 15
+    },
+    {
+      "apparent_temperature": 36,
+      "precipitation_probability": 10,
+      "temperature_2m": 30,
+      "time": "2026-09-06T06:00",
+      "time_epoch": 1788645600,
+      "time_local": "2026-09-06T06:00",
+      "weather_code": 61,
+      "wind_speed_10m": 16
+    },
+    {
+      "apparent_temperature": 37,
+      "precipitation_probability": 17,
+      "temperature_2m": 31,
+      "time": "2026-09-06T07:00",
+      "time_epoch": 1788649200,
+      "time_local": "2026-09-06T07:00",
+      "weather_code": 2,
+      "wind_speed_10m": 17
+    },
+    {
+      "apparent_temperature": 38,
+      "precipitation_probability": 24,
+      "temperature_2m": 32,
+      "time": "2026-09-06T08:00",
+      "time_epoch": 1788652800,
+      "time_local": "2026-09-06T08:00",
+      "weather_code": 2,
+      "wind_speed_10m": 10
+    },
+    {
+      "apparent_temperature": 39,
+      "precipitation_probability": 31,
+      "temperature_2m": 33,
+      "time": "2026-09-06T09:00",
+      "time_epoch": 1788656400,
+      "time_local": "2026-09-06T09:00",
+      "weather_code": 61,
+      "wind_speed_10m": 11
+    },
+    {
+      "apparent_temperature": 40,
+      "precipitation_probability": 38,
+      "temperature_2m": 34,
+      "time": "2026-09-06T10:00",
+      "time_epoch": 1788660000,
+      "time_local": "2026-09-06T10:00",
+      "weather_code": 2,
+      "wind_speed_10m": 12
+    },
+    {
+      "apparent_temperature": 36,
+      "precipitation_probability": 45,
+      "temperature_2m": 30,
+      "time": "2026-09-06T11:00",
+      "time_epoch": 1788663600,
+      "time_local": "2026-09-06T11:00",
+      "weather_code": 2,
+      "wind_speed_10m": 13
+    },
+    {
+      "apparent_temperature": 37,
+      "precipitation_probability": 52,
+      "temperature_2m": 31,
+      "time": "2026-09-06T12:00",
+      "time_epoch": 1788667200,
+      "time_local": "2026-09-06T12:00",
+      "weather_code": 61,
+      "wind_speed_10m": 14
+    },
+    {
+      "apparent_temperature": 38,
+      "precipitation_probability": 59,
+      "temperature_2m": 32,
+      "time": "2026-09-06T13:00",
+      "time_epoch": 1788670800,
+      "time_local": "2026-09-06T13:00",
+      "weather_code": 2,
+      "wind_speed_10m": 15
+    },
+    {
+      "apparent_temperature": 39,
+      "precipitation_probability": 66,
+      "temperature_2m": 33,
+      "time": "2026-09-06T14:00",
+      "time_epoch": 1788674400,
+      "time_local": "2026-09-06T14:00",
+      "weather_code": 2,
+      "wind_speed_10m": 16
+    },
+    {
+      "apparent_temperature": 40,
+      "precipitation_probability": 73,
+      "temperature_2m": 34,
+      "time": "2026-09-06T15:00",
+      "time_epoch": 1788678000,
+      "time_local": "2026-09-06T15:00",
+      "weather_code": 61,
+      "wind_speed_10m": 17
+    },
+    {
+      "apparent_temperature": 36,
+      "precipitation_probability": 80,
+      "temperature_2m": 30,
+      "time": "2026-09-06T16:00",
+      "time_epoch": 1788681600,
+      "time_local": "2026-09-06T16:00",
+      "weather_code": 2,
+      "wind_speed_10m": 10
+    },
+    {
+      "apparent_temperature": 37,
+      "precipitation_probability": 87,
+      "temperature_2m": 31,
+      "time": "2026-09-06T17:00",
+      "time_epoch": 1788685200,
+      "time_local": "2026-09-06T17:00",
+      "weather_code": 2,
+      "wind_speed_10m": 11
+    },
+    {
+      "apparent_temperature": 38,
+      "precipitation_probability": 94,
+      "temperature_2m": 32,
+      "time": "2026-09-06T18:00",
+      "time_epoch": 1788688800,
+      "time_local": "2026-09-06T18:00",
+      "weather_code": 61,
+      "wind_speed_10m": 12
+    },
+    {
+      "apparent_temperature": 39,
+      "precipitation_probability": 1,
+      "temperature_2m": 33,
+      "time": "2026-09-06T19:00",
+      "time_epoch": 1788692400,
+      "time_local": "2026-09-06T19:00",
+      "weather_code": 2,
+      "wind_speed_10m": 13
+    },
+    {
+      "apparent_temperature": 40,
+      "precipitation_probability": 8,
+      "temperature_2m": 34,
+      "time": "2026-09-06T20:00",
+      "time_epoch": 1788696000,
+      "time_local": "2026-09-06T20:00",
+      "weather_code": 2,
+      "wind_speed_10m": 14
+    },
+    {
+      "apparent_temperature": 36,
+      "precipitation_probability": 15,
+      "temperature_2m": 30,
+      "time": "2026-09-06T21:00",
+      "time_epoch": 1788699600,
+      "time_local": "2026-09-06T21:00",
+      "weather_code": 61,
+      "wind_speed_10m": 15
+    },
+    {
+      "apparent_temperature": 37,
+      "precipitation_probability": 22,
+      "temperature_2m": 31,
+      "time": "2026-09-06T22:00",
+      "time_epoch": 1788703200,
+      "time_local": "2026-09-06T22:00",
+      "weather_code": 2,
+      "wind_speed_10m": 16
+    },
+    {
+      "apparent_temperature": 38,
+      "precipitation_probability": 29,
+      "temperature_2m": 32,
+      "time": "2026-09-06T23:00",
+      "time_epoch": 1788706800,
+      "time_local": "2026-09-06T23:00",
+      "weather_code": 2,
+      "wind_speed_10m": 17
+    }
+  ],
+  "latitude": 10.72,
+  "longitude": 122.56,
+  "timezone": "Asia/Manila",
+  "units": "metric",
+  "utc_offset_seconds": 28800
+}
