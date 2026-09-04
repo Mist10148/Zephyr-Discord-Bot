@@ -41,6 +41,7 @@ from zephyr.utils.weather_utils import (
 )
 from zephyr.utils.pagination import _send_paginated_embeds
 from zephyr.core.logging import get_logger
+from zephyr.utils.autocomplete import MAX_CHOICES, cached, truncate
 
 
 
@@ -615,8 +616,41 @@ class WeatherCog(commands.Cog):
             return self.FALLBACK_CITY
         return (stored or {}).get("default_city") or self.FALLBACK_CITY
 
+    async def _city_autocomplete(self, interaction: discord.Interaction, current: str):
+        """Cities as the geocoder actually spells them.
+
+        These commands all took free text, so "Iloilo" and "Iloilo City" and a
+        misspelling were indistinguishable until the lookup came back empty --
+        and the user had no way to know which of the four Manilas the geocoder
+        would pick. Suggesting the resolved name with its region removes both
+        problems.
+
+        Cached per term: Open-Meteo's geocoder is an upstream quota, and one
+        keystroke per call would spend it on prefixes nobody submitted.
+        """
+        term = current.strip()
+        if len(term) < 2:
+            return []
+
+        async def lookup():
+            results = await asyncio.to_thread(geocode_search, term, MAX_CHOICES)
+            choices = []
+            for place in results:
+                # Region as well as country: there are eight Springfields, and
+                # a country alone does not separate them.
+                parts = [place.get("name"), place.get("admin1"), place.get("country")]
+                label = ", ".join(part for part in parts if part)
+                # The value is the plain name, because that is what these
+                # commands re-geocode. Sending back a label with the region in
+                # it would not resolve.
+                choices.append(app_commands.Choice(name=truncate(label), value=truncate(place.get("name") or term, 100)))
+            return choices
+
+        return (await cached("weather:city", term.lower(), lookup, default=[]))[:MAX_CHOICES]
+
     @app_commands.command(name="setlocation", description="Set your default city for weather commands.")
     @app_commands.describe(city="Your city, or leave empty to clear it")
+    @app_commands.autocomplete(city=_city_autocomplete)
     async def set_location(self, interaction: discord.Interaction, city: str = None):
         await interaction.response.defer(ephemeral=True)
         if not city:
@@ -673,6 +707,7 @@ class WeatherCog(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="description", description="Get the weather description of a city.")
+    @app_commands.autocomplete(city=_city_autocomplete)
     async def slash_description(self, interaction: discord.Interaction, city: str = None):
         city = await self._city_for(interaction, city)
         data = requests.get(f"{CURRENT_URL}?appid={API_KEY}&q={city}&units=metric").json()
@@ -759,6 +794,7 @@ class WeatherCog(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="air", description="Get the air quality for a specific city.")
+    @app_commands.autocomplete(city=_city_autocomplete)
     async def slash_air(self, interaction: discord.Interaction, city: str = None):
         city = await self._city_for(interaction, city)
         data = requests.get(f"{CURRENT_URL}?appid={API_KEY}&q={city}&units=metric").json()
@@ -782,6 +818,7 @@ class WeatherCog(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="weather", description="Get current weather, air quality, and precipitation for a city.")
+    @app_commands.autocomplete(city=_city_autocomplete)
     async def slash_weather(self, interaction: discord.Interaction, city: str = None):
         city = await self._city_for(interaction, city)
         data = requests.get(f"{CURRENT_URL}?appid={API_KEY}&q={city}&units=metric").json()
@@ -815,6 +852,7 @@ class WeatherCog(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="forecast", description="Get a clean 3-day forecast for a city.")
+    @app_commands.autocomplete(city=_city_autocomplete)
     async def slash_forecast(self, interaction: discord.Interaction, city: str = None):
         city = await self._city_for(interaction, city)
         await interaction.response.defer()
@@ -871,6 +909,7 @@ class WeatherCog(commands.Cog):
         return embed
 
     @app_commands.command(name="search", description="Search for current weather and air quality in a city.")
+    @app_commands.autocomplete(city=_city_autocomplete)
     async def slash_search(self, interaction: discord.Interaction, city: str = None):
         city = await self._city_for(interaction, city)
         data = requests.get(f"{CURRENT_URL}?appid={API_KEY}&q={city}&units=metric").json()

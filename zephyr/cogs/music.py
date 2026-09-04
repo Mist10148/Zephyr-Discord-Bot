@@ -42,6 +42,7 @@ from zephyr.services import bridge
 from zephyr.services.spotify import is_spotify_url, parse_spotify_id, resolve_short_link
 from zephyr.utils.time_utils import _parse_user_time, _format_timestamp
 from zephyr.core.logging import get_logger
+from zephyr.utils.autocomplete import MAX_CHOICES, cached, truncate
 
 
 
@@ -1737,8 +1738,63 @@ class MusicCog(commands.Cog):
 
     # ---------------- Playback Control ----------------
 
+    async def _search_autocomplete(self, interaction: discord.Interaction, current: str):
+        """What /play will actually find, before committing to it.
+
+        Two things are deliberately *not* suggested. A URL is passed straight
+        through -- there is nothing to search for, and offering to "search" a
+        URL the user already pasted is noise. And a term under three characters
+        is skipped, because a one-letter YouTube search is a random sample.
+
+        Results are cached per term for a few seconds, so composing one query
+        costs one upstream call rather than one per keystroke.
+        """
+        term = current.strip()
+        if len(term) < 3 or _is_url(term):
+            return []
+
+        async def lookup():
+            tracks = await YTDLSource.search_tracks(term, loop=self.bot.loop, max_results=MAX_CHOICES)
+            return [
+                app_commands.Choice(
+                    name=truncate(f'{track.title} · {track.uploader}'),
+                    # The URL, not the title: it is unambiguous, and it saves
+                    # /play a second search for something already resolved.
+                    value=track.url or track.title,
+                )
+                for track in tracks
+                if track.url or track.title
+            ]
+
+        return (await cached('music:search', term.lower(), lookup, default=[]))[:MAX_CHOICES]
+
+    async def _playlist_autocomplete(self, interaction: discord.Interaction, current: str):
+        """The caller's own playlists. There was no way to see the names without
+        running /playlists first and reading them back."""
+        term = current.strip().lower()
+        guild_id = str(interaction.guild.id) if interaction.guild else None
+
+        async def lookup():
+            rows = await asyncio.to_thread(
+                list_playlists, str(interaction.user.id), guild_id=guild_id
+            )
+            return [
+                app_commands.Choice(
+                    name=truncate(f'{row["name"]} · {row["track_count"]} track(s)'),
+                    value=row['name'],
+                )
+                for row in rows
+            ]
+
+        # Keyed on the user rather than the term: the list is small, so it is
+        # fetched once and filtered locally instead of per keystroke.
+        choices = await cached(f'music:playlists:{interaction.user.id}:{guild_id}', '', lookup, default=[])
+        matches = [choice for choice in choices if not term or term in choice.value.lower()]
+        return matches[:MAX_CHOICES]
+
     @app_commands.command(name='play', description='Plays a song from YouTube or Spotify.')
     @app_commands.describe(search="Song name, YouTube/video URL, YouTube playlist URL, or Spotify track/playlist/album URL")
+    @app_commands.autocomplete(search=_search_autocomplete)
     async def play(self, interaction: discord.Interaction, search: str):
         await self._play_core(interaction, search, mode='normal')
 
@@ -1749,6 +1805,7 @@ class MusicCog(commands.Cog):
 
     @app_commands.command(name='playnext', description='Adds a song to the top of the queue.')
     @app_commands.describe(search="Song name, YouTube/video URL, YouTube playlist URL, or Spotify track/playlist/album URL")
+    @app_commands.autocomplete(search=_search_autocomplete)
     async def playnext(self, interaction: discord.Interaction, search: str):
         await self._play_core(interaction, search, mode='next')
 
@@ -2442,6 +2499,7 @@ class MusicCog(commands.Cog):
 
     @app_commands.command(name='load', description='Loads a saved playlist into the queue.')
     @app_commands.describe(name="The playlist to load")
+    @app_commands.autocomplete(name=_playlist_autocomplete)
     async def load(self, interaction: discord.Interaction, name: str):
         if interaction.guild is None:
             await interaction.response.send_message("❌ This command can only be used in a server.", ephemeral=True)
@@ -2521,6 +2579,7 @@ class MusicCog(commands.Cog):
 
     @app_commands.command(name='playlist-delete', description='Deletes one of your saved playlists.')
     @app_commands.describe(name="The playlist to delete")
+    @app_commands.autocomplete(name=_playlist_autocomplete)
     async def playlist_delete(self, interaction: discord.Interaction, name: str):
         await interaction.response.defer(ephemeral=True)
         try:
