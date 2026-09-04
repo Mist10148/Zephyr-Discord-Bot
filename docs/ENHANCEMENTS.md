@@ -40,7 +40,7 @@ running code, and every defect in Phase 13 was confirmed in the source rather th
 | **13** | **Bot correctness and observability** | **Shipped** |
 | **14** | **Bot functionality gaps** | **Shipped** |
 | **15** | **New bot features** | ✅ **shipped** (15.1–15.8) |
-| **16** | **Discord-side presentation** | **Not started** |
+| **16** | **Discord-side presentation** | ✅ **shipped** (16.1–16.3) |
 | **17** | **Code quality and infrastructure** | **17.3 shipped**, rest not started |
 
 **Phases 8 to 14 are shipped**, apart from Phase 15's remaining seven features. Next are those,
@@ -653,9 +653,17 @@ Discord verification wants a stated deletion path and this is the self-service v
 
 # Phase 16 — Discord-side presentation
 
+> **Shipped.** The counts in this section were an undercount: `weather.py`
+> imports `Embed` bare, so its whole slash-command half was invisible to a
+> search for `discord.Embed(` -- and that half was choosing *raw hex* colours.
+> The real totals were **130 construction sites** and **seventeen** distinct
+> colours, now six roles from `zephyr/utils/embeds.py`. The rules are written
+> down in [BOT_OUTPUT.md](BOT_OUTPUT.md) and guarded by
+> `tests/test_embed_style.py`.
+
 The web has [DESIGN.md](DESIGN.md). The bot's output has no equivalent, and it shows.
 
-### 16.1 — Every cog builds embeds its own way · M
+### 16.1 ✅ — Every cog builds embeds its own way · M
 
 Weather, music and AI each pick their own colours, footer text and timestamp conventions, so
 the bot reads as three bots sharing an avatar.
@@ -666,14 +674,14 @@ it. This is also the natural home for the error embed 13.1 needs.
 
 **Done when:** no cog constructs `discord.Embed` directly.
 
-### 16.2 — Ephemeral responses are inconsistent · S
+### 16.2 ✅ — Ephemeral responses are inconsistent · S
 
 Errors and settings confirmations are ephemeral in some cogs and public in others, with no
 stated rule. Pick one — *errors and personal settings ephemeral, shared state public* — and
 apply it throughout. Today a failed `/play` can spam a busy channel while a successful
 settings change disappears from view.
 
-### 16.3 — The command list exists twice · M
+### 16.3 ✅ — The command list exists twice · M
 
 [`zephyr/utils/help_data.py`](../zephyr/utils/help_data.py) (257 lines) and the web command
 reference behind `GET /commands` are two hand-maintained descriptions of the same 75 slash
