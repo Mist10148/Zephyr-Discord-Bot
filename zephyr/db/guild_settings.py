@@ -27,6 +27,7 @@ WRITABLE_COLUMNS = (
     "tts_language",
     "ai_channel_mode",
     "ai_channel_ids",
+    "modlog_channel_id",
 )
 
 _COLUMNS = (
@@ -41,6 +42,7 @@ _COLUMNS = (
     Guild.tts_language,
     Guild.ai_channel_mode,
     Guild.ai_channel_ids,
+    Guild.modlog_channel_id,
 )
 
 
