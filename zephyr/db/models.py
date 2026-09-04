@@ -476,3 +476,64 @@ class GuildGreeting(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+
+class GuildStarboard(Base):
+    """Starboard configuration for one guild.
+
+    Separate from ``StarboardEntry`` because the two have opposite read
+    patterns: this is read on *every reaction* in the guild (through a cache) and
+    changes almost never, while entries are written on the reactions that
+    actually cross the threshold.
+    """
+
+    __tablename__ = "guild_starboards"
+
+    guild_id: Mapped[str] = mapped_column(String, primary_key=True)
+    enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    channel_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # How many reactions promote a message.  NULL means the deployment default.
+    threshold: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    emoji: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Whether somebody's own reaction counts towards their own message.
+    allow_self_star: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # Channels the starboard ignores -- a spoilers or NSFW channel whose
+    # contents should not be reposted somewhere everybody reads.
+    ignored_channel_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class StarboardEntry(Base):
+    """One promoted message.
+
+    The unique constraint on ``(guild_id, source_message_id)`` is what makes the
+    reaction listener idempotent, and that is the whole reason this table has a
+    constraint at all.  Reactions arrive as independent gateway events with no
+    ordering guarantee between them; two arriving close together both read "not
+    promoted yet" and both try to post.  Without the constraint the message
+    appears in the starboard twice and the second entry orphans the first.
+
+    ``starboard_message_id`` is nullable for the window between claiming the row
+    and the post succeeding.  A row with no message id is a failed promotion that
+    the next reaction retries -- which is better than either leaving no row (and
+    double-posting) or committing an id that does not exist.
+    """
+
+    __tablename__ = "starboard_entries"
+    __table_args__ = (
+        UniqueConstraint(
+            "guild_id", "source_message_id", name="uq_starboard_entries_guild_id_source_message_id"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    guild_id: Mapped[str] = mapped_column(String, nullable=False)
+    source_channel_id: Mapped[str] = mapped_column(String, nullable=False)
+    source_message_id: Mapped[str] = mapped_column(String, nullable=False)
+    starboard_message_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    star_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
