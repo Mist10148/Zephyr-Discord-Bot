@@ -409,6 +409,28 @@ def extract_response_text(response):
     return None
 
 
+def describe_empty_response(response):
+    """Why a response carried no text, for the log line that reports it.
+
+    Everything here is best-effort: the point is to turn "the model said
+    nothing" into something actionable -- SAFETY, MAX_TOKENS and an empty
+    candidate list are three different bugs -- without letting a missing
+    attribute on a partial or streamed response raise inside error handling.
+    """
+    details = []
+    feedback = getattr(response, "prompt_feedback", None)
+    if feedback:
+        details.append(f"prompt_feedback={feedback}")
+    candidates = getattr(response, "candidates", None) or []
+    if not candidates:
+        details.append("no candidates")
+    for candidate in candidates:
+        reason = getattr(candidate, "finish_reason", None)
+        parts = getattr(getattr(candidate, "content", None), "parts", None)
+        details.append(f"finish_reason={reason} parts={0 if not parts else len(parts)}")
+    return ", ".join(details) or "no diagnostic detail"
+
+
 def is_quota_error(exc):
     message = str(exc).lower()
     markers = ("429", "quota", "rate limit", "resource exhausted", "resource_exhausted", "too many requests", "retry in", "retry_delay")
@@ -449,6 +471,15 @@ def build_quota_message(model_name, retry_after_seconds=None, attempted_fallback
         base += f" I also tried these fallback models: {', '.join(f'`{m}`' for m in attempted_fallbacks)}."
     base += " You can check `/token` to see the current session usage."
     return base
+
+
+def build_empty_response_message(model_names):
+    models = ", ".join(f"`{name}`" for name in dict.fromkeys(model_names))
+    return (
+        f"{models} answered with an empty response, which usually means the reply was filtered "
+        "or cut short rather than rate-limited. Nothing was added to this conversation's memory. "
+        "Try rephrasing, or use `/forget` if it keeps happening."
+    )
 
 
 def build_local_limit_message(model_name, limit_name, retry_after_seconds):
@@ -815,11 +846,24 @@ async def try_generate_with_model(model_name, contents, input_tokens, system_per
             response = await request_gemini_stream(model_name, contents, system_personality, on_progress)
         else:
             response = await request_gemini_content(model_name, contents, system_personality)
-        response_text = extract_response_text(response) or "I could not generate a response."
+        response_text = extract_response_text(response)
         usage = getattr(response, "usage_metadata", None)
+        # Recorded before the empty check: an empty candidate is still a request
+        # the API served and billed, so not counting it would under-report the
+        # quota and let the next call walk into a rate limit thinking it had room.
         await record_successful_usage(model_name, usage)
         if user_id is not None:
             await charge_user_tokens(user_id, usage)
+        if not response_text:
+            # A 200 with no text -- a blocked or truncated candidate, or one of
+            # Gemini's occasional empty responses under load. It used to become
+            # the literal string "I could not generate a response.", which was
+            # then *stored as the model's turn*, so the placeholder joined the
+            # conversation and the next reply had it as an example to follow.
+            # Treat it as a failed attempt instead: the fallback chain gets its
+            # turn, and nothing is written to memory.
+            log.warning("Model %s returned no text (%s)", model_name, describe_empty_response(response))
+            return {"ok": False, "empty": True, "quota_handled": True}
         return {"ok": True, "response_text": response_text, "response": response}
     except Exception as exc:
         retry_after_seconds = parse_retry_after_seconds(exc)
@@ -885,6 +929,7 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
 
         attempt_models = [selected_model, *fallback_models]
         attempted_fallbacks = []
+        empty_models = []
         last_result = None
         best_retry_after = None
 
@@ -926,9 +971,16 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
                 return bot_response
             if result.get("message"):
                 return result["message"]
+            if result.get("empty"):
+                empty_models.append(model_name)
             if index > 0:
                 attempted_fallbacks.append(model_name)
 
+        if len(empty_models) == len(attempt_models):
+            # Every model answered, and every answer was empty. That is not a
+            # rate limit, and saying it is sends the person off to /token to
+            # look at a quota that is fine.
+            return build_empty_response_message(empty_models)
         return build_quota_message(selected_model, retry_after_seconds=best_retry_after, attempted_fallbacks=attempted_fallbacks)
     except Exception as exc:
         log.exception("Gemini request failed on %s", selected_model)
@@ -978,6 +1030,8 @@ async def generate_utility_response(server_id, user_id, prompt, *, instruction):
     result = await try_generate_with_model(selected_model, [content], tokens, instruction)
     if result.get("ok"):
         return result["response_text"]
+    if result.get("empty"):
+        return build_empty_response_message([selected_model])
     return result.get("message") or build_quota_message(selected_model, result.get("retry_after_seconds"))
 
 
