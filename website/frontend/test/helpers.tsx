@@ -8,12 +8,16 @@
 
 import type { ReactElement, ReactNode } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { createQueryClient } from '../src/lib/query'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { render } from '@testing-library/react'
 import { vi } from 'vitest'
 
 export function testQueryClient() {
-  return new QueryClient({
+  // The app's own factory, so a spec exercises the real MutationCache wiring --
+  // global error feedback is attached there, and a hand-rolled QueryClient
+  // would silently not have it, making a feedback spec pass for no reason.
+  return createQueryClient({
     defaultOptions: {
       // retry:false so a spec asserting an error state sees it on the first
       // rejection instead of waiting out lib/query.ts's one retry, and gcTime:0

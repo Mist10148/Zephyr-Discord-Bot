@@ -1,8 +1,10 @@
-import { describe, expect, it } from 'vitest'
-import { fireEvent, screen, waitFor } from '@testing-library/react'
+import { afterEach, describe, expect, it } from 'vitest'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { GuildMusic } from '../src/routes/GuildMusic'
 import { ThemeProvider } from '../src/lib/theme'
 import { renderWithQuery, stubApi } from './helpers'
+import { resetToasts } from '../src/lib/toast'
+import { ToastHost } from '../src/components/ToastHost'
 import type { Player, PlayerTrack } from '../src/types/api'
 
 const track = (title: string, url: string): PlayerTrack => ({
@@ -31,14 +33,21 @@ function stubPlayer(player: Player = PLAYER) {
       return { body: player }
     },
     '/guilds/1/meta': { body: { channels: [], roles: [], voice_channels: [] } },
-    '/guilds/1/playlists': { body: { playlists: [] } },
+    '/playlists': { body: { playlists: [] } },
     '/guilds/1': { body: { id: '1', name: 'Guild', prefix: '/', enabled_cogs: [], music_channel_ids: [] } },
   })
   return posts
 }
 
+afterEach(() => resetToasts())
+
+// GuildMusic has its own aria-live now-playing announcer, which carries an
+// implicit role=status -- so a bare getByRole('status') finds that empty div
+// rather than a toast. Every toast assertion goes through the region.
+const toastRegion = () => within(document.querySelector('.toast-region') as HTMLElement)
+
 const render = () =>
-  renderWithQuery(<ThemeProvider><GuildMusic /></ThemeProvider>, { route: '/g/1/music', path: '/g/:guildId/music' })
+  renderWithQuery(<ThemeProvider><GuildMusic /><ToastHost /></ThemeProvider>, { route: '/g/1/music', path: '/g/:guildId/music' })
 
 // GuildMusic reads :guildId from the router, so the route has to carry it. The
 // component is rendered directly rather than through App's route table, which
@@ -109,5 +118,63 @@ describe('the effects sliders', () => {
     // The draft wins while dragging, so the readout tracks the thumb rather
     // than waiting for the 3s poll to come back.
     await waitFor(() => expect(screen.getByText('1.7x')).toBeInTheDocument())
+  })
+})
+
+describe('feedback', () => {
+  it('confirms a queued track instead of waiting for the 3s poll', async () => {
+    stubPlayer()
+    render()
+    const input = await screen.findByLabelText('Song or URL to queue')
+    fireEvent.change(input, { target: { value: 'bohemian rhapsody' } })
+    fireEvent.click(within(document.querySelector('.music-search') as HTMLElement).getByRole('button', { name: 'Queue' }))
+
+    await waitFor(() => expect(toastRegion().getByRole('status')).toHaveTextContent('Queued'))
+    // The input still clears -- that behaviour was never the problem.
+    expect((input as HTMLInputElement).value).toBe('')
+  })
+
+  it('announces a refusal without moving the page', async () => {
+    const posts: Array<{ action: string }> = []
+    stubApi({
+      '/guilds/1/player': (url, init) => {
+        if (init?.method && init.method !== 'GET') {
+          posts.push({ action: url.pathname.split('/').pop()! })
+          return { status: 409, body: { error: { code: 'refused', message: 'Nothing is playing.' } } }
+        }
+        return { body: PLAYER }
+      },
+      '/guilds/1/meta': { body: { channels: [], roles: [], voice_channels: [] } },
+      '/playlists': { body: { playlists: [] } },
+      '/guilds/1': { body: { id: '1', name: 'Guild', prefix: '/', enabled_cogs: [], music_channel_ids: [] } },
+    })
+    render()
+    fireEvent.click(await screen.findByRole('button', { name: 'Skip' }))
+
+    // The message comes from the Flask envelope, through the global
+    // MutationCache in lib/query.ts -- no per-call-site wiring.
+    const alert = await waitFor(() => toastRegion().getByRole('alert'))
+    expect(alert).toHaveTextContent('Nothing is playing.')
+    // It must be in the fixed region, not injected between the effects panel
+    // and the queue heading the way the old inline ErrorNote was.
+    expect(alert.closest('.toast-region')).not.toBeNull()
+    expect(document.querySelector('main.app .toast')).toBeNull()
+  })
+
+  it('puts the undo where it can actually be reached', async () => {
+    const posts = stubPlayer()
+    render()
+    await waitFor(() => expect(screen.getByText('Second')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Second' }))
+
+    const toast = await waitFor(() => toastRegion().getByRole('status'))
+    expect(toast).toHaveTextContent('Removed Second')
+    // Previously a hand-rolled div rendered *after* the queue list, so on a long
+    // queue it lived its whole life below the fold.
+    expect(toast.closest('.toast-region')).not.toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await waitFor(() => expect(posts.map(post => post.action)).toEqual(['remove', 'play']))
+    expect(posts[1].body).toEqual({ query: 'https://y.tld/second', mode: 'next' })
   })
 })

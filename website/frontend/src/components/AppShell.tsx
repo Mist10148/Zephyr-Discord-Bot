@@ -2,6 +2,7 @@ import { Link, useLocation } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { ThemeToggle } from './ThemeToggle'
+import { ToastHost } from './ToastHost'
 
 // A single sticky top bar above every page. It is the app-wide navigation: the
 // wordmark returns home, a contextual link jumps to the server list once the user
@@ -43,6 +44,7 @@ export function AppShell({ children, onOpenPalette }: { children: ReactNode; onO
           </nav>
         </div>
       </header>
+      <ToastHost />
       {!online && <div className="offline-banner" role="status">You’re offline. Saved public results remain available until you reconnect.</div>}
       <div id="main-content" tabIndex={-1}>{children}</div>
     </>

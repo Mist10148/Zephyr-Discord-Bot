@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { useTheme } from '../lib/theme-context'
 import { BackLink, CapsuleToast, Chevron, GlassSurface, IconButton, LargeTitleHeader, ListGroup, ListRow, PressableButton, SectionLabel, SegmentedControl, Skeleton, Slider, Stepper, Toggle, WidgetGrid } from '../components/ios'
 import { CloudIcon, PauseIcon, PlayIcon, RainIcon, ShuffleIcon, SkipIcon, StopIcon, SunIcon } from '../components/icons'
+import { useToast } from '../lib/toast'
 
 // The design-system review page: every primitive on one screen, in whichever theme
 // is active, so a visual regression shows up here first. It drives the real theme
@@ -11,6 +12,7 @@ import { CloudIcon, PauseIcon, PlayIcon, RainIcon, ShuffleIcon, SkipIcon, StopIc
 // This page is the contract. A primitive that is not rendered here is one nobody
 // will notice breaking -- add every new one.
 export function KitchenSink() {
+  const toast = useToast()
   const { theme, toggle } = useTheme()
   const [segment, setSegment] = useState('Today')
   const [on, setOn] = useState(true)
@@ -128,7 +130,19 @@ export function KitchenSink() {
       <CapsuleToast tone="success">Saved</CapsuleToast>
       <CapsuleToast>Paused subscriptions keep their settings.</CapsuleToast>
       <CapsuleToast tone="error">Something went wrong.</CapsuleToast>
+      <CapsuleToast tone="success" action={{ label: 'Undo', onClick: () => undefined }}>Removed a track</CapsuleToast>
       <div className="error-banner" role="alert"><i aria-hidden>!</i><span>You cancelled the Discord sign-in.</span></div>
+    </div>
+    {/* The host itself, not just the visual. Rendered as buttons because the
+        thing worth reviewing is the stack: three at most, neutral and success
+        self-dismissing, errors staying until dismissed, and the region fixed so
+        none of it moves the page. */}
+    <p className="muted small-note">Push a few to see the region stack them, top-right on desktop and above the tab bar on a phone.</p>
+    <div className="chip-strip">
+      <PressableButton className="small" onClick={() => toast.info('Working on it.')}>Neutral toast</PressableButton>
+      <PressableButton className="small" onClick={() => toast.success('Queued Bohemian Rhapsody')}>Success toast</PressableButton>
+      <PressableButton className="small" variant="danger" onClick={() => toast.error('Nothing is playing.')}>Error toast</PressableButton>
+      <PressableButton className="small" variant="secondary" onClick={() => toast.success('Removed a track', { label: 'Undo', onClick: () => toast.info('Put it back') })}>With an action</PressableButton>
     </div>
 
     <BackLink to="/">Back home</BackLink>

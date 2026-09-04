@@ -39,6 +39,7 @@ function PlaylistEditor({ playlistId, onClose }: { playlistId: number; onClose()
   useEffect(() => { setTracks(playlist.data ? playlist.data.tracks : null); setIsPublic(!!playlist.data?.is_public) }, [playlist.data])
 
   const save = useMutation({
+    meta: { success: 'Playlist saved' },
     mutationFn: (next: PlaylistTrack[]) => api(`/playlists/${playlistId}`, { method: 'PATCH', body: { tracks: next, is_public: isPublic } }),
     onSuccess: () => { client.invalidateQueries({ queryKey: ['playlist', playlistId] }); client.invalidateQueries({ queryKey: ['playlists'] }) },
   })
@@ -75,7 +76,7 @@ function PlaylistEditor({ playlistId, onClose }: { playlistId: number; onClose()
       </SortableContext>
     </DndContext>
     {tracks.length === 0 && <p className="muted">This playlist is now empty. Saving it will leave it empty.</p>}
-    {save.error && <ErrorNote error={save.error} onRetry={() => save.reset()} />}
+    
     <div className="sheet-actions">
       <PressableButton variant="secondary" onClick={onClose}>Close</PressableButton>
       <PressableButton disabled={!dirty || save.isPending} onClick={() => save.mutate(tracks)}>{save.isPending ? 'Saving…' : 'Save order'}</PressableButton>
@@ -87,6 +88,7 @@ function ImportForm({ guildId, onDone }: { guildId: string | undefined; onDone()
   const client = useQueryClient()
   const [url, setUrl] = useState('')
   const importer = useMutation({
+    meta: { success: 'Imported from Spotify' },
     mutationFn: () => api('/playlists/import/spotify', { method: 'POST', body: { url, guild_id: guildId } }),
     onSuccess: () => { client.invalidateQueries({ queryKey: ['playlists'] }); setUrl(''); onDone() },
   })
@@ -97,7 +99,7 @@ function ImportForm({ guildId, onDone }: { guildId: string | undefined; onDone()
       <span>Playlist link</span>
       <input className="text-input full" value={url} placeholder="https://open.spotify.com/playlist/…" onChange={event => setUrl(event.target.value)} />
     </label>
-    {importer.error && <ErrorNote error={importer.error} onRetry={() => importer.reset()} />}
+    
     <div className="sheet-actions">
       <PressableButton variant="secondary" onClick={onDone}>Cancel</PressableButton>
       <PressableButton disabled={!url.trim() || importer.isPending} onClick={() => importer.mutate()}>{importer.isPending ? 'Importing…' : 'Import'}</PressableButton>
@@ -113,10 +115,12 @@ export function PlaylistPanel({ guildId }: { guildId: string | undefined }) {
   const [deleting, setDeleting] = useState<number | null>(null)
 
   const load = useMutation({
+    meta: { success: 'Playlist queued' },
     mutationFn: (playlistId: number) => api(`/playlists/${playlistId}/load`, { method: 'POST', body: { guild_id: guildId } }),
     onSettled: () => client.invalidateQueries({ queryKey: ['player', guildId] }),
   })
   const remove = useMutation({
+    meta: { success: 'Playlist deleted' },
     mutationFn: (playlistId: number) => api(`/playlists/${playlistId}`, { method: 'DELETE' }),
     onSuccess: () => client.invalidateQueries({ queryKey: ['playlists'] }),
   })
@@ -144,8 +148,8 @@ export function PlaylistPanel({ guildId }: { guildId: string | undefined }) {
         </ListRow>)}
       </ListGroup>)}
 
-    {load.error && <ErrorNote error={load.error} onRetry={() => load.reset()} />}
-    {remove.error && <ErrorNote error={remove.error} onRetry={() => remove.reset()} />}
+    
+    
 
     <Sheet open={editing !== null} onOpenChange={open => !open && setEditing(null)} label="Edit playlist">
       {editing !== null && <PlaylistEditor playlistId={editing} onClose={() => setEditing(null)} />}

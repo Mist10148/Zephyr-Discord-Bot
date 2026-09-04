@@ -134,10 +134,15 @@ export function BackLink({ to, children }: { to: string; children: ReactNode }) 
   return <p className="back-link-row"><Link className="back-link" to={to}><span aria-hidden>‹</span>{children}</Link></p>
 }
 
-export function CapsuleToast({ children, tone = 'neutral' }: { children: ReactNode; tone?: 'neutral' | 'error' | 'success' }) {
+/** The visual for a transient message. Rendered inline for an advisory line, or
+ *  by ToastHost for a notification -- `onDismiss` adds the close affordance the
+ *  host needs, and its absence is what keeps an inline advisory undismissable. */
+export function CapsuleToast({ children, tone = 'neutral', action, onDismiss }: { children: ReactNode; tone?: 'neutral' | 'error' | 'success'; action?: { label: string; onClick(): void }; onDismiss?: () => void }) {
   return <div className={`toast ${tone}`} role={tone === 'error' ? 'alert' : 'status'}>
     {tone === 'neutral' ? <i className="toast-dot" aria-hidden /> : <i className="toast-badge" aria-hidden>{tone === 'error' ? '!' : '✓'}</i>}
     <span>{children}</span>
+    {action && <button type="button" className="toast-action" onClick={action.onClick}>{action.label}</button>}
+    {onDismiss && <button type="button" className="toast-dismiss" aria-label="Dismiss" onClick={onDismiss}>×</button>}
   </div>
 }
 
