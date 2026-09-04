@@ -312,22 +312,31 @@ class ZephyrBot(commands.AutoShardedBot):
         cooldown and a crash.
         """
         from zephyr.core.errors import GENERIC, new_reference, user_facing_message
+        from zephyr.core.tracking import error_context
 
         message = user_facing_message(error)
         if message == "":
             return
         if message is None:
             reference = new_reference()
-            log.error(
-                "Unhandled error in prefix command %s",
-                ctx.command.qualified_name if ctx.command else "unknown",
-                exc_info=error,
-                extra={
-                    "reference": reference,
-                    "guild_id": str(ctx.guild.id) if ctx.guild else None,
-                    "user_id": str(ctx.author.id),
-                },
-            )
+            command = ctx.command.qualified_name if ctx.command else "unknown"
+            guild_id = str(ctx.guild.id) if ctx.guild else None
+            # Tagged as well as logged, for the reason `errors.report` gives:
+            # the reference is only useful if it can be searched for.
+            with error_context(
+                reference=reference, command=command,
+                guild_id=guild_id, user_id=str(ctx.author.id),
+            ):
+                log.error(
+                    "Unhandled error in prefix command %s",
+                    command,
+                    exc_info=error,
+                    extra={
+                        "reference": reference,
+                        "guild_id": guild_id,
+                        "user_id": str(ctx.author.id),
+                    },
+                )
             message = GENERIC.format(reference=reference)
         try:
             await ctx.send(message)
