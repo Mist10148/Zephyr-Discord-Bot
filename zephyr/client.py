@@ -13,7 +13,7 @@ import time
 import discord
 from discord.ext import commands, tasks
 
-from zephyr.config import COMMAND_PREFIX, ENABLED_COGS, REDIS_URL
+from zephyr.config import COMMAND_PREFIX, ENABLED_COGS, REDIS_URL, SHARD_COUNT
 from zephyr.core.opus_loader import load_opus
 from zephyr.core.errors import report as report_command_error
 from zephyr.core.ffmpeg import FFMPEG_PATH
@@ -41,7 +41,22 @@ async def type_print(text, delay=0.03):
     await asyncio.sleep(1)
 
 
-class ZephyrBot(commands.Bot):
+class ZephyrBot(commands.AutoShardedBot):
+    """The bot.
+
+    AutoShardedBot rather than Bot even at one shard: with SHARD_COUNT unset it
+    opens a single connection and behaves identically, so there is no separate
+    "sharded" code path to keep working. Discord requires sharding past roughly
+    2,500 guilds, and discovering then that the base class has to change is a
+    worse time to find out.
+
+    All shards run in this one process. That is deliberate rather than
+    incidental: MusicCog.voice_states, the bridge command listener and gemini's
+    in-memory conversation buffer are all per-process, and splitting shards
+    across processes would need each of them redesigned. What sharding buys here
+    is several gateway connections, which is the part Discord actually requires.
+    """
+
     def __init__(self):
         # Enumerated rather than Intents.all(). `all()` requests every
         # privileged intent, including presences and typing, which this bot
@@ -62,6 +77,9 @@ class ZephyrBot(commands.Bot):
         intents.dm_messages = True
 
         super().__init__(
+            # None lets Discord pick, which is right until somebody has a
+            # reason to pin it.
+            shard_count=SHARD_COUNT,
             # Not when_mentioned_or: a mention is already the AI's trigger in
             # on_message, so accepting it as a prefix too would make
             # "@Zephyr weather" both ask the AI and run the weather command.
@@ -213,7 +231,11 @@ class ZephyrBot(commands.Bot):
                     # discord.py reports NaN until the first heartbeat lands.
                     "latency_ms": None if math.isnan(self.latency) else round(self.latency * 1000),
                     "uptime_s": int(time.time() - self._started_at),
+                    # shard_id is None on an AutoShardedBot: it owns several
+                    # rather than one, so the count is the meaningful number
+                    # and the dashboard reports that instead.
                     "shard": self.shard_id,
+                    "shard_count": self.shard_count,
                 },
             )
         except Exception as e:

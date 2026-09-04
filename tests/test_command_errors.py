@@ -305,3 +305,61 @@ class TestThePerGuildPrefix:
         write_guild_settings("7", {"prefix": "!"}, database_url=db_url)
         write_guild_settings("8", {"locale": "en"}, database_url=db_url)
         assert read_prefixes(database_url=db_url) == {"7": "!"}
+
+
+class TestSharding:
+    """14.6. Discord requires sharding past roughly 2,500 guilds, and no test
+    constructs ZephyrBot.__init__ -- so the base class could change without the
+    suite noticing either way."""
+
+    @pytest.fixture
+    def bot(self):
+        from zephyr.client import ZephyrBot
+
+        return ZephyrBot()
+
+    def test_it_is_an_auto_sharded_bot(self, bot):
+        from discord.ext import commands as ext_commands
+
+        assert isinstance(bot, ext_commands.AutoShardedBot)
+
+    def test_one_shard_still_behaves_like_before(self, bot):
+        """With SHARD_COUNT unset it opens a single connection, so there is no
+        separate "sharded" code path to keep working."""
+        assert bot.shard_count is None
+
+    def test_the_count_is_configurable(self, monkeypatch):
+        import importlib
+
+        from zephyr import config
+
+        monkeypatch.setenv("SHARD_COUNT", "4")
+        monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)
+        reloaded = importlib.reload(config)
+        try:
+            assert reloaded.SHARD_COUNT == 4
+        finally:
+            monkeypatch.delenv("SHARD_COUNT", raising=False)
+            importlib.reload(config)
+
+    def test_zero_means_let_discord_decide(self, monkeypatch):
+        import importlib
+
+        from zephyr import config
+
+        monkeypatch.setenv("SHARD_COUNT", "0")
+        monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)
+        reloaded = importlib.reload(config)
+        try:
+            assert reloaded.SHARD_COUNT is None
+        finally:
+            monkeypatch.delenv("SHARD_COUNT", raising=False)
+            importlib.reload(config)
+
+    def test_the_presence_payload_carries_the_shard_count(self, bot):
+        """shard_id is None on an AutoShardedBot -- it owns several rather than
+        one -- so the count is the number worth publishing."""
+        import inspect
+
+        source = inspect.getsource(type(bot)._presence_loop.coro)
+        assert '"shard_count"' in source
