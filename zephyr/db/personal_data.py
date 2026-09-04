@@ -18,6 +18,7 @@ somebody can check it is complete:
 | `audit_log` | `actor_id` | What they changed, per guild. |
 | `ai_messages` | `author_id` | Their half of a conversation. |
 | `ai_conversations` | -- | Keyed on the *channel*, so shared. Never deleted for one person. |
+| `reminders` | `user_id` | Pending and delivered reminders. |
 | Redis sessions | -- | Keyed on the session id. See `SESSION_CAVEAT`. |
 | Redis quota counters | `user_id` | Today's token spend. |
 | In-process AI buffer | guild / DM | Cleared by the caller; see `zephyr.services.gemini.reset_conversation`. |
@@ -58,6 +59,7 @@ from zephyr.db.models import (
     BotUser,
     Playlist,
     PlaylistTrack,
+    Reminder,
     WebUser,
 )
 from zephyr.db.session import get_engine
@@ -82,6 +84,7 @@ RETENTION = {
     "Saved playlists": "Titles and links you saved, kept until you delete them.",
     "AI conversations": "Recent messages per channel, so replies have context. Erasable per channel with /forget, or entirely with /delete-my-data.",
     "Server audit log": "Who changed a server's settings. Retained for the server owner; your id is anonymised if you delete your data.",
+    "Reminders": "What you asked to be reminded about and when, kept until it fires or you cancel it.",
     "AI usage counters": "Tokens spent today, for rate limiting. Expires automatically within 48 hours.",
     "Sessions": SESSION_CAVEAT,
 }
@@ -141,6 +144,16 @@ def export(user_id: str, *, database_url: str | None = None) -> dict:
             .order_by(AIMessage.id)
         ).mappings().all()
 
+        reminder_rows = connection.execute(
+            select(
+                Reminder.id, Reminder.guild_id, Reminder.channel_id, Reminder.message,
+                Reminder.due_at, Reminder.tz, Reminder.repeat_every_seconds,
+                Reminder.fired_at, Reminder.created_at,
+            )
+            .where(Reminder.user_id == user_id)
+            .order_by(Reminder.due_at)
+        ).mappings().all()
+
     return {
         "user_id": user_id,
         "dashboard_account": _serialise(web_user),
@@ -151,6 +164,7 @@ def export(user_id: str, *, database_url: str | None = None) -> dict:
         ],
         "audit_entries": [_serialise(row) for row in audit_rows],
         "ai_messages": [_serialise(row) for row in messages],
+        "reminders": [_serialise(row) for row in reminder_rows],
         "notes": {
             "sessions": SESSION_CAVEAT,
             # Said out loud: an export that silently omitted these would look
@@ -211,6 +225,10 @@ def delete(user_id: str, *, database_url: str | None = None) -> dict:
             update(AuditLog)
             .where(AuditLog.actor_id == user_id)
             .values(actor_id=ANONYMISED_ACTOR)
+        ).rowcount or 0
+
+        removed["reminders"] = connection.execute(
+            sql_delete(Reminder).where(Reminder.user_id == user_id)
         ).rowcount or 0
 
         removed["bot_preferences"] = connection.execute(

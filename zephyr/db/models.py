@@ -342,3 +342,57 @@ class BotUser(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 15 features.  Appended rather than interleaved so several feature
+# branches can add a class each without conflicting in the middle of the file.
+# ---------------------------------------------------------------------------
+
+
+class Reminder(Base):
+    """One scheduled nudge.
+
+    Unlike ``weather_subs``, due-ness here is a **SQL predicate** rather than a
+    Python comprehension, and that difference is the point.  A weather digest is
+    a wall-clock intent ("08:00 in Manila") whose due-ness depends on the row's
+    own DST state, so ``weather_subs.is_due`` has to reason about it in Python
+    over a bounded set of rows.  A reminder is an *instant*, and the row count is
+    unbounded -- so ``WHERE due_at <= :now AND fired_at IS NULL`` belongs in the
+    database, with an index to match.
+
+    ``tz`` is stored even though ``due_at`` is absolute: it is what lets the
+    confirmation and the listing be rendered in the zone the person actually
+    typed in, and what a repeating reminder needs to stay at the same local
+    time across a DST change.
+    """
+
+    __tablename__ = "reminders"
+    __table_args__ = (
+        # The claim predicate.  Without it, every tick scans the table.
+        Index("ix_reminders_due_at", "due_at"),
+        # /reminders, which lists one person's pending ones.
+        Index("ix_reminders_user_id_due_at", "user_id", "due_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    # NULL when created in a DM: there is no guild, and the delivery is a DM.
+    guild_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    channel_id: Mapped[str] = mapped_column(String, nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    # Always UTC.  The zone lives in `tz` for rendering.
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    tz: Mapped[str] = mapped_column(String, nullable=False, default="UTC")
+    # NULL for a one-shot.  A repeating reminder is rescheduled on delivery
+    # rather than duplicated, so there is one row per reminder however often it
+    # fires.
+    repeat_every_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The claim marker.  Set inside the claiming transaction, which is what
+    # stops two workers delivering the same reminder.
+    fired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    source: Mapped[str] = mapped_column(String, nullable=False, default="discord")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
