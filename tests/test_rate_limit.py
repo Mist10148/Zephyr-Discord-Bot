@@ -17,6 +17,30 @@ def _ip(address):
     return {"REMOTE_ADDR": address}
 
 
+@pytest.fixture(autouse=True)
+def _frozen_window(monkeypatch):
+    """Pin the window so a loop cannot straddle a boundary.
+
+    The key embeds ``int(time.time()) // window``, so a test that issues thirty
+    requests can cross a minute boundary partway through and find the counter
+    reset -- which is correct behaviour and a flaky test. The rollover is
+    covered deliberately in TestTheWindowRolls instead.
+    """
+    import website.api.guard as guard
+
+    monkeypatch.setattr(guard.time, "time", lambda: 1_700_000_000.0)
+
+
+@pytest.fixture(autouse=True)
+def _no_network(monkeypatch):
+    """conftest's rule: no network. /geocode would otherwise reach Open-Meteo
+    once per request in a loop of thirty."""
+    monkeypatch.setattr(
+        "website.api.weather.geocode_search",
+        lambda name, count=8: [{"name": name, "latitude": 0.0, "longitude": 0.0}],
+    )
+
+
 class TestThePublicLimit:
     def test_the_nth_call_is_refused(self, public_app, fake_redis):
         client = public_app.test_client()
@@ -105,8 +129,7 @@ class TestTheWindowRolls:
         # The key embeds `time() // window`, so the next window is a new key.
         import website.api.guard as guard
 
-        real = guard.time.time
-        monkeypatch.setattr(guard.time, "time", lambda: real() + 61)
+        monkeypatch.setattr(guard.time, "time", lambda: 1_700_000_000.0 + 61)
         assert client.get("/api/v1/geocode?q=y", environ_base=_ip("6.6.6.6")).status_code != 429
 
 

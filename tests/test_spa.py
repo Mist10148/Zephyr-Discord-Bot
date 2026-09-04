@@ -16,8 +16,24 @@ from website import routes
 
 
 @pytest.fixture
-def site(fake_redis):
-    from website import create_app
+def site(fake_redis, tmp_path, monkeypatch):
+    """A client over a stub bundle.
+
+    `website/static/` is gitignored and CI's backend job never runs the
+    frontend build, so a fixture that relied on a real bundle would pass
+    locally and 503 in CI -- which is exactly what the first version of this
+    file did. A two-line index.html is all the routing logic needs, and it also
+    means these tests describe `spa.py` rather than the build.
+    """
+    from website import create_app, spa as spa_module
+
+    static_dir = tmp_path / "static"
+    (static_dir / "assets").mkdir(parents=True)
+    (static_dir / "index.html").write_text(
+        '<!doctype html><html><body><div id="root"></div></body></html>', encoding="utf-8"
+    )
+    (static_dir / "assets" / "app.js").write_text("// bundle", encoding="utf-8")
+    monkeypatch.setattr(spa_module, "_static_dir", lambda: static_dir)
 
     app = create_app({
         "TESTING": True,
@@ -149,3 +165,32 @@ class TestIndexability:
         assert routes.is_indexable("/kitchen-sink") is False
         assert routes.is_indexable("/login") is False
         assert routes.is_indexable("/g/123/music") is False
+
+
+class TestWithoutABuiltBundle:
+    """The state CI's backend job is always in, and a real deployment state --
+    `website/static/` is gitignored and built at deploy time."""
+
+    def test_it_says_how_to_build_it(self, fake_redis, tmp_path, monkeypatch):
+        from website import create_app, spa as spa_module
+
+        monkeypatch.setattr(spa_module, "_static_dir", lambda: tmp_path / "missing")
+        client = create_app({"TESTING": True, "AUTH_ENABLED": False}).test_client()
+
+        response = client.get("/")
+        assert response.status_code == 503
+        assert response.get_json()["error"]["code"] == "spa_not_built"
+        assert "npm" in response.get_json()["error"]["message"]
+
+    def test_robots_and_the_sitemap_do_not_need_the_bundle(self, fake_redis, tmp_path, monkeypatch):
+        """They are Flask-served text, so they must work on a deployment whose
+        frontend build failed."""
+        from website import create_app, spa as spa_module
+
+        monkeypatch.setattr(spa_module, "_static_dir", lambda: tmp_path / "missing")
+        client = create_app({
+            "TESTING": True, "AUTH_ENABLED": False, "WEB_PUBLIC_URL": "https://zephyr.example",
+        }).test_client()
+
+        assert client.get("/robots.txt").status_code == 200
+        assert client.get("/sitemap.xml").status_code == 200
