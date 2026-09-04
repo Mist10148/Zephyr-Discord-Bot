@@ -17,12 +17,12 @@ from zephyr.core.logging import get_logger
 
 
 log = get_logger(__name__)
-# Applied when a guild has no row yet, which is the normal state until somebody
-# saves settings.  Reported with defaults_applied so the UI can say so.
-# The writers only ever set these two, so an unknown value is a client bug
-# rather than something to pass through to a LIKE.
+# The audit writers only ever set these two, so an unknown value is a client bug
+# rather than something to pass through to a WHERE.
 AUDIT_SOURCES = {"web", "discord"}
 
+# Applied when a guild has no row yet, which is the normal state until somebody
+# saves settings.  Reported with defaults_applied so the UI can say so.
 DEFAULT_SETTINGS = {
     "prefix": "/",
     "locale": "en",
@@ -30,6 +30,8 @@ DEFAULT_SETTINGS = {
     "default_volume": 50,
     "dj_role_id": None,
     "music_channel_ids": [],
+    # gTTS language code for /say. "en" matches what the cog used to hardcode.
+    "tts_language": "en",
 }
 
 
@@ -127,6 +129,23 @@ def _clean_snowflake(value):
     return text
 
 
+def _clean_tts_language(value):
+    """A gTTS language code, checked against the list gTTS actually supports.
+
+    Validated here as well as in the command, because the dashboard is the
+    other way in and a bad code fails at speech time with "TTS failed: ...",
+    which points at the wrong thing entirely.
+    """
+    text = str(value).strip().lower()
+    if not text:
+        raise ValueError("A language code is required.")
+    from zephyr.cogs.voice_tts import supported_languages
+
+    if text not in supported_languages():
+        raise ValueError(f"{text!r} is not a language gTTS can speak.")
+    return text
+
+
 def _clean_snowflake_list(value):
     if value is None:
         return []
@@ -142,6 +161,7 @@ CLEANERS = {
     "locale": _clean_locale,
     "timezone": _clean_timezone,
     "default_volume": _clean_volume,
+    "tts_language": _clean_tts_language,
     "dj_role_id": _clean_snowflake,
     "music_channel_ids": _clean_snowflake_list,
 }
