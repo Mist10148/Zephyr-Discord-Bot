@@ -72,6 +72,13 @@ DB_AUTO_CREATE: bool | None = (
     else _DB_AUTO_CREATE_RAW.lower() in {"1", "true", "yes"}
 )
 
+# Per-person daily Gemini ceiling, in tokens. 0 disables the cap entirely.
+#
+# Exists because the model limits are per *model*: one person could consume a
+# guild's whole daily allowance and everybody else would see a rate-limit
+# message with no explanation. A per-user row overrides this.
+AI_USER_DAILY_TOKENS = int(os.getenv("AI_USER_DAILY_TOKENS") or "0")
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------

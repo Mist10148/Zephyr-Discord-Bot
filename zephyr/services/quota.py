@@ -215,6 +215,37 @@ def snapshot(model: str, *, minute: int, day: str, url: str | None = None) -> di
     }
 
 
+def user_key(user_id: str, day: str) -> str:
+    return f"{PREFIX}:user:{user_id}:{day}"
+
+
+def user_spend(user_id: str, day: str, *, url: str | None = None) -> int:
+    """Tokens this person has spent today."""
+    return _as_int(_client(url).get(user_key(user_id, day)))
+
+
+def charge_user(user_id: str, day: str, tokens: int, *, url: str | None = None) -> int:
+    """Add to today's spend and return the new total.
+
+    Charged on the way *out* rather than reserved up front, because the true
+    cost of a request is only known once the response arrives -- and a
+    reservation based on the prompt alone would under-count long replies, which
+    are exactly the expensive ones. The consequence is that a budget can be
+    exceeded by one request rather than blocking mid-conversation, which is the
+    friendlier direction for a chat surface.
+    """
+    client = _client(url)
+    key = user_key(user_id, day)
+    total = _as_int(client.incr(key, int(tokens)))
+    if total == int(tokens):
+        client.expire(key, DAY_TTL)
+    return total
+
+
+def clear_user(user_id: str, day: str, *, url: str | None = None) -> None:
+    _client(url).delete(user_key(user_id, day))
+
+
 def clear(model: str | None = None, *, minute: int | None = None, day: str | None = None, url: str | None = None) -> None:
     """Forget a model's counters. Used by the data-deletion path and by tests."""
     client = _client(url)

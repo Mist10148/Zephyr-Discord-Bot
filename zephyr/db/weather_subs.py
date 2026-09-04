@@ -226,7 +226,7 @@ def read_bot_user(discord_id: str, *, database_url: str | None = None) -> dict |
         row = connection.execute(
             select(
                 BotUser.discord_id, BotUser.default_city, BotUser.lat, BotUser.lon,
-                BotUser.units, BotUser.timezone,
+                BotUser.units, BotUser.timezone, BotUser.ai_token_budget,
             ).where(BotUser.discord_id == str(discord_id))
         ).mappings().first()
     return dict(row) if row else None
@@ -234,7 +234,7 @@ def read_bot_user(discord_id: str, *, database_url: str | None = None) -> dict |
 
 def write_bot_user(discord_id: str, values: dict, *, database_url: str | None = None) -> dict:
     """Upsert a user's weather defaults.  Only the keys given are written."""
-    allowed = {"default_city", "lat", "lon", "units", "timezone"}
+    allowed = {"default_city", "lat", "lon", "units", "timezone", "ai_token_budget"}
     filtered = {key: value for key, value in values.items() if key in allowed}
     engine = get_engine(database_url)
     with engine.begin() as connection:

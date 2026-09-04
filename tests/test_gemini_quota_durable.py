@@ -247,3 +247,104 @@ class TestTheGeminiIntegration:
         monkeypatch.setitem(gemini.MODEL_LIMITS, MODEL, LIMITS)
         await gemini.reserve_local_quota(MODEL, 10)
         assert len(gemini.model_request_windows[MODEL]) == 1
+
+
+class TestPerUserBudget:
+    """14.4b. The model limits are per *model*, so one person could consume a
+    guild's whole daily allowance and everybody else saw a rate-limit message
+    with no explanation of why."""
+
+    @pytest.fixture
+    def durable(self, monkeypatch, fake_redis):
+        monkeypatch.setattr("zephyr.config.REDIS_URL", "redis://localhost:6379/0")
+        return fake_redis
+
+    def test_spend_accumulates_per_person_per_day(self, fake_redis):
+        quota.charge_user("1", "2026-09-04", 500)
+        quota.charge_user("1", "2026-09-04", 300)
+        quota.charge_user("2", "2026-09-04", 100)
+
+        assert quota.user_spend("1", "2026-09-04") == 800
+        assert quota.user_spend("2", "2026-09-04") == 100
+        # A new day is a new budget.
+        assert quota.user_spend("1", "2026-09-05") == 0
+
+    @pytest.mark.asyncio
+    async def test_no_budget_configured_means_no_cap(self, durable, monkeypatch):
+        """The historical behaviour, and the default."""
+        monkeypatch.setattr("zephyr.config.AI_USER_DAILY_TOKENS", 0)
+        quota.charge_user("1", gemini._quota_window()[1], 10_000_000)
+        assert await gemini.check_user_budget("1") is None
+
+    @pytest.mark.asyncio
+    async def test_a_deployment_default_applies_to_everybody(self, durable, monkeypatch):
+        monkeypatch.setattr("zephyr.config.AI_USER_DAILY_TOKENS", 1000)
+        _, day = gemini._quota_window()
+
+        assert await gemini.check_user_budget("1") is None
+        quota.charge_user("1", day, 1000)
+        message = await gemini.check_user_budget("1")
+        # It names whose allowance ran out, which a bare model rate-limit
+        # message could not.
+        assert message is not None
+        assert "your daily AI allowance" in message
+        assert "1,000" in message
+
+    @pytest.mark.asyncio
+    async def test_a_per_user_row_overrides_the_default(self, durable, monkeypatch, db_url):
+        from zephyr.db import session
+        from zephyr.db.weather_subs import write_bot_user
+
+        monkeypatch.setattr(session, "DATABASE_URL", db_url)
+        monkeypatch.setattr("zephyr.config.AI_USER_DAILY_TOKENS", 1000)
+        write_bot_user("1", {"ai_token_budget": 50}, database_url=db_url)
+
+        _, day = gemini._quota_window()
+        quota.charge_user("1", day, 60)
+        assert await gemini.check_user_budget("1") is not None
+        # Somebody without a row still gets the deployment default.
+        assert await gemini.check_user_budget("2") is None
+
+    @pytest.mark.asyncio
+    async def test_one_persons_spend_does_not_affect_another(self, durable, monkeypatch):
+        monkeypatch.setattr("zephyr.config.AI_USER_DAILY_TOKENS", 100)
+        _, day = gemini._quota_window()
+        quota.charge_user("1", day, 200)
+
+        assert await gemini.check_user_budget("1") is not None
+        assert await gemini.check_user_budget("2") is None
+
+    @pytest.mark.asyncio
+    async def test_with_no_redis_it_does_not_enforce(self, monkeypatch):
+        """An in-memory per-user counter would reset on restart, which is the
+        defect 13.5 just removed. Not enforcing beats enforcing inconsistently."""
+        monkeypatch.setattr("zephyr.config.REDIS_URL", None)
+        monkeypatch.setattr("zephyr.config.AI_USER_DAILY_TOKENS", 1)
+        assert await gemini.check_user_budget("1") is None
+
+    @pytest.mark.asyncio
+    async def test_it_charges_the_total_from_the_response(self, durable):
+        class Usage:
+            prompt_token_count = 30
+            candidates_token_count = 70
+            total_token_count = 100
+
+        await gemini.charge_user_tokens("1", Usage())
+        _, day = gemini._quota_window()
+        # Charged on the way *out*: the true cost is only known once the
+        # response arrives, and a reservation from the prompt alone would
+        # under-count long replies -- exactly the expensive ones.
+        assert quota.user_spend("1", day) == 100
+
+    @pytest.mark.asyncio
+    async def test_no_usage_metadata_charges_nothing(self, durable):
+        await gemini.charge_user_tokens("1", None)
+        assert quota.user_spend("1", gemini._quota_window()[1]) == 0
+
+    @pytest.mark.asyncio
+    async def test_a_redis_failure_does_not_block_the_reply(self, durable, monkeypatch, caplog):
+        monkeypatch.setattr("zephyr.config.AI_USER_DAILY_TOKENS", 100)
+        durable.raise_on = RuntimeError("connection refused")
+        with caplog.at_level("WARNING", logger="zephyr.services.gemini"):
+            assert await gemini.check_user_budget("1") is None
+        assert "token spend" in caplog.text
