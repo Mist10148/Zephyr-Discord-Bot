@@ -28,6 +28,10 @@ WRITABLE_COLUMNS = (
     "ai_channel_mode",
     "ai_channel_ids",
     "modlog_channel_id",
+    "dj_only",
+    "vote_skip_ratio",
+    "always_on",
+    "always_on_channel_id",
 )
 
 _COLUMNS = (
@@ -43,6 +47,10 @@ _COLUMNS = (
     Guild.ai_channel_mode,
     Guild.ai_channel_ids,
     Guild.modlog_channel_id,
+    Guild.dj_only,
+    Guild.vote_skip_ratio,
+    Guild.always_on,
+    Guild.always_on_channel_id,
 )
 
 
@@ -156,6 +164,42 @@ def read_prefixes(*, database_url: str | None = None) -> dict[str, str]:
             select(Guild.id, Guild.prefix).where(Guild.prefix.is_not(None))
         ).all()
     return {str(row.id): str(row.prefix) for row in rows}
+
+
+def read_music_policies(*, database_url: str | None = None) -> dict[str, dict]:
+    """Every guild's player policy, keyed by guild id.
+
+    One query for the same reason ``read_dj_roles`` is one query: the DJ lock is
+    consulted on every music command and every button press, and a round trip
+    there would be paid constantly to answer a question that changes roughly
+    never. Guilds that have configured none of these are absent, so the caller's
+    defaults apply.
+    """
+    engine = get_engine(database_url)
+    with engine.connect() as connection:
+        rows = connection.execute(
+            select(
+                Guild.id, Guild.dj_only, Guild.vote_skip_ratio,
+                Guild.always_on, Guild.always_on_channel_id,
+            ).where(
+                # Anything set at all. A guild row exists as soon as any setting
+                # is saved, so filtering on the row's existence would load every
+                # configured guild to learn that none of them changed this.
+                Guild.dj_only.is_not(None)
+                | Guild.vote_skip_ratio.is_not(None)
+                | Guild.always_on.is_not(None)
+                | Guild.always_on_channel_id.is_not(None)
+            )
+        ).mappings().all()
+    return {
+        str(row["id"]): {
+            "dj_only": bool(row["dj_only"]),
+            "vote_skip_ratio": row["vote_skip_ratio"],
+            "always_on": bool(row["always_on"]),
+            "always_on_channel_id": row["always_on_channel_id"],
+        }
+        for row in rows
+    }
 
 
 def read_dj_roles(*, database_url: str | None = None) -> dict[str, str]:

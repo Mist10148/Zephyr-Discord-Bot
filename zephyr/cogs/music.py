@@ -29,7 +29,8 @@ from spotipy.oauth2 import SpotifyClientCredentials
 
 from zephyr.config import REDIS_URL, SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET
 from zephyr.core.ffmpeg import FFMPEG_PATH
-from zephyr.db.guild_settings import read_dj_roles
+from zephyr.core.errors import Refused
+from zephyr.db.guild_settings import read_dj_roles, read_music_policies, write_guild_settings
 from zephyr.db.playlists import (
     PlaylistError,
     delete_playlist,
@@ -105,6 +106,23 @@ SNAPSHOT_QUEUE_LIMIT = 50
 AUTOPLAY_FETCH = 30
 AUTOPLAY_ADD = 5
 AUTOPLAY_MEMORY = 50
+
+# Half the listeners, which is what /skip has always used. Now a default rather
+# than a constant: a two-person server wants 1, and a hundred-person stage does
+# not want 50 people to agree before a bad track ends.
+DEFAULT_SKIP_RATIO = 0.5
+MIN_SKIP_RATIO = 0.05
+MAX_SKIP_RATIO = 1.0
+
+# The commands the DJ lock does *not* cover, as an exemption list rather than a
+# list of what it does cover. Deriving the locked set as the complement is
+# fail-closed: a music command added later is locked by default, and the failure
+# mode of that mistake is "a DJ had to press it", not "the lock silently did not
+# apply to the new command".
+DJ_EXEMPT_COMMANDS = frozenset({
+    "now", "np", "queue", "lyrics", "playlists", "playlist-delete", "save",
+})
+
 
 # How often the now-playing progress bar is redrawn.  Each tick is a message
 # edit, so this is a rate-limit budget, not a smoothness setting.
@@ -930,6 +948,11 @@ class VoiceState:
         self._nightcore_enabled = False
         self._vaporwave_enabled = False
         self._247_enabled = False
+        # Per-guild, applied by MusicCog.apply_policy when the state is created.
+        # Held on the state rather than read from the cog so _skip_threshold
+        # stays a pure function of the state, which is what makes it testable
+        # without a cog, a bot or a database.
+        self.skip_ratio = DEFAULT_SKIP_RATIO
         self._autoplay_enabled = False
         self._pitch = 1.0
         self._bass_boost = None
@@ -1289,10 +1312,19 @@ class VoiceState:
         self.changed()
 
     def _skip_threshold(self):
+        """How many votes end the current track.
+
+        Clamped to the number of people who could possibly vote: a ratio of 1.0
+        in a channel of three must need three, not four, or the vote can never
+        pass and /skip becomes a command that does nothing.
+        """
         if not self.voice or not self.voice.channel:
             return 1
         non_bot = [m for m in self.voice.channel.members if not m.bot]
-        return max(1, math.ceil(len(non_bot) / 2))
+        if not non_bot:
+            return 1
+        ratio = self.skip_ratio or DEFAULT_SKIP_RATIO
+        return max(1, min(len(non_bot), math.ceil(len(non_bot) * ratio)))
 
     async def restart_current(self, interaction: discord.Interaction = None, preserve_position: bool = True):
         """Recreate and restart the current track (used by effects and seek)."""
@@ -1328,6 +1360,10 @@ class MusicCog(commands.Cog):
         # guild id -> DJ role id.  Absent means "no DJ role configured", which is
         # a different rule rather than a stricter one; see _authorize.
         self._dj_role_ids: dict[int, str] = {}
+        # Guild id -> {dj_only, vote_skip_ratio, always_on, always_on_channel_id}.
+        # Cached beside the DJ roles and refreshed by the same loop and the same
+        # bridge action, because they are consulted on the same hot path.
+        self._music_policy: dict[int, dict] = {}
         # guild_id -> the pending "everyone left" timer, so a rejoin can cancel it.
         self._empty_timers: dict[int, asyncio.Task] = {}
         creds = SpotifyClientCredentials(client_id=SPOTIFY_CLIENT_ID, client_secret=SPOTIFY_CLIENT_SECRET)
@@ -1352,6 +1388,7 @@ class MusicCog(commands.Cog):
             state = VoiceState(self.bot, guild_id, channel_id=channel_id)
             state.on_change = self.publish_state
             state.np_view_factory = functools.partial(NowPlayingView, self, int(guild_id))
+            self.apply_policy(state)
             self.voice_states[int(guild_id)] = state
         elif channel_id is not None:
             state.np_channel_id = channel_id
@@ -1466,6 +1503,7 @@ class MusicCog(commands.Cog):
     def cog_unload(self):
         self._snapshot_loop.cancel()
         self._settings_loop.cancel()
+        self._restore_loop.cancel()
         self._now_playing_loop.cancel()
         for timer in list(self._empty_timers.values()):
             if not timer.done():
@@ -1484,6 +1522,7 @@ class MusicCog(commands.Cog):
         # is conditional on there being somewhere to publish to.
         self._settings_loop.start()
         self._now_playing_loop.start()
+        self._restore_loop.start()
         if REDIS_URL:
             self._snapshot_loop.start()
 
@@ -1631,6 +1670,82 @@ class MusicCog(commands.Cog):
                 raise VoiceError("You are not connected to a voice channel.")
         return member
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        """The DJ lock, for the Discord surface.
+
+        This is the gap 15.4 closes, and it is worth naming: ``_authorize``
+        gated the *bridge* -- every dashboard button and every now-playing
+        button -- while the slash commands went through ``get_voice_state`` with
+        no authorization at all. So a server that had configured a DJ role got a
+        DJ-gated dashboard and an ungated ``/stop``, which is the opposite of a
+        lock.
+
+        ``dj_only`` is off by default, so this changes nothing for a server that
+        has not asked for it. When it is on: Manage Server always passes, the DJ
+        role passes if one is configured, and otherwise only Manage Server does
+        -- "DJ-only with no DJ role" is a deliberate reading of "lock the
+        player", not an oversight.
+        """
+        command = interaction.command
+        if command is None or command.name in DJ_EXEMPT_COMMANDS:
+            return True
+        if interaction.guild is None:
+            return True
+        if not self.policy_for(interaction.guild.id).get("dj_only"):
+            return True
+
+        member = interaction.user
+        if getattr(member, "guild_permissions", None) and member.guild_permissions.manage_guild:
+            return True
+        dj_role_id = self._dj_role_ids.get(int(interaction.guild.id))
+        if dj_role_id:
+            if any(str(role.id) == str(dj_role_id) for role in getattr(member, "roles", [])):
+                return True
+            raise Refused("DJ-only mode is on. You need the DJ role to control the player.")
+        raise Refused(
+            "DJ-only mode is on and no DJ role is set, so only Manage Server can "
+            "control the player."
+        )
+
+    def policy_for(self, guild_id) -> dict:
+        return self._music_policy.get(int(guild_id)) or {}
+
+    def apply_policy(self, state: VoiceState) -> None:
+        """Push the guild's stored policy onto a freshly created state.
+
+        Applied at creation rather than read per use so ``_skip_threshold``
+        needs nothing but the state, and so 24/7 survives a restart: the flag
+        used to live only in memory, which meant "24/7 mode" lasted until the
+        next deploy.
+        """
+        policy = self.policy_for(state.guild_id)
+        ratio = policy.get("vote_skip_ratio")
+        if ratio:
+            state.skip_ratio = max(MIN_SKIP_RATIO, min(MAX_SKIP_RATIO, float(ratio)))
+        # Assigned, not or-ed: the stored value is the truth, so turning 24/7
+        # off in the dashboard has to be able to turn it off on a live state
+        # too. A session-only toggle that failed to save is reverted by the next
+        # refresh, which is the correct outcome -- it was never saved.
+        state._247_enabled = bool(policy.get("always_on"))
+
+    async def reload_music_policies(self) -> None:
+        """Refresh the policy cache, and push it onto live states.
+
+        Live states too, because the alternative is a dashboard change to the
+        skip ratio that takes effect only after the player is torn down -- which
+        reads as the save not having worked.
+        """
+        try:
+            self._music_policy = {
+                int(guild_id): policy
+                for guild_id, policy in (await asyncio.to_thread(read_music_policies)).items()
+            }
+        except Exception:
+            log.exception("Could not read music policies")
+            return
+        for state in list(self.voice_states.values()):
+            self.apply_policy(state)
+
     async def reload_dj_roles(self) -> None:
         """Refresh the DJ-role cache from the database.
 
@@ -1648,9 +1763,47 @@ class MusicCog(commands.Cog):
         except Exception as exc:
             log.exception("Could not read DJ roles")
 
+    @tasks.loop(count=1)
+    async def _restore_loop(self):
+        """Rejoin the channels 24/7 was left on, once, at startup.
+
+        The point of 24/7 is that the bot stays; a flag that only survived until
+        the next deploy meant it did not. Each guild is contained separately for
+        the reason every loop in this codebase contains per item: one guild whose
+        stored channel has been deleted must not stop the rest from rejoining.
+        """
+        await self.reload_music_policies()
+        for guild_id, policy in list(self._music_policy.items()):
+            channel_id = policy.get("always_on_channel_id")
+            if not policy.get("always_on") or not channel_id:
+                continue
+            try:
+                guild = self.bot.get_guild(int(guild_id))
+                if guild is None:
+                    continue
+                channel = guild.get_channel(int(channel_id))
+                if not isinstance(channel, discord.VoiceChannel):
+                    log.warning("24/7 channel %s is gone in guild %s", channel_id, guild_id)
+                    continue
+                state = self.ensure_voice_state(guild.id)
+                if state.voice and state.voice.is_connected():
+                    continue
+                state.voice = await channel.connect()
+                # The player task waits on an empty queue with no timeout while
+                # _247_enabled is set, which is exactly the intended idle state.
+                state.start_player()
+                log.info("Rejoined %s in guild %s for 24/7", channel_id, guild_id)
+            except Exception:
+                log.exception("Could not rejoin the 24/7 channel for guild %s", guild_id)
+
+    @_restore_loop.before_loop
+    async def _before_restore_loop(self):
+        await self.bot.wait_until_ready()
+
     @tasks.loop(minutes=10)
     async def _settings_loop(self):
         await self.reload_dj_roles()
+        await self.reload_music_policies()
 
     @_settings_loop.before_loop
     async def _before_settings_loop(self):
@@ -1658,6 +1811,7 @@ class MusicCog(commands.Cog):
 
     async def _bridge_reload_settings(self, guild, actor_id, args):
         await self.reload_dj_roles()
+        await self.reload_music_policies()
         # The prefix and the TTS language are cached on the bot and the TTS cog
         # respectively, both on slow loops. Refreshing them here means a
         # dashboard save takes effect immediately rather than up to ten minutes
@@ -2586,14 +2740,102 @@ class MusicCog(commands.Cog):
 
     @app_commands.command(name='247', description='Toggles 24/7 mode (no auto-disconnect).')
     async def twenty_four_seven(self, interaction: discord.Interaction):
+        """24/7, persisted.
+
+        The flag used to live only on the in-memory state, so "24/7 mode" meant
+        "until the next deploy" -- and a server that had asked the bot to stay
+        in a channel forever found it silently gone. It is now stored with the
+        channel, and restored on startup by `_restore_loop`.
+        """
         ctx = await self._interaction_ctx(interaction)
         state = self.get_voice_state(ctx)
         if not state.voice:
             await interaction.response.send_message("Not connected to any voice channel.", ephemeral=True)
             return
-        state._247_enabled = not state._247_enabled
-        status = "enabled" if state._247_enabled else "disabled"
-        await interaction.response.send_message(embed=discord.Embed(description=f'24/7 mode is now {status}.', color=discord.Color.green()))
+        await interaction.response.defer()
+        enabled = not state._247_enabled
+        state._247_enabled = enabled
+        channel_id = str(state.voice.channel.id) if state.voice.channel else None
+        try:
+            await asyncio.to_thread(
+                write_guild_settings,
+                str(interaction.guild.id),
+                {
+                    "always_on": enabled,
+                    # Cleared on disable rather than left behind, so a later
+                    # restart cannot rejoin a channel nobody asked it to.
+                    "always_on_channel_id": channel_id if enabled else None,
+                },
+            )
+            self._music_policy.setdefault(int(interaction.guild.id), {}).update(
+                {"always_on": enabled, "always_on_channel_id": channel_id if enabled else None}
+            )
+        except Exception:
+            # The in-memory flag is already set, so the session behaves as asked
+            # -- it just will not survive a restart, and saying so is better
+            # than reporting a failure for something that did work.
+            log.exception("Could not persist 24/7 mode for %s", interaction.guild.id)
+            await interaction.followup.send(embed=discord.Embed(
+                description=f'24/7 mode is now {"enabled" if enabled else "disabled"} for this session, '
+                            'but could not be saved.',
+                color=discord.Color.orange()))
+            return
+        status = "enabled" if enabled else "disabled"
+        await interaction.followup.send(embed=discord.Embed(
+            description=f'24/7 mode is now {status}.' + (
+                f' Zephyr will rejoin {state.voice.channel.mention} after a restart.' if enabled else ''
+            ),
+            color=discord.Color.green()))
+
+    @app_commands.command(name='dj-only', description='Restrict the player to DJs (or Manage Server).')
+    @app_commands.describe(enabled='On to lock the player, off to let everybody drive it')
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.guild_only()
+    async def dj_only(self, interaction: discord.Interaction, enabled: bool):
+        await interaction.response.defer(ephemeral=True)
+        await asyncio.to_thread(
+            write_guild_settings, str(interaction.guild.id), {"dj_only": bool(enabled)}
+        )
+        self._music_policy.setdefault(int(interaction.guild.id), {})["dj_only"] = bool(enabled)
+
+        if not enabled:
+            await interaction.followup.send(
+                '🔓 DJ-only mode is off. Anybody in the voice channel can control the player.',
+                ephemeral=True)
+            return
+        # Said at the point of setting it, because "locked" with no DJ role is a
+        # much stricter setting than it sounds and is easy to enable by mistake.
+        dj_role_id = self._dj_role_ids.get(int(interaction.guild.id))
+        detail = (
+            f'Only <@&{dj_role_id}> and Manage Server can control the player.' if dj_role_id
+            else 'No DJ role is set, so **only Manage Server** can control the player. '
+                 'Set a DJ role in the dashboard to widen that.'
+        )
+        await interaction.followup.send(f'🔒 DJ-only mode is on. {detail}', ephemeral=True)
+
+    @app_commands.command(name='vote-skip-ratio', description='What fraction of listeners must agree to skip.')
+    @app_commands.describe(percent='Percent of listeners needed, 5-100. Default is 50.')
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.guild_only()
+    async def vote_skip_ratio(
+        self, interaction: discord.Interaction, percent: app_commands.Range[int, 5, 100]
+    ):
+        await interaction.response.defer(ephemeral=True)
+        ratio = int(percent) / 100
+        await asyncio.to_thread(
+            write_guild_settings, str(interaction.guild.id), {"vote_skip_ratio": ratio}
+        )
+        self._music_policy.setdefault(int(interaction.guild.id), {})["vote_skip_ratio"] = ratio
+        # Applied to the live state as well: waiting for the next teardown would
+        # read as the setting not having worked.
+        state = self.peek_voice_state(interaction.guild.id)
+        if state is not None:
+            self.apply_policy(state)
+        await interaction.followup.send(
+            f'🗳️ {percent}% of listeners now have to agree to skip.', ephemeral=True
+        )
 
     @app_commands.command(name='reset_effects', description='Resets all audio effects.')
     async def reset_effects(self, interaction: discord.Interaction):
