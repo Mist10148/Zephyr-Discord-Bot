@@ -164,6 +164,61 @@ class TestAlembicBaseline:
         remaining = set(inspect(build_engine(url)).get_table_names())
         assert not ({"ai_settings", "app_state", "web_users", "guilds"} & remaining)
 
+    def test_the_chain_has_exactly_one_head(self):
+        """A forked revision graph must fail here, before anyone runs a migration.
+
+        The chain is linear by convention -- bare zero-padded revision ids, no
+        branch_labels, no depends_on -- and parallel feature branches are the way
+        it stops being linear: two branches both claim the next number, and
+        Alembic ends up with two heads. That is cheap to fix at the moment it
+        happens (rename a file, edit two module variables) and expensive
+        afterwards, because `upgrade head` then refuses to run at all and the
+        error names a revision rather than a branch.
+
+        Resolving two heads with an Alembic *merge* revision is prohibited: it
+        would make test_every_revision_downgrades_one_step meaningless.
+        """
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        from zephyr.config import PROJECT_ROOT
+
+        heads = ScriptDirectory.from_config(Config(str(PROJECT_ROOT / "alembic.ini"))).get_heads()
+        assert len(heads) == 1, f"the revision chain has forked: {heads}"
+
+    def test_every_revision_downgrades_one_step(self, tmp_path, monkeypatch):
+        """Each downgrade() must reverse its own upgrade(), not just the aggregate.
+
+        test_downgrade_to_base_is_reversible proves the whole chain unwinds, which
+        was enough at four revisions. It stops being enough as the chain grows: a
+        single broken downgrade() in the middle still fails that test, but the
+        failure names the last step attempted rather than the guilty revision.
+        Walking down one revision at a time makes it attributable.
+        """
+        from alembic import command
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        from zephyr.config import PROJECT_ROOT
+
+        url = _sqlite_url(tmp_path, "stepwise.db")
+        self._upgrade(monkeypatch, url)
+        config = Config(str(PROJECT_ROOT / "alembic.ini"))
+        script = ScriptDirectory.from_config(config)
+
+        for revision in script.walk_revisions():
+            # Attribute a failure to the revision whose downgrade() ran, which
+            # is what the bare exception from `downgrade base` does not tell you.
+            try:
+                command.downgrade(config, "-1")
+            except Exception as exc:  # pragma: no cover - only on a broken revision
+                raise AssertionError(
+                    f"revision {revision.revision} does not downgrade one step: {exc}"
+                ) from exc
+
+        remaining = set(inspect(build_engine(url)).get_table_names())
+        assert remaining <= {"alembic_version"}
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
