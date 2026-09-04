@@ -26,7 +26,7 @@ Zephyr started life as a single 3,000-line script and was rebuilt into a maintai
 - **Dashboard** — a React PWA: a public weather page for anyone, and for server admins a live
   music remote, weather subscriptions and editable settings, signed in with Discord.
 
-> The bot exposes **103 slash commands** and **13 prefix commands** across these features.
+> The bot exposes **108 slash commands** and **13 prefix commands** across these features.
 
 ---
 
