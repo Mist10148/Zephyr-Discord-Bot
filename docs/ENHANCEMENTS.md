@@ -39,12 +39,12 @@ running code, and every defect in Phase 13 was confirmed in the source rather th
 | **12** | **Public site layer** | **Not started** |
 | **13** | **Bot correctness and observability** | **Shipped** |
 | **14** | **Bot functionality gaps** | **Shipped** |
-| **15** | **New bot features** | **Not started** |
+| **15** | **New bot features** | **15.2 shipped**, rest in progress |
 | **16** | **Discord-side presentation** | **Not started** |
 | **17** | **Code quality and infrastructure** | **17.3 shipped**, rest not started |
 
-**Phases 8 to 11, 13 and 14 are shipped.** Next is **Phase 15** (new bot features), starting
-with 15.2, which unblocks 12.2.
+**Phases 8 to 11, 13 and 14 are shipped, plus 15.2.** Next is **Phase 12** (the public site),
+which 15.2 has now unblocked.
 
 One note carried out of Phase 8 for the phases that follow: the frontend suite now has a
 jsdom baseline and a route harness (`test/setup.ts`, `test/helpers.tsx`), so a route-level spec
@@ -637,7 +637,7 @@ reuse — the top three are mostly wiring.
 | # | Feature | What it reuses | Effort |
 |---|---|---|---|
 | 15.1 | **`/remindme` and a reminder list** | The scheduler and durable job loop in [`zephyr/cogs/weather_alerts.py`](../zephyr/cogs/weather_alerts.py), plus a table alongside [`weather_subs`](../zephyr/db/weather_subs.py) | M |
-| 15.2 | **`/export-my-data`, `/delete-my-data`** | The AI memory purge already implements deletion for the largest data category; this is the self-service path 12.2 needs | M |
+| 15.2 ✅ | **`/export-my-data`, `/delete-my-data`** | The AI memory purge already implements deletion for the largest data category; this is the self-service path 12.2 needs | M |
 | 15.3 | **Moderation commands + modlog** | [`zephyr/db/audit.py`](../zephyr/db/audit.py) and the dashboard audit screen, which would gain real content | L |
 | 15.4 | **Skip-vote, DJ-only lock, 24/7 mode** | DJ roles are already modelled (`dj_role_id`, `reload_dj_roles`) | M |
 | 15.5 | **Welcome / farewell messages** | `on_guild_join` exists; needs per-guild config the dashboard can edit | M |
