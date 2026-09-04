@@ -29,6 +29,7 @@ from spotipy.oauth2 import SpotifyClientCredentials
 
 from zephyr.config import REDIS_URL, SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET
 from zephyr.core.ffmpeg import FFMPEG_PATH
+from zephyr.utils import embeds
 from zephyr.core.errors import Refused
 from zephyr.db.guild_settings import read_dj_roles, read_music_policies, write_guild_settings
 from zephyr.db.playlists import (
@@ -313,9 +314,9 @@ class Track:
             self.upload_date = f"{date[6:8]}.{date[4:6]}.{date[0:4]}"
 
     def create_embed(self, elapsed: float = None) -> discord.Embed:
-        embed = discord.Embed(title='🎵 Now playing',
-                              description=f'```css\n{self.title}\n```',
-                              color=discord.Color.blurple())
+        embed = embeds.info(
+            f'```css\n{self.title}\n```', title='🎵 Now playing'
+        )
         if elapsed is not None and self.duration_seconds > 0:
             elapsed = max(0.0, min(elapsed, self.duration_seconds))
             bar = self._progress_bar(elapsed, self.duration_seconds)
@@ -329,7 +330,10 @@ class Track:
         if self.thumbnail:
             embed.set_thumbnail(url=self.thumbnail)
         if self.repaired_from:
-            embed.set_footer(text='Original video unavailable — playing a re-resolved match.')
+            embed.set_footer(
+                text=embeds.footer_text('Original video unavailable — playing a re-resolved match.'),
+                icon_url=embeds.icon_url(),
+            )
         return embed
 
     def to_payload(self) -> dict:
@@ -730,7 +734,7 @@ class QueueView(View):
     def embed(self) -> discord.Embed:
         state = self.cog.peek_voice_state(self.guild_id)
         songs = self.songs
-        embed = discord.Embed(title='🎶 Music Queue', color=discord.Color.blurple())
+        embed = embeds.info(title='🎶 Music Queue')
 
         if state and state.is_playing and state.current:
             embed.add_field(
@@ -759,7 +763,12 @@ class QueueView(View):
         total_duration = state.current.duration_seconds if (state and state.is_playing and state.current) else 0
         for song in songs:
             total_duration += song.duration_seconds or 0
-        embed.set_footer(text=f'Page {self.page + 1}/{self.pages} • Total duration: {_format_timestamp(total_duration)}')
+        embed.set_footer(
+            text=embeds.footer_text(
+                f'Page {self.page + 1}/{self.pages} • Total duration: {_format_timestamp(total_duration)}'
+            ),
+            icon_url=embeds.icon_url(),
+        )
         return embed
 
     async def refresh(self, interaction: discord.Interaction) -> None:
@@ -1223,8 +1232,7 @@ class VoiceState:
                 self.exists = False
                 return
             except Exception as e:
-                await self._notify(embed=discord.Embed(description=f'❌ Failed to load next track: {e}',
-                                                       color=discord.Color.red()))
+                await self._notify(embed=embeds.error(f'❌ Failed to load next track: {e}'))
                 log.exception("Failed to load the next track")
                 self.current = None
                 continue
@@ -1483,10 +1491,7 @@ class MusicCog(commands.Cog):
             # Announced, unlike the idle timeout, which says nothing at all --
             # coming back to a stopped player with no explanation reads as a
             # crash.
-            await state._notify(embed=discord.Embed(
-                description=f'👋 Left {channel} — everyone had gone.',
-                color=discord.Color.blue(),
-            ))
+            await state._notify(embed=embeds.info(f'👋 Left {channel} — everyone had gone.'))
             await self.teardown_voice_state(guild_id)
         except asyncio.CancelledError:
             raise
@@ -2035,12 +2040,12 @@ class MusicCog(commands.Cog):
             if vc and vc.is_connected():
                 if vc.channel.id == destination.id:
                     state.voice = vc
-                    await interaction.followup.send(embed=discord.Embed(description=f'✅ Already connected to {destination}', color=discord.Color.green()))
+                    await interaction.followup.send(embed=embeds.success(f'✅ Already connected to {destination}'))
                     return
                 try:
                     await vc.move_to(destination)
                     state.voice = vc
-                    await interaction.followup.send(embed=discord.Embed(description=f'➡️ Moved to {destination}', color=discord.Color.green()))
+                    await interaction.followup.send(embed=embeds.success(f'➡️ Moved to {destination}'))
                     return
                 except Exception as e:
                     log.warning("move_to failed, trying a fresh connect: %s", e)
@@ -2052,10 +2057,10 @@ class MusicCog(commands.Cog):
 
             try:
                 state.voice = await destination.connect(self_deaf=True, timeout=30.0, reconnect=True)
-                await interaction.followup.send(embed=discord.Embed(description=f'🔊 Joined {destination}', color=discord.Color.green()))
+                await interaction.followup.send(embed=embeds.success(f'🔊 Joined {destination}'))
             except Exception as e:
                 log.exception("Could not join a voice channel")
-                await interaction.followup.send(embed=discord.Embed(description=f'❌ Failed to join {destination}: {e}', color=discord.Color.red()))
+                await interaction.followup.send(embed=embeds.error(f'❌ Failed to join {destination}: {e}'))
 
     @app_commands.command(name='summon', description='Summons the bot to a voice channel.')
     @app_commands.checks.has_permissions(manage_guild=True)
@@ -2071,10 +2076,10 @@ class MusicCog(commands.Cog):
         async with lock:
             if state.voice:
                 await state.voice.move_to(destination)
-                await interaction.followup.send(embed=discord.Embed(description=f'➡️ Moved to {destination}', color=discord.Color.green()))
+                await interaction.followup.send(embed=embeds.success(f'➡️ Moved to {destination}'))
             else:
                 state.voice = await destination.connect(self_deaf=True)
-                await interaction.followup.send(embed=discord.Embed(description=f'🔊 Joined {destination}', color=discord.Color.green()))
+                await interaction.followup.send(embed=embeds.success(f'🔊 Joined {destination}'))
 
     @app_commands.command(name='leave', description='Clears the queue and leaves the voice channel.')
     @app_commands.checks.has_permissions(manage_guild=True)
@@ -2085,7 +2090,7 @@ class MusicCog(commands.Cog):
             await interaction.response.send_message("Not connected to any voice channel.", ephemeral=True)
             return
         await self.teardown_voice_state(ctx.guild.id)
-        await interaction.response.send_message(embed=discord.Embed(description='👋 Left voice channel.', color=discord.Color.green()))
+        await interaction.response.send_message(embed=embeds.success('👋 Left voice channel.'))
 
     # ---------------- Playback Control ----------------
 
@@ -2188,7 +2193,7 @@ class MusicCog(commands.Cog):
         state.start_player()
 
         async def _edit_status(description: str):
-            embed = discord.Embed(description=description, color=discord.Color.blurple())
+            embed = embeds.info(description)
             try:
                 await interaction.edit_original_response(embed=embed)
             except Exception:
@@ -2290,11 +2295,11 @@ class MusicCog(commands.Cog):
                                                      requester_mention=interaction.user.mention,
                                                      loop=self.bot.loop, max_results=10)
         except YTDLError as e:
-            await interaction.followup.send(embed=discord.Embed(description=f'❌ {e}', color=discord.Color.red()))
+            await interaction.followup.send(embed=embeds.error(f'❌ {e}'))
             return
 
         if not results:
-            await interaction.followup.send(embed=discord.Embed(description='❌ No results found.', color=discord.Color.red()))
+            await interaction.followup.send(embed=embeds.error('❌ No results found.'))
             return
 
         options = []
@@ -2309,7 +2314,7 @@ class MusicCog(commands.Cog):
             await interaction2.response.defer()
             track = results[int(select.values[0])]
             await self._enqueue_track(interaction2, track)
-            await interaction2.followup.send(embed=discord.Embed(description=f'🎶 Selected: {track}', color=discord.Color.green()), ephemeral=True)
+            await interaction2.followup.send(embed=embeds.success(f'🎶 Selected: {track}'), ephemeral=True)
 
         select.callback = select_callback
         view = View(timeout=60)
@@ -2357,7 +2362,7 @@ class MusicCog(commands.Cog):
             # Keep position so we can resume accurately
             state._current_position = state.elapsed
             state._current_start_time = None
-            await interaction.response.send_message(embed=discord.Embed(description='⏸️ Paused.', color=discord.Color.orange()))
+            await interaction.response.send_message(embed=embeds.warning('⏸️ Paused.'))
         else:
             await interaction.response.send_message("Nothing is currently playing.", ephemeral=True)
 
@@ -2369,7 +2374,7 @@ class MusicCog(commands.Cog):
         if state.voice and state.voice.is_paused():
             state.voice.resume()
             state._current_start_time = time.time()
-            await interaction.response.send_message(embed=discord.Embed(description='▶️ Resumed.', color=discord.Color.green()))
+            await interaction.response.send_message(embed=embeds.success('▶️ Resumed.'))
         else:
             await interaction.response.send_message("Nothing is currently paused.", ephemeral=True)
 
@@ -2381,9 +2386,9 @@ class MusicCog(commands.Cog):
         state.songs.clear()
         if state.is_playing:
             state.voice.stop()
-            await interaction.response.send_message(embed=discord.Embed(description='⏹️ Stopped and cleared queue.', color=discord.Color.red()))
+            await interaction.response.send_message(embed=embeds.error('⏹️ Stopped and cleared queue.'))
         elif state.voice and state.voice.is_connected():
-            await interaction.response.send_message(embed=discord.Embed(description='🧹 Queue cleared.', color=discord.Color.orange()))
+            await interaction.response.send_message(embed=embeds.warning('🧹 Queue cleared.'))
         else:
             await interaction.response.send_message("Not connected to any voice channel.", ephemeral=True)
 
@@ -2392,7 +2397,7 @@ class MusicCog(commands.Cog):
         ctx = await self._interaction_ctx(interaction)
         state = self.get_voice_state(ctx)
         state.songs.clear()
-        await interaction.response.send_message(embed=discord.Embed(description='🧹 Queue cleared.', color=discord.Color.orange()))
+        await interaction.response.send_message(embed=embeds.warning('🧹 Queue cleared.'))
 
     @app_commands.command(name='skip', description='Vote to skip the current song.')
     async def skip(self, interaction: discord.Interaction):
@@ -2408,16 +2413,16 @@ class MusicCog(commands.Cog):
         # the requester failed instead of skipping.
         if voter.id == state.current.requester_id:
             state.skip()
-            await interaction.response.send_message(embed=discord.Embed(description='⏭️ Skipped.', color=discord.Color.green()))
+            await interaction.response.send_message(embed=embeds.success('⏭️ Skipped.'))
         elif voter.id not in state.skip_votes:
             state.skip_votes.add(voter.id)
             total = len(state.skip_votes)
             needed = state._skip_threshold()
             if total >= needed:
                 state.skip()
-                await interaction.response.send_message(embed=discord.Embed(description='⏭️ Skip vote passed.', color=discord.Color.green()))
+                await interaction.response.send_message(embed=embeds.success('⏭️ Skip vote passed.'))
             else:
-                await interaction.response.send_message(embed=discord.Embed(description=f'🗳️ Skip vote added ({total}/{needed})', color=discord.Color.orange()))
+                await interaction.response.send_message(embed=embeds.warning(f'🗳️ Skip vote added ({total}/{needed})'))
         else:
             await interaction.response.send_message("You have already voted to skip this song.", ephemeral=True)
 
@@ -2442,9 +2447,9 @@ class MusicCog(commands.Cog):
             state._current_position = pos
             state._current_start_time = time.time()
             await state.restart_current(interaction, preserve_position=True)
-            await interaction.followup.send(embed=discord.Embed(description=f'⏩ Seeked to `{_format_timestamp(pos)}`.', color=discord.Color.green()))
+            await interaction.followup.send(embed=embeds.success(f'⏩ Seeked to `{_format_timestamp(pos)}`.'))
         except Exception as e:
-            await interaction.followup.send(embed=discord.Embed(description=f'❌ Seek failed: {e}', color=discord.Color.red()))
+            await interaction.followup.send(embed=embeds.error(f'❌ Seek failed: {e}'))
 
     @app_commands.command(name='forward', description='Skips forward in the current track.')
     @app_commands.describe(amount="Time to skip forward e.g. 10s, 1:00")
@@ -2467,9 +2472,9 @@ class MusicCog(commands.Cog):
             state._current_position = new_pos
             state._current_start_time = time.time()
             await state.restart_current(interaction, preserve_position=True)
-            await interaction.followup.send(embed=discord.Embed(description=f'⏩ Forwarded `{_format_timestamp(delta)}`.', color=discord.Color.green()))
+            await interaction.followup.send(embed=embeds.success(f'⏩ Forwarded `{_format_timestamp(delta)}`.'))
         except Exception as e:
-            await interaction.followup.send(embed=discord.Embed(description=f'❌ Forward failed: {e}', color=discord.Color.red()))
+            await interaction.followup.send(embed=embeds.error(f'❌ Forward failed: {e}'))
 
     @app_commands.command(name='rewind', description='Rewinds in the current track.')
     @app_commands.describe(amount="Time to rewind e.g. 10s, 1:00")
@@ -2490,9 +2495,9 @@ class MusicCog(commands.Cog):
             state._current_position = new_pos
             state._current_start_time = time.time()
             await state.restart_current(interaction, preserve_position=True)
-            await interaction.followup.send(embed=discord.Embed(description=f'⏪ Rewound `{_format_timestamp(delta)}`.', color=discord.Color.green()))
+            await interaction.followup.send(embed=embeds.success(f'⏪ Rewound `{_format_timestamp(delta)}`.'))
         except Exception as e:
-            await interaction.followup.send(embed=discord.Embed(description=f'❌ Rewind failed: {e}', color=discord.Color.red()))
+            await interaction.followup.send(embed=embeds.error(f'❌ Rewind failed: {e}'))
 
     # ---------------- Queue Management ----------------
 
@@ -2525,7 +2530,7 @@ class MusicCog(commands.Cog):
             await interaction.response.send_message("Empty queue.", ephemeral=True)
             return
         state.songs.shuffle()
-        await interaction.response.send_message(embed=discord.Embed(description='🔀 Queue shuffled.', color=discord.Color.green()))
+        await interaction.response.send_message(embed=embeds.success('🔀 Queue shuffled.'))
 
     @app_commands.command(name='remove', description='Removes one or more songs from the queue.')
     async def remove(self, interaction: discord.Interaction, index: int, count: int = 1):
@@ -2543,7 +2548,7 @@ class MusicCog(commands.Cog):
             song = state.songs[index - 1]
             removed.append(song.title)
             state.songs.remove(index - 1)
-        await interaction.response.send_message(embed=discord.Embed(description=f'🗑️ Removed **{len(removed)}** track(s):\n' + '\n'.join(f'• {t}' for t in removed), color=discord.Color.orange()))
+        await interaction.response.send_message(embed=embeds.warning(f'🗑️ Removed **{len(removed)}** track(s):\n' + '\n'.join(f'• {t}' for t in removed)))
 
     @app_commands.command(name='move', description='Moves a track to another position in the queue.')
     async def move(self, interaction: discord.Interaction, from_index: int, to_index: int):
@@ -2556,7 +2561,7 @@ class MusicCog(commands.Cog):
             await interaction.response.send_message("Invalid index.", ephemeral=True)
             return
         state.songs.move(from_index - 1, to_index - 1)
-        await interaction.response.send_message(embed=discord.Embed(description=f'↔️ Moved track #{from_index} to #{to_index}.', color=discord.Color.green()))
+        await interaction.response.send_message(embed=embeds.success(f'↔️ Moved track #{from_index} to #{to_index}.'))
 
     @app_commands.command(name='jump', description='Jumps to a track in the queue.')
     async def jump(self, interaction: discord.Interaction, index: int):
@@ -2571,7 +2576,7 @@ class MusicCog(commands.Cog):
         # Move target to front and skip current
         state.songs.move(index - 1, 0)
         state.skip()
-        await interaction.response.send_message(embed=discord.Embed(description=f'⏭️ Jumped to track #{index}.', color=discord.Color.green()))
+        await interaction.response.send_message(embed=embeds.success(f'⏭️ Jumped to track #{index}.'))
 
     @app_commands.command(name='loop', description='Sets the loop mode for the player.')
     @app_commands.describe(mode="Loop mode: off, track, or queue")
@@ -2595,7 +2600,7 @@ class MusicCog(commands.Cog):
             new_mode = mode.value
         state.loop = new_mode
         emoji = {'off': '⏹️', 'track': '🔂', 'queue': '🔁'}.get(new_mode, '🔁')
-        await interaction.response.send_message(embed=discord.Embed(description=f'{emoji} Loop mode set to **{new_mode}**.', color=discord.Color.green()))
+        await interaction.response.send_message(embed=embeds.success(f'{emoji} Loop mode set to **{new_mode}**.'))
 
     @app_commands.command(name='loopqueue', description='Toggles queue loop.')
     async def loopqueue(self, interaction: discord.Interaction):
@@ -2606,7 +2611,7 @@ class MusicCog(commands.Cog):
             return
         state.loop = 'off' if state.loop == 'queue' else 'queue'
         status = "enabled" if state.loop == 'queue' else "disabled"
-        await interaction.response.send_message(embed=discord.Embed(description=f'🔁 Queue loop {status}.', color=discord.Color.green()))
+        await interaction.response.send_message(embed=embeds.success(f'🔁 Queue loop {status}.'))
 
     @app_commands.command(name='volume', description='Sets the volume of the player (0-1000).')
     async def volume(self, interaction: discord.Interaction, volume: int):
@@ -2619,7 +2624,7 @@ class MusicCog(commands.Cog):
             await interaction.response.send_message("Volume must be between 0 and 1000.", ephemeral=True)
             return
         state.volume = volume / 100
-        await interaction.response.send_message(embed=discord.Embed(description=f'🔊 Volume set to {volume}%', color=discord.Color.green()))
+        await interaction.response.send_message(embed=embeds.success(f'🔊 Volume set to {volume}%'))
 
     # ---------------- Audio Effects ----------------
 
@@ -2639,15 +2644,15 @@ class MusicCog(commands.Cog):
 
         enabled = getattr(state, attr_name)
         await interaction.response.send_message(
-            embed=discord.Embed(description=f'{display_name} is now {"enabled" if enabled else "disabled"}.', color=discord.Color.green())
+            embed=embeds.success(f'{display_name} is now {"enabled" if enabled else "disabled"}.')
         )
 
         if state.is_playing:
             try:
                 await state.restart_current(interaction, preserve_position=True)
-                await interaction.followup.send(embed=discord.Embed(description=f'🎚️ Applied {display_name} to current song.', color=discord.Color.green()))
+                await interaction.followup.send(embed=embeds.success(f'🎚️ Applied {display_name} to current song.'))
             except Exception as e:
-                await interaction.followup.send(embed=discord.Embed(description=f"❌ Error reapplying effect: {e}", color=discord.Color.red()))
+                await interaction.followup.send(embed=embeds.error(f"❌ Error reapplying effect: {e}"))
 
     @app_commands.command(name='16d', description='Toggles 16D audio effect.')
     async def sixteen_d(self, interaction: discord.Interaction):
@@ -2682,13 +2687,13 @@ class MusicCog(commands.Cog):
             return
         if new_pitch.lower() == 'reset':
             state._pitch = 1.0
-            await interaction.response.send_message(embed=discord.Embed(description='Pitch reset.', color=discord.Color.green()))
+            await interaction.response.send_message(embed=embeds.success('Pitch reset.'))
         else:
             try:
                 val = float(new_pitch)
                 if 0.5 <= val <= 2.0:
                     state._pitch = val
-                    await interaction.response.send_message(embed=discord.Embed(description=f'Pitch set to {val}.', color=discord.Color.green()))
+                    await interaction.response.send_message(embed=embeds.success(f'Pitch set to {val}.'))
                 else:
                     await interaction.response.send_message("Pitch must be between 0.5 and 2.0.", ephemeral=True)
                     return
@@ -2698,9 +2703,9 @@ class MusicCog(commands.Cog):
         if state.is_playing:
             try:
                 await state.restart_current(interaction, preserve_position=True)
-                await interaction.followup.send(embed=discord.Embed(description='Pitch applied to current song.', color=discord.Color.green()))
+                await interaction.followup.send(embed=embeds.success('Pitch applied to current song.'))
             except Exception as e:
-                await interaction.followup.send(embed=discord.Embed(description=f'❌ Error applying pitch: {e}', color=discord.Color.red()))
+                await interaction.followup.send(embed=embeds.error(f'❌ Error applying pitch: {e}'))
 
     @app_commands.command(name='bass_boost', description='Sets bass boost in dB (-20 to 20 or reset).')
     async def bass_boost(self, interaction: discord.Interaction, amount: str):
@@ -2718,13 +2723,13 @@ class MusicCog(commands.Cog):
             return
         if amount.lower() == 'reset':
             state._bass_boost = None
-            await interaction.response.send_message(embed=discord.Embed(description='Bass boost disabled.', color=discord.Color.green()))
+            await interaction.response.send_message(embed=embeds.success('Bass boost disabled.'))
         else:
             try:
                 val = int(amount)
                 if -20 <= val <= 20:
                     state._bass_boost = val
-                    await interaction.response.send_message(embed=discord.Embed(description=f'Bass boost set to {val} dB.', color=discord.Color.green()))
+                    await interaction.response.send_message(embed=embeds.success(f'Bass boost set to {val} dB.'))
                 else:
                     await interaction.response.send_message("Bass boost must be between -20 and 20 dB.", ephemeral=True)
                     return
@@ -2734,9 +2739,9 @@ class MusicCog(commands.Cog):
         if state.is_playing:
             try:
                 await state.restart_current(interaction, preserve_position=True)
-                await interaction.followup.send(embed=discord.Embed(description='Bass boost applied to current song.', color=discord.Color.green()))
+                await interaction.followup.send(embed=embeds.success('Bass boost applied to current song.'))
             except Exception as e:
-                await interaction.followup.send(embed=discord.Embed(description=f'❌ Error applying bass boost: {e}', color=discord.Color.red()))
+                await interaction.followup.send(embed=embeds.error(f'❌ Error applying bass boost: {e}'))
 
     @app_commands.command(name='247', description='Toggles 24/7 mode (no auto-disconnect).')
     async def twenty_four_seven(self, interaction: discord.Interaction):
@@ -2775,17 +2780,13 @@ class MusicCog(commands.Cog):
             # -- it just will not survive a restart, and saying so is better
             # than reporting a failure for something that did work.
             log.exception("Could not persist 24/7 mode for %s", interaction.guild.id)
-            await interaction.followup.send(embed=discord.Embed(
-                description=f'24/7 mode is now {"enabled" if enabled else "disabled"} for this session, '
-                            'but could not be saved.',
-                color=discord.Color.orange()))
+            await interaction.followup.send(embed=embeds.warning(f'24/7 mode is now {"enabled" if enabled else "disabled"} for this session, '
+                            'but could not be saved.'))
             return
         status = "enabled" if enabled else "disabled"
-        await interaction.followup.send(embed=discord.Embed(
-            description=f'24/7 mode is now {status}.' + (
+        await interaction.followup.send(embed=embeds.success(f'24/7 mode is now {status}.' + (
                 f' Zephyr will rejoin {state.voice.channel.mention} after a restart.' if enabled else ''
-            ),
-            color=discord.Color.green()))
+            )))
 
     @app_commands.command(name='dj-only', description='Restrict the player to DJs (or Manage Server).')
     @app_commands.describe(enabled='On to lock the player, off to let everybody drive it')
@@ -2852,13 +2853,13 @@ class MusicCog(commands.Cog):
         state._pitch = 1.0
         state._bass_boost = None
         state._slownrev_enabled = False
-        await interaction.response.send_message(embed=discord.Embed(description='All audio effects reset.', color=discord.Color.green()))
+        await interaction.response.send_message(embed=embeds.success('All audio effects reset.'))
         if state.is_playing:
             try:
                 await state.restart_current(interaction, preserve_position=True)
-                await interaction.followup.send(embed=discord.Embed(description='Default audio settings reapplied.', color=discord.Color.green()))
+                await interaction.followup.send(embed=embeds.success('Default audio settings reapplied.'))
             except Exception as e:
-                await interaction.followup.send(embed=discord.Embed(description=f'❌ Error resetting effects: {e}', color=discord.Color.red()))
+                await interaction.followup.send(embed=embeds.error(f'❌ Error resetting effects: {e}'))
 
     @app_commands.command(name='autoplay', description='Keeps the music going with a YouTube Mix when the queue runs out.')
     async def autoplay(self, interaction: discord.Interaction):
@@ -2870,7 +2871,7 @@ class MusicCog(commands.Cog):
         state._autoplay_enabled = not state._autoplay_enabled
         status = "enabled" if state._autoplay_enabled else "disabled"
         await interaction.response.send_message(
-            embed=discord.Embed(description=f'📻 Autoplay {status}.', color=discord.Color.green()))
+            embed=embeds.success(f'📻 Autoplay {status}.'))
         state.changed()
 
     # ---------------- Playlists ----------------
@@ -2905,17 +2906,15 @@ class MusicCog(commands.Cog):
                 save_playlist, str(interaction.user.id), name, self._queue_payload(state),
                 guild_id=str(interaction.guild.id), is_public=public)
         except PlaylistError as exc:
-            await interaction.followup.send(embed=discord.Embed(description=f'❌ {exc}', color=discord.Color.red()))
+            await interaction.followup.send(embed=embeds.error(f'❌ {exc}'))
             return
         except Exception as exc:
             log.exception("Could not save a playlist")
             await interaction.followup.send(
-                embed=discord.Embed(description=f'❌ Could not save the playlist: {exc}', color=discord.Color.red()))
+                embed=embeds.error(f'❌ Could not save the playlist: {exc}'))
             return
 
-        await interaction.followup.send(embed=discord.Embed(
-            description=f'💾 Saved **{saved["track_count"]}** track(s) as **{saved["name"]}**.',
-            color=discord.Color.green()))
+        await interaction.followup.send(embed=embeds.success(f'💾 Saved **{saved["track_count"]}** track(s) as **{saved["name"]}**.'))
 
     @app_commands.command(name='load', description='Loads a saved playlist into the queue.')
     @app_commands.describe(name="The playlist to load")
@@ -2935,18 +2934,16 @@ class MusicCog(commands.Cog):
         except Exception as exc:
             log.exception("Could not load a playlist")
             await interaction.followup.send(
-                embed=discord.Embed(description=f'❌ Could not read your playlists: {exc}', color=discord.Color.red()))
+                embed=embeds.error(f'❌ Could not read your playlists: {exc}'))
             return
         if playlist is None:
             await interaction.followup.send(
-                embed=discord.Embed(description=f'❌ No playlist called **{name}**.', color=discord.Color.red()))
+                embed=embeds.error(f'❌ No playlist called **{name}**.'))
             return
 
         added = await self._enqueue_playlist(interaction.guild, interaction.user,
                                              interaction.user.voice.channel, playlist)
-        await interaction.followup.send(embed=discord.Embed(
-            description=f'📀 Queued **{added}** track(s) from **{playlist["name"]}**.',
-            color=discord.Color.green()))
+        await interaction.followup.send(embed=embeds.success(f'📀 Queued **{added}** track(s) from **{playlist["name"]}**.'))
 
     async def _enqueue_playlist(self, guild, member, destination, playlist: dict) -> int:
         """Connect if needed and append a stored playlist to the queue.
@@ -2985,7 +2982,7 @@ class MusicCog(commands.Cog):
                 "You have no saved playlists yet. Queue something up and run `/save`.", ephemeral=True)
             return
 
-        embed = discord.Embed(title='📀 Your playlists', color=discord.Color.blurple())
+        embed = embeds.info(title='📀 Your playlists')
         for playlist in saved[:25]:
             owned = playlist['owner_id'] == str(interaction.user.id)
             label = playlist['name'] if owned else f"{playlist['name']} (shared)"
@@ -2994,7 +2991,10 @@ class MusicCog(commands.Cog):
                 value=f"{playlist['track_count']} track(s) • {_format_timestamp(playlist['duration_s'])}",
                 inline=False)
         if len(saved) > 25:
-            embed.set_footer(text=f'Showing 25 of {len(saved)}.')
+            embed.set_footer(
+                text=embeds.footer_text(f'Showing 25 of {len(saved)}.'),
+                icon_url=embeds.icon_url(),
+            )
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name='playlist-delete', description='Deletes one of your saved playlists.')
@@ -3158,7 +3158,7 @@ class MusicCog(commands.Cog):
                         data = await resp.json()
                         items = data.get('data', [])[:5]
                         if not items:
-                            await interaction.followup.send(embed=discord.Embed(description='❌ No lyrics found.', color=discord.Color.red()))
+                            await interaction.followup.send(embed=embeds.error('❌ No lyrics found.'))
                             return
                         # Use first result
                         artist = items[0]['artist']['name']
@@ -3171,18 +3171,22 @@ class MusicCog(commands.Cog):
                                 if lyrics_text:
                                     await self._send_lyrics(interaction, f"{artist} - {song_title}", lyrics_text)
                                     return
-            await interaction.followup.send(embed=discord.Embed(description='❌ Could not find lyrics.', color=discord.Color.red()))
+            await interaction.followup.send(embed=embeds.error('❌ Could not find lyrics.'))
         except Exception as e:
             log.exception("Could not fetch lyrics")
-            await interaction.followup.send(embed=discord.Embed(description=f'❌ Error fetching lyrics: {e}', color=discord.Color.red()))
+            await interaction.followup.send(embed=embeds.error(f'❌ Error fetching lyrics: {e}'))
 
     async def _send_lyrics(self, interaction: discord.Interaction, title: str, lyrics: str):
         chunks = [lyrics[i:i + 4000] for i in range(0, len(lyrics), 4000)]
         for idx, chunk in enumerate(chunks):
-            embed = discord.Embed(title=f'🎤 Lyrics — {title}' if idx == 0 else None,
-                                  description=chunk,
-                                  color=discord.Color.teal())
-            embed.set_footer(text=f"Part {idx + 1}/{len(chunks)}")
+            embed = embeds.info(
+                chunk,
+                title=f'🎤 Lyrics — {title}' if idx == 0 else None,
+                # Through the factory rather than set_footer: a bare
+                # set_footer replaces the shared footer, which is how
+                # pagination silently lost the bot's name on every page.
+                footer=f"Part {idx + 1}/{len(chunks)}",
+            )
             if idx == 0:
                 await interaction.followup.send(embed=embed)
             else:

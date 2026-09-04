@@ -252,7 +252,10 @@ class RemindersCog(commands.Cog):
                 inline=False,
             )
         if len(rows) > LIST_LIMIT:
-            embed.set_footer(text=f"Showing the first {LIST_LIMIT}.")
+            embed.set_footer(
+                text=embeds.footer_text(f"Showing the first {LIST_LIMIT}."),
+                icon_url=embeds.icon_url(),
+            )
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="reminder-cancel", description="Cancel one of your reminders.")

@@ -495,10 +495,9 @@ class ZephyrBot(commands.AutoShardedBot):
         server itself nominated for joins and is tried first.
         """
         await self._publish_guilds()
-        embed = discord.Embed(
+        embed = embeds.brand(
+            "Weather, music, AI chat, reminders and moderation. `/help` lists everything.",
             title="Thanks for adding Zephyr 🌦️",
-            description="Weather, music, AI chat, reminders and moderation. `/help` lists everything.",
-            color=discord.Color.gold(),
         )
         embed.add_field(name="Weather", value="`/weather` · `/forecast` · `/weather-subscribe`", inline=False)
         embed.add_field(name="Music", value="`/play` · `/queue` · `/dj-only`", inline=False)

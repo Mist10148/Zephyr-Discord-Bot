@@ -76,7 +76,9 @@ def build_embed(message, *, count: int, emoji: str) -> discord.Embed:
             embed.set_image(url=attachment.url)
             break
 
-    embed.set_footer(text=f"{emoji} {count}")
+    embed.set_footer(
+        text=embeds.footer_text(f"{emoji} {count}"), icon_url=embeds.icon_url()
+    )
     return embed
 
 
