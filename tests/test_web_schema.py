@@ -58,11 +58,23 @@ class TestCreateSchema:
             "dj_role_id",
             "music_channel_ids",
             "enabled_cogs",
+            "tts_language",
+            "ai_channel_mode",
+            "ai_channel_ids",
+            "modlog_channel_id",
+            "dj_only",
+            "always_on",
+            "always_on_channel_id",
+            "vote_skip_ratio",
             "created_at",
         }
         assert columns["id"]["nullable"] is False
-        for name in ("prefix", "locale", "timezone", "default_volume", "dj_role_id"):
+        # Everything but the key and created_at, which is a fact about the row
+        # rather than a setting.  A configurable column that is NOT NULL would
+        # make "never configured" indistinguishable from "set to the default".
+        for name in set(columns) - {"id", "created_at"}:
             assert columns[name]["nullable"] is True, name
+            assert columns[name]["default"] is None, name
 
     def test_snowflakes_are_strings(self, tmp_path):
         """Snowflakes exceed JavaScript's safe integer range, so they are text."""
@@ -81,6 +93,38 @@ class TestCreateSchema:
         guilds = {c["name"]: c for c in inspect(engine).get_columns("guilds")}
         assert "JSON" in str(guilds["music_channel_ids"]["type"]).upper()
         assert "JSON" in str(guilds["enabled_cogs"]["type"]).upper()
+
+
+class TestAutoCreateIsSqliteOnly:
+    """create_all() builds SQLite; Alembic owns a configured server database.
+
+    Note the monkeypatch target. ``zephyr/db/engine.py`` does
+    ``from zephyr.config import DB_AUTO_CREATE``, which binds the value at
+    import, so patching ``zephyr.config`` would have no effect -- the same
+    reason ``tests/test_ai_memory_reset.py`` patches ``session.DATABASE_URL``
+    rather than the config module.
+    """
+
+    def test_sqlite_creates_itself(self):
+        from zephyr.db.engine import should_auto_create
+
+        assert should_auto_create("sqlite:///data/zephyr.db") is True
+
+    def test_a_server_database_is_left_to_alembic(self):
+        from zephyr.db.engine import should_auto_create
+
+        assert should_auto_create("postgresql+psycopg://u:p@host/db") is False
+        # The bare postgres:// form Render hands out is normalised first, so the
+        # decision must survive the rewrite rather than pattern-match the input.
+        assert should_auto_create("postgres://u:p@host/db") is False
+
+    def test_the_env_var_overrides_in_both_directions(self, monkeypatch):
+        from zephyr.db import engine
+
+        monkeypatch.setattr(engine, "DB_AUTO_CREATE", True)
+        assert engine.should_auto_create("postgresql+psycopg://u:p@host/db") is True
+        monkeypatch.setattr(engine, "DB_AUTO_CREATE", False)
+        assert engine.should_auto_create("sqlite:///data/zephyr.db") is False
 
 
 class TestAlembicBaseline:
@@ -151,6 +195,61 @@ class TestAlembicBaseline:
 
         remaining = set(inspect(build_engine(url)).get_table_names())
         assert not ({"ai_settings", "app_state", "web_users", "guilds"} & remaining)
+
+    def test_the_chain_has_exactly_one_head(self):
+        """A forked revision graph must fail here, before anyone runs a migration.
+
+        The chain is linear by convention -- bare zero-padded revision ids, no
+        branch_labels, no depends_on -- and parallel feature branches are the way
+        it stops being linear: two branches both claim the next number, and
+        Alembic ends up with two heads. That is cheap to fix at the moment it
+        happens (rename a file, edit two module variables) and expensive
+        afterwards, because `upgrade head` then refuses to run at all and the
+        error names a revision rather than a branch.
+
+        Resolving two heads with an Alembic *merge* revision is prohibited: it
+        would make test_every_revision_downgrades_one_step meaningless.
+        """
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        from zephyr.config import PROJECT_ROOT
+
+        heads = ScriptDirectory.from_config(Config(str(PROJECT_ROOT / "alembic.ini"))).get_heads()
+        assert len(heads) == 1, f"the revision chain has forked: {heads}"
+
+    def test_every_revision_downgrades_one_step(self, tmp_path, monkeypatch):
+        """Each downgrade() must reverse its own upgrade(), not just the aggregate.
+
+        test_downgrade_to_base_is_reversible proves the whole chain unwinds, which
+        was enough at four revisions. It stops being enough as the chain grows: a
+        single broken downgrade() in the middle still fails that test, but the
+        failure names the last step attempted rather than the guilty revision.
+        Walking down one revision at a time makes it attributable.
+        """
+        from alembic import command
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        from zephyr.config import PROJECT_ROOT
+
+        url = _sqlite_url(tmp_path, "stepwise.db")
+        self._upgrade(monkeypatch, url)
+        config = Config(str(PROJECT_ROOT / "alembic.ini"))
+        script = ScriptDirectory.from_config(config)
+
+        for revision in script.walk_revisions():
+            # Attribute a failure to the revision whose downgrade() ran, which
+            # is what the bare exception from `downgrade base` does not tell you.
+            try:
+                command.downgrade(config, "-1")
+            except Exception as exc:  # pragma: no cover - only on a broken revision
+                raise AssertionError(
+                    f"revision {revision.revision} does not downgrade one step: {exc}"
+                ) from exc
+
+        remaining = set(inspect(build_engine(url)).get_table_names())
+        assert remaining <= {"alembic_version"}
 
 
 if __name__ == "__main__":

@@ -16,13 +16,12 @@ from sqlalchemy import delete, select, text
 
 from zephyr.config import (
     DATABASE_URL,
-    DB_AUTO_CREATE,
     DEFAULT_DATABASE_URL,
     REDIS_URL,
     SETTINGS_PATH,
     STORAGE_BACKEND,
 )
-from zephyr.db.engine import build_engine, create_schema
+from zephyr.db.engine import build_engine, create_schema, should_auto_create
 from zephyr.db.models import AISettings, AppState
 
 
@@ -109,7 +108,7 @@ class DatabaseStorage(BaseStorage):
     def __init__(self, url: str | None = None, *, auto_create: bool | None = None):
         self.url = url or DATABASE_URL or DEFAULT_DATABASE_URL
         self.engine = build_engine(self.url)
-        if DB_AUTO_CREATE if auto_create is None else auto_create:
+        if should_auto_create(self.url) if auto_create is None else auto_create:
             create_schema(self.engine)
         # Connect now: a lazy failure would look like settings disappearing later.
         with self.engine.connect() as connection:

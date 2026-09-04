@@ -62,7 +62,15 @@ DATABASE_URL = os.getenv("DATABASE_URL") or None
 DEFAULT_DATABASE_URL = f"sqlite:///{(PROJECT_ROOT / 'data' / 'zephyr.db').as_posix()}"
 STORAGE_BACKEND = (os.getenv("STORAGE_BACKEND") or "auto").lower()
 DB_ECHO = os.getenv("DB_ECHO", "0").lower() in {"1", "true", "yes"}
-DB_AUTO_CREATE = os.getenv("DB_AUTO_CREATE", "1").lower() in {"1", "true", "yes"}
+# Tri-state on purpose.  None means "decide from the URL" -- see
+# zephyr.db.engine.should_auto_create, which lets SQLite build itself and leaves
+# a configured server database to Alembic.  Setting it explicitly overrides that
+# in either direction.
+_DB_AUTO_CREATE_RAW = os.getenv("DB_AUTO_CREATE")
+DB_AUTO_CREATE: bool | None = (
+    None if _DB_AUTO_CREATE_RAW is None
+    else _DB_AUTO_CREATE_RAW.lower() in {"1", "true", "yes"}
+)
 
 # Optional custom path for the local settings file (useful for mounted volumes).
 SETTINGS_PATH = os.getenv("SETTINGS_PATH") or str(PROJECT_ROOT / "settings.json")

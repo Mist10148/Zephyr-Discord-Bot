@@ -85,7 +85,13 @@ class Guild(Base):
 
     A row appears only once a guild has been configured, so its absence is not a
     statement about bot membership -- that comes from the zephyr:guilds snapshot.
-    Phase 3 reads this table and never writes it.
+
+    Every column but the key is nullable and carries no server_default, and that
+    is load-bearing rather than lazy: website/api/guilds.py substitutes its own
+    DEFAULT_SETTINGS for a NULL and reports which keys it filled in.  A
+    server_default would make "never configured" indistinguishable from
+    "explicitly set to the value that happens to be the default", which is the
+    one distinction that payload exists to draw.
     """
 
     __tablename__ = "guilds"
@@ -98,6 +104,23 @@ class Guild(Base):
     dj_role_id: Mapped[str | None] = mapped_column(String, nullable=True)
     music_channel_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
     enabled_cogs: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Text-to-speech language for /say, as a gTTS language code.  Per guild
+    # because the cog is a singleton: while this lived on the cog instance, one
+    # /language call changed the voice for every server the bot was in.
+    tts_language: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Where the AI answers a mention. "allow" and "deny" read ai_channel_ids as
+    # an allowlist or a blocklist; NULL (and "all") means everywhere it can read.
+    ai_channel_mode: Mapped[str | None] = mapped_column(String, nullable=True)
+    ai_channel_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    modlog_channel_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Music governance. dj_only restricts the transport to the DJ role; always_on
+    # keeps the voice connection alive through the idle timeout, in
+    # always_on_channel_id when set.  vote_skip_ratio is a percentage of the
+    # non-bot listeners, 1-100; NULL means the historical half-the-channel rule.
+    dj_only: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    always_on: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    always_on_channel_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    vote_skip_ratio: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -208,12 +231,20 @@ class AIConversation(Base):
 
 class AIMessage(Base):
     __tablename__ = "ai_messages"
-    __table_args__ = (Index("ix_ai_messages_conversation_id_created_at", "conversation_id", "created_at"),)
+    __table_args__ = (
+        Index("ix_ai_messages_conversation_id_created_at", "conversation_id", "created_at"),
+        Index("ix_ai_messages_author_id", "author_id"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     conversation_id: Mapped[int] = mapped_column(
         ForeignKey("ai_conversations.id", ondelete="CASCADE"), nullable=False
     )
+    # Who said it, for a per-user erasure request.  Nullable because a
+    # conversation is per channel: rows written before this column existed
+    # cannot be attributed to anyone and stay unattributable forever, so an
+    # export has to say so rather than pretend the transcript is complete.
+    author_id: Mapped[str | None] = mapped_column(String, nullable=True)
     role: Mapped[str] = mapped_column(String, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -281,13 +312,17 @@ class WeatherSub(Base):
     # the same storm is still there on the next tick; without this the channel
     # would receive the same warning four times an hour until the weather changed.
     last_fingerprint: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Snoozed until this instant: the row stays enabled and keeps its settings,
+    # but neither runner picks it up.  Distinct from enabled=False, which is a
+    # decision to stop rather than a decision to go quiet for a while.
+    muted_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
 
 class BotUser(Base):
-    """A Discord user's own weather defaults, set with /setlocation.
+    """A Discord user's own defaults and per-user limits, set from Discord.
 
     Separate from ``web_users``: that table records dashboard sign-ins, and most
     people who set a default city will never open the dashboard at all.
@@ -301,6 +336,9 @@ class BotUser(Base):
     lon: Mapped[float | None] = mapped_column(Float, nullable=True)
     units: Mapped[str] = mapped_column(String, nullable=False, default="metric")
     timezone: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Daily ceiling on Gemini tokens this person may spend, so one user cannot
+    # consume a guild's whole allowance.  NULL means the deployment default.
+    ai_token_budget: Mapped[int | None] = mapped_column(Integer, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )

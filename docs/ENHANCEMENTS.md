@@ -41,7 +41,7 @@ running code, and every defect in Phase 13 was confirmed in the source rather th
 | **14** | **Bot functionality gaps** | **Not started** |
 | **15** | **New bot features** | **Not started** |
 | **16** | **Discord-side presentation** | **Not started** |
-| **17** | **Code quality and infrastructure** | **Not started** |
+| **17** | **Code quality and infrastructure** | **17.3 shipped**, rest not started |
 
 **Do Phase 8 first**, then **13.1 and 13.2**. Phase 8 is bugs a user hits on the two
 most-used screens; 13.1 and 13.2 are why every bot bug after them is hard to find.
@@ -704,7 +704,7 @@ config covers both processes at once, and 13.1's handler is the natural capture 
 production exception in a cog is currently invisible unless someone happens to be reading the
 Render log stream at the moment it happens.
 
-### 17.3 — Two schema paths are active at once · S
+### 17.3 — Two schema paths are active at once · S · **DONE**
 
 [`alembic.ini`](../alembic.ini) with four migrations in
 [`zephyr/db/migrations/versions/`](../zephyr/db/migrations/versions), **and** `DB_AUTO_CREATE`
@@ -714,6 +714,13 @@ without a migration and then diverge from one.
 
 **Fix:** keep auto-create for SQLite development only and make migrations the sole path
 whenever `DATABASE_URL` is set. State which is which in [DEPLOYMENT.md](DEPLOYMENT.md).
+
+**Shipped** with the Phase 13–15 schema batch, because six new-table revisions are exactly
+the case where the double path bites and it had to be fixed before them, not after.
+`should_auto_create(url)` in [`zephyr/db/engine.py`](../zephyr/db/engine.py) decides per URL;
+`DB_AUTO_CREATE` became tri-state and remains an override in both directions. The recovery
+for a database already built by `create_all` — a one-time `alembic stamp head` — is in
+[DEPLOYMENT.md](DEPLOYMENT.md), since no test can detect that state.
 
 ### 17.4 — No end-to-end test on the frontend · M
 
