@@ -58,11 +58,23 @@ class TestCreateSchema:
             "dj_role_id",
             "music_channel_ids",
             "enabled_cogs",
+            "tts_language",
+            "ai_channel_mode",
+            "ai_channel_ids",
+            "modlog_channel_id",
+            "dj_only",
+            "always_on",
+            "always_on_channel_id",
+            "vote_skip_ratio",
             "created_at",
         }
         assert columns["id"]["nullable"] is False
-        for name in ("prefix", "locale", "timezone", "default_volume", "dj_role_id"):
+        # Everything but the key and created_at, which is a fact about the row
+        # rather than a setting.  A configurable column that is NOT NULL would
+        # make "never configured" indistinguishable from "set to the default".
+        for name in set(columns) - {"id", "created_at"}:
             assert columns[name]["nullable"] is True, name
+            assert columns[name]["default"] is None, name
 
     def test_snowflakes_are_strings(self, tmp_path):
         """Snowflakes exceed JavaScript's safe integer range, so they are text."""
