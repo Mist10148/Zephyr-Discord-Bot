@@ -208,14 +208,14 @@ the dashboard.
 | Category | Commands |
 |----------|----------|
 | **Weather** | `/weather`, `/forecast`, `/temperature`, `/description`, `/humidity`, `/pressure`, `/windspeed`, `/air`, `/precipitation`, `/typhoon`, `/class`, `/search`, `/setlocation`, `/mylocation`, `/use`, `/helpweather`, `/ping` |
-| **Weather — Alerts** | `/weather-subscribe`, `/weather-subs`, `/weather-unsubscribe`, `/weather-preview` |
+| **Weather — Alerts** | `/weather-subscribe`, `/weather-subs`, `/weather-unsubscribe`, `/weather-preview`, `/weather-run`, `/weather-snooze` |
 | **Music — Playback** | `/play`, `/playskip`, `/playnext`, `/msearch`, `/now`, `/np`, `/pause`, `/resume`, `/stop`, `/seek`, `/forward`, `/rewind`, `/lyrics` |
 | **Music — Queue** | `/queue`, `/skip`, `/jump`, `/move`, `/remove`, `/clear`, `/shuffle`, `/loop`, `/loopqueue`, `/autoplay` |
 | **Music — Playlists** | `/save`, `/load`, `/playlists`, `/playlist-delete` |
 | **Music — Effects & Audio** | `/volume`, `/bassboost`, `/bass_boost`, `/pitch`, `/nightcore`, `/vaporwave`, `/slowed`, `/reverb`, `/slownrev`, `/16d`, `/reset_effects` |
 | **Music — Voice & Connection** | `/join`, `/summon`, `/leave`, `/disconnect` |
 | **Music — DJ controls** | `/dj-only`, `/vote-skip-ratio`, `/247` |
-| **Chat & AI** | `/prompt`, `/settings`, `/output`, `/token`, `/image-gen`, `/generate` |
+| **Chat & AI** | `/prompt`, `/forget`, `/settings`, `/output`, `/token`, `/image-gen`, `/generate`, `/summarize`, `/translate` |
 | **TTS & Voice** | `/say`, `/language`, `/disconnect` |
 | **Reminders** | `/remindme`, `/reminders`, `/reminder-cancel` |
 | **Welcome & Farewell** | `/welcome`, `/farewell`, `/greeting-preview` |

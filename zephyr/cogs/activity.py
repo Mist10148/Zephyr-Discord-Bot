@@ -35,6 +35,7 @@ from discord.ext import commands, tasks
 
 from zephyr.core.logging import get_logger
 from zephyr.db import activity as repo
+from zephyr.utils import embeds
 
 log = get_logger(__name__)
 
@@ -267,13 +268,10 @@ class ActivityCog(commands.Cog):
             repo.rank_of, str(interaction.guild.id), str(target.id)
         )
 
-        embed = discord.Embed(
+        embed = embeds.info(
+            f"{render_bar(stats['xp_into_level'], stats['xp_for_next_level'])} "
+            f"{stats['xp_into_level']}/{stats['xp_for_next_level']} XP",
             title=f"Level {stats['level']}",
-            description=(
-                f"{render_bar(stats['xp_into_level'], stats['xp_for_next_level'])} "
-                f"{stats['xp_into_level']}/{stats['xp_for_next_level']} XP"
-            ),
-            color=discord.Color.blurple(),
         )
         embed.set_author(
             name=target.display_name,
@@ -303,9 +301,7 @@ class ActivityCog(commands.Cog):
                 f"{row['messages']:,} messages"
             )
         await interaction.followup.send(
-            embed=discord.Embed(
-                title="Most active", description="\n".join(lines), color=discord.Color.gold()
-            ),
+            embed=embeds.brand("\n".join(lines), title="Most active"),
             # A leaderboard mentions ten people, and pinging all of them every
             # time somebody runs it would make the command a nuisance.
             allowed_mentions=discord.AllowedMentions.none(),
@@ -385,14 +381,12 @@ class ActivityCog(commands.Cog):
         day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         summary = await asyncio.to_thread(repo.daily_summary, str(interaction.guild.id), day)
         await interaction.followup.send(
-            embed=discord.Embed(
+            embed=embeds.info(
+                f"**{summary['messages']:,}** messages from "
+                f"**{summary['active']}** {'person' if summary['active'] == 1 else 'people'}.",
                 title="Today",
-                description=(
-                    f"**{summary['messages']:,}** messages from "
-                    f"**{summary['active']}** {'person' if summary['active'] == 1 else 'people'}."
-                ),
-                color=discord.Color.blurple(),
-            ).set_footer(text=f"UTC day {day}")
+                footer=f"UTC day {day}",
+            )
         )
 
     @commands.Cog.listener()

@@ -31,18 +31,74 @@ def _parse(command: str) -> tuple[list[str], list[dict]]:
 @api.get("/commands")
 @public_rate_limit("commands", limit=60, window=60)
 def commands():
+    """The command reference, from the bot's tree when it has published one.
+
+    Two sources, in order.  The bot publishes the list derived from
+    ``bot.tree`` at startup, and that is authoritative: it is what Discord was
+    actually told.  The hand-maintained ``HELP_CATEGORIES`` is the fallback,
+    for a deployment with no Redis and for the window before the bot has ever
+    started -- a public reference that answered 503 because the bot is
+    restarting would be worse than one that is a deploy behind.
+
+    ``source`` is reported so a reader can tell which they got.  Without it, a
+    stale fallback and a fresh derivation are indistinguishable, and "the
+    website is missing a command" has two very different causes.
+    """
+    published = None
+    try:
+        published = bridge.read_commands(url=current_app.config.get("REDIS_URL"))
+    except Exception:
+        # A reference is worth serving stale. This is the one endpoint that
+        # must answer without the bot.
+        log.warning("Could not read the published command list", exc_info=True)
+
+    if published and published.get("commands"):
+        payload = {
+            "version": published.get("version") or "",
+            "count": published.get("count") or len(published["commands"]),
+            "commands": published["commands"],
+            "categories": published.get("categories") or _fallback_categories(),
+            "source": "tree",
+        }
+    else:
+        entries = _fallback_entries()
+        payload = {
+            "version": hashlib.sha256(
+                json.dumps(entries, sort_keys=True).encode()
+            ).hexdigest()[:12],
+            "count": len(entries),
+            "commands": entries,
+            "categories": _fallback_categories(),
+            "source": "help_data",
+        }
+
+    response = jsonify(payload)
+    response.set_etag(payload["version"])
+    return response
+
+
+def _fallback_entries() -> list[dict]:
     entries, seen = [], set()
     for category in HELP_CATEGORIES:
         for command in category.commands:
             aliases, args = _parse(command.name)
             name = aliases[0]
-            if name in seen: continue
+            if name in seen:
+                continue
             seen.add(name)
-            entries.append({"name": name, "aliases": aliases[1:], "args": args, "description": command.value, "category": category.key, "category_title": category.title, "emoji": category.emoji})
-    version = hashlib.sha256(json.dumps(entries, sort_keys=True).encode()).hexdigest()[:12]
-    response = jsonify({"version": version, "count": len(entries), "commands": entries, "categories": [{"key": category.key, "title": category.title, "emoji": category.emoji} for category in HELP_CATEGORIES]})
-    response.set_etag(version)
-    return response
+            entries.append({
+                "name": name, "aliases": aliases[1:], "args": args,
+                "description": command.value, "category": category.key,
+                "category_title": category.title, "emoji": category.emoji,
+            })
+    return entries
+
+
+def _fallback_categories() -> list[dict]:
+    return [
+        {"key": category.key, "title": category.title, "emoji": category.emoji}
+        for category in HELP_CATEGORIES
+    ]
 
 
 @api.get("/site")

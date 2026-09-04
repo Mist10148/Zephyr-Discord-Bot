@@ -20,6 +20,7 @@ from zephyr.core.logging import get_logger
 from zephyr.db import reminders as repo
 from zephyr.db.reminders import MAX_PENDING_PER_USER, MIN_REPEAT_SECONDS, ReminderError
 from zephyr.db.weather_subs import read_bot_user
+from zephyr.utils import embeds
 
 log = get_logger(__name__)
 
@@ -136,11 +137,7 @@ class RemindersCog(commands.Cog):
 
             await destination.send(
                 content=f"<@{row['user_id']}>",
-                embed=discord.Embed(
-                    title="⏰ Reminder",
-                    description=row["message"],
-                    color=discord.Color.blurple(),
-                ),
+                embed=embeds.info(row["message"], title="⏰ Reminder"),
             )
         except discord.Forbidden:
             # Left claimed rather than retried: a permission problem will not
@@ -243,10 +240,8 @@ class RemindersCog(commands.Cog):
             await interaction.followup.send("You have no reminders pending.", ephemeral=True)
             return
 
-        embed = discord.Embed(
-            title="⏰ Your reminders",
-            description=f"{len(rows)} of {MAX_PENDING_PER_USER} used.",
-            color=discord.Color.blurple(),
+        embed = embeds.info(
+            f"{len(rows)} of {MAX_PENDING_PER_USER} used.", title="⏰ Your reminders"
         )
         for row in rows[:LIST_LIMIT]:
             embed.add_field(
@@ -257,7 +252,10 @@ class RemindersCog(commands.Cog):
                 inline=False,
             )
         if len(rows) > LIST_LIMIT:
-            embed.set_footer(text=f"Showing the first {LIST_LIMIT}.")
+            embed.set_footer(
+                text=embeds.footer_text(f"Showing the first {LIST_LIMIT}."),
+                icon_url=embeds.icon_url(),
+            )
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="reminder-cancel", description="Cancel one of your reminders.")

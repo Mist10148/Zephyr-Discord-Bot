@@ -41,6 +41,7 @@ from zephyr.utils.weather_utils import (
 )
 from zephyr.utils.pagination import _send_paginated_embeds
 from zephyr.core.logging import get_logger
+from zephyr.utils import embeds
 from zephyr.utils.autocomplete import MAX_CHOICES, cached, truncate
 
 
@@ -52,61 +53,61 @@ log = get_logger(__name__)
 @commands.command()
 async def temperature(ctx, *, city: str = "Iloilo"):
     current_data = requests.get(f"{CURRENT_URL}?appid={API_KEY}&q={city}&units=metric").json()
-    embed = discord.Embed(title=f"Temperature in {city}", color=discord.Color.blue())
+    embed = embeds.build(title=f"Temperature in {city}", accent="info")
     if current_data.get("cod") != "404":
         embed.add_field(name="Current Temperature", value=f"{current_data['main'].get('temp', 'N/A')}°C", inline=False)
     else:
         embed.description = f"City {city} not found."
-        embed.color = discord.Color.red()
+        embeds.recolour(embed, "error")
     await ctx.send(embed=embed)
 
 
 @commands.command()
 async def description(ctx, *, city: str = "Iloilo"):
     current_data = requests.get(f"{CURRENT_URL}?appid={API_KEY}&q={city}&units=metric").json()
-    embed = discord.Embed(title=f"Weather Description in {city}", color=discord.Color.blue())
+    embed = embeds.build(title=f"Weather Description in {city}", accent="info")
     if current_data.get("cod") != "404":
         desc = current_data['weather'][0].get('description', 'N/A')
         embed.add_field(name="Current Weather", value=desc.capitalize(), inline=False)
     else:
         embed.description = f"City {city} not found."
-        embed.color = discord.Color.red()
+        embeds.recolour(embed, "error")
     await ctx.send(embed=embed)
 
 
 @commands.command()
 async def humidity(ctx, *, city: str = "Iloilo"):
     current_data = requests.get(f"{CURRENT_URL}?appid={API_KEY}&q={city}&units=metric").json()
-    embed = discord.Embed(title=f"Humidity in {city}", color=discord.Color.blue())
+    embed = embeds.build(title=f"Humidity in {city}", accent="info")
     if current_data.get("cod") != "404":
         embed.add_field(name="Current Humidity", value=f"{current_data['main'].get('humidity', 'N/A')}%", inline=False)
     else:
         embed.description = f"City {city} not found."
-        embed.color = discord.Color.red()
+        embeds.recolour(embed, "error")
     await ctx.send(embed=embed)
 
 
 @commands.command()
 async def pressure(ctx, *, city: str = "Iloilo"):
     current_data = requests.get(f"{CURRENT_URL}?appid={API_KEY}&q={city}&units=metric").json()
-    embed = discord.Embed(title=f"Pressure in {city}", color=discord.Color.blue())
+    embed = embeds.build(title=f"Pressure in {city}", accent="info")
     if current_data.get("cod") != "404":
         embed.add_field(name="Current Pressure", value=f"{current_data['main'].get('pressure', 'N/A')} hPa", inline=False)
     else:
         embed.description = f"City {city} not found."
-        embed.color = discord.Color.red()
+        embeds.recolour(embed, "error")
     await ctx.send(embed=embed)
 
 
 @commands.command()
 async def windspeed(ctx, *, city: str = "Iloilo"):
     current_data = requests.get(f"{CURRENT_URL}?appid={API_KEY}&q={city}&units=metric").json()
-    embed = discord.Embed(title=f"Wind Speed in {city}", color=discord.Color.blue())
+    embed = embeds.build(title=f"Wind Speed in {city}", accent="info")
     if current_data.get("cod") != "404":
         embed.add_field(name="Current Wind Speed", value=f"{current_data['wind'].get('speed', 'N/A')} m/s", inline=False)
     else:
         embed.description = f"City {city} not found."
-        embed.color = discord.Color.red()
+        embeds.recolour(embed, "error")
     await ctx.send(embed=embed)
 
 
@@ -140,27 +141,24 @@ def _web_app_embed(guild_id: int | None = None) -> tuple[discord.Embed, View | N
     link = _web_app_link(guild_id)
     if not link:
         return (
-            discord.Embed(
+            embeds.warning(
+                "This bot has no web app URL set. Ask the owner to set `WEB_APP_URL`, "
+                "or to configure the dashboard (`DISCORD_CLIENT_ID`, "
+                "`DISCORD_CLIENT_SECRET`, `REDIS_URL`).",
                 title="Web app not configured",
-                description=(
-                    "This bot has no web app URL set. Ask the owner to set `WEB_APP_URL`, "
-                    "or to configure the dashboard (`DISCORD_CLIENT_ID`, "
-                    "`DISCORD_CLIENT_SECRET`, `REDIS_URL`)."
-                ),
-                color=discord.Color.orange(),
             ),
             None,
         )
 
     if AUTH_ENABLED:
-        embed = discord.Embed(title="Zephyr dashboard", color=discord.Color.green())
+        embed = embeds.build(title="Zephyr dashboard", accent="brand")
         embed.description = (
             "Sign in with Discord to manage this server's music, weather alerts, AI and settings.\n"
             "You will only see servers where you have **Manage Server**."
         )
         label = "Sign in and open dashboard"
     else:
-        embed = discord.Embed(title="Weather App Link", color=discord.Color.green())
+        embed = embeds.build(title="Weather App Link", accent="brand")
         embed.description = "Live conditions, the week ahead, and heat-index advisories for any city."
         label = "Open the web app"
 
@@ -195,14 +193,14 @@ async def helpweather(ctx):
         "`/use` - Link to web app\n"
         "`/helpweather` - Show this help message"
     )
-    embed = discord.Embed(title="Weather Bot Help", description=help_message, color=discord.Color.gold())
+    embed = embeds.build(title="Weather Bot Help", description=help_message, accent="brand")
     await ctx.send(embed=embed)
 
 
 @commands.command()
 async def precipitation(ctx, *, city: str = "Iloilo"):
     current_data = requests.get(f"{CURRENT_URL}?appid={API_KEY}&q={city}&units=metric").json()
-    embed = discord.Embed(title=f"Precipitation in {city}", color=discord.Color.blue())
+    embed = embeds.build(title=f"Precipitation in {city}", accent="info")
     if current_data.get("cod") != "404":
         rain = current_data.get('rain')
         snow = current_data.get('snow')
@@ -217,14 +215,14 @@ async def precipitation(ctx, *, city: str = "Iloilo"):
         embed.description = msg or "No significant precipitation reported."
     else:
         embed.description = f"City {city} not found."
-        embed.color = discord.Color.red()
+        embeds.recolour(embed, "error")
     await ctx.send(embed=embed)
 
 
 @commands.command()
 async def typhoon(ctx):
     alert_data = requests.get(f"{ALERTS_URL}?lat={ILOILO_COORDS['lat']}&lon={ILOILO_COORDS['lon']}&appid={API_KEY}").json()
-    embed = discord.Embed(title="Typhoon Alert for Iloilo City", color=discord.Color.orange())
+    embed = embeds.build(title="Typhoon Alert for Iloilo City", accent="warning")
     alerts = alert_data.get("alerts", [])
     if alerts:
         for alert in alerts:
@@ -248,7 +246,7 @@ async def typhoon(ctx):
 @commands.command()
 async def air(ctx, *, city: str = "Iloilo"):
     current_data = requests.get(f"{CURRENT_URL}?appid={API_KEY}&q={city}&units=metric").json()
-    embed = discord.Embed(title=f"Air Quality in {city}", color=discord.Color.green())
+    embed = embeds.build(title=f"Air Quality in {city}", accent="info")
     if current_data.get("cod") != "404":
         lat, lon = current_data['coord']['lat'], current_data['coord']['lon']
         aqi_data = requests.get(f"http://api.openweathermap.org/data/2.5/air_pollution?lat={lat}&lon={lon}&appid={API_KEY}").json()
@@ -269,17 +267,17 @@ async def air(ctx, *, city: str = "Iloilo"):
             embed.description = f"**Air Quality:** {desc}\n\n**Pollutants:**\n{pollutants}"
         else:
             embed.description = "Air quality data not available."
-            embed.color = discord.Color.yellow()
+            embeds.recolour(embed, "warning")
     else:
         embed.description = f"City {city} not found."
-        embed.color = discord.Color.red()
+        embeds.recolour(embed, "error")
     await ctx.send(embed=embed)
 
 
 @commands.command()
 async def weather(ctx, *, city: str = "Iloilo"):
     current_data = requests.get(f"{CURRENT_URL}?appid={API_KEY}&q={city}&units=metric").json()
-    embed = discord.Embed(title=f"Weather in {city}", color=discord.Color.blurple())
+    embed = embeds.build(title=f"Weather in {city}", accent="info")
     if current_data.get("cod") != "404":
         desc = current_data['weather'][0]['description']
         temp = current_data['main']['temp']
@@ -311,7 +309,7 @@ async def weather(ctx, *, city: str = "Iloilo"):
             embed.add_field(name="Air Quality", value="Data not available", inline=False)
     else:
         embed.description = f"City {city} not found."
-        embed.color = discord.Color.red()
+        embeds.recolour(embed, "error")
     await ctx.send(embed=embed)
 
 
@@ -368,7 +366,7 @@ class ForecastView(discord.ui.View):
         aqi = aqi_data['main']['aqi'] if aqi_data else None
         aqi_desc = {1: "Good", 2: "Fair", 3: "Moderate", 4: "Poor", 5: "Very Poor"}.get(aqi, "Unknown")
 
-        embed = discord.Embed(title=f"Forecast for {self.city} - {date}", color=discord.Color.green())
+        embed = embeds.build(title=f"Forecast for {self.city} - {date}", accent="info")
         embed.add_field(name="Temperature", value=f"{temp}°C", inline=True)
         embed.add_field(name="Description", value=desc.capitalize(), inline=True)
         embed.add_field(name="Humidity", value=f"{hum}%", inline=True)
@@ -393,7 +391,7 @@ async def forecast(ctx, *, city: str = "Iloilo"):
             view = ForecastView(forecasts, aqi_list[:len(forecasts)], city)
             first = forecasts[0]
             date = datetime.utcfromtimestamp(first['dt']).strftime('%Y-%m-%d %H:%M:%S UTC')
-            embed = discord.Embed(title=f"Forecast for {city} - {date}", color=discord.Color.green())
+            embed = embeds.build(title=f"Forecast for {city} - {date}", accent="info")
             embed.add_field(name="Temperature", value=f"{first['main'].get('temp', 'N/A')}°C", inline=True)
             embed.add_field(name="Description", value=first['weather'][0].get('description', 'N/A').capitalize(), inline=True)
             embed.add_field(name="Humidity", value=f"{first['main'].get('humidity', 'N/A')}%", inline=True)
@@ -411,7 +409,7 @@ async def forecast(ctx, *, city: str = "Iloilo"):
 @commands.command()
 async def search(ctx, *, city: str):
     current_data = requests.get(f"{CURRENT_URL}?appid={API_KEY}&q={city}&units=metric").json()
-    embed = discord.Embed(title=f"Search Results for {city}", color=discord.Color.dark_gold())
+    embed = embeds.build(title=f"Search Results for {city}", accent="brand")
     if current_data.get("cod") == 200:
         temp = current_data['main'].get('temp', 'N/A')
         desc = current_data['weather'][0].get('description', 'N/A')
@@ -433,7 +431,7 @@ async def search(ctx, *, city: str):
             embed.add_field(name="Air Quality", value={1: "Good", 2: "Fair", 3: "Moderate", 4: "Poor", 5: "Very Poor"}.get(aqi, "Unknown"), inline=False)
     else:
         embed.description = f"City {city} not found."
-        embed.color = discord.Color.red()
+        embeds.recolour(embed, "error")
     await ctx.send(embed=embed)
 
 
@@ -460,14 +458,19 @@ def class_suspension(feels_like: float):
         return "🤔 **Unusual temperature reading**", "Unusual Weather"
 
 
-def _class_color(feels_like: float) -> discord.Color:
+def _class_accent(feels_like: float) -> str:
+    """The heat-index severity ladder, as one of the factory's six roles.
+
+    It returned a `discord.Color` chosen by hand, which meant this cog's idea of
+    "dangerous" was a different red from every other cog's.
+    """
     if feels_like >= 50:
-        return discord.Color.red()
+        return "error"
     elif feels_like >= 41:
-        return discord.Color.orange()
+        return "warning"
     elif feels_like >= 38:
-        return discord.Color.gold()
-    return discord.Color.green()
+        return "brand"
+    return "success"
 
 
 def _get_class_weather_data():
@@ -483,11 +486,8 @@ def _build_class_embed(title: str, data: dict) -> Embed:
     feels_like = data["feels_like"]
     suspension, desc = class_suspension(feels_like)
     condition = data.get("condition") or wmo_description(data.get("weather_code"))
-    embed = Embed(
-        title=f"📅 Class Suspension Forecast: {title}",
-        description=f"**{condition}**",
-        color=_class_color(feels_like),
-    )
+    embed = embeds.build(title=f"📅 Class Suspension Forecast: {title}",
+        description=f"**{condition}**", accent=_class_accent(feels_like))
     embed.add_field(name="🌡 Temperature", value=f"{data['temp']}°C", inline=True)
     embed.add_field(name="🥵 Feels Like", value=f"{feels_like}°C", inline=True)
     if data.get("humidity") is not None:
@@ -701,9 +701,9 @@ class WeatherCog(commands.Cog):
         city = await self._city_for(interaction, city)
         data = requests.get(f"{CURRENT_URL}?appid={API_KEY}&q={city}&units=metric").json()
         if data.get("cod") != "404":
-            embed = Embed(title=f"Current Temperature in {city}", description=f"**{data['main'].get('temp', 'N/A')}°C**", color=0x00FF00)
+            embed = embeds.build(title=f"Current Temperature in {city}", description=f"**{data['main'].get('temp', 'N/A')}°C**", accent="info")
         else:
-            embed = Embed(title=f"City {city} not found", description="Sorry, the city you requested could not be found.", color=0xFF0000)
+            embed = embeds.build(title=f"City {city} not found", description="Sorry, the city you requested could not be found.", accent="error")
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="description", description="Get the weather description of a city.")
@@ -713,9 +713,9 @@ class WeatherCog(commands.Cog):
         data = requests.get(f"{CURRENT_URL}?appid={API_KEY}&q={city}&units=metric").json()
         if data.get("cod") != "404":
             desc = data['weather'][0].get('description', 'N/A')
-            embed = Embed(title=f"Weather Description in {city}", description=f"**{desc.capitalize()}**", color=0x00FF00)
+            embed = embeds.build(title=f"Weather Description in {city}", description=f"**{desc.capitalize()}**", accent="info")
         else:
-            embed = Embed(title=f"City {city} not found", description="Sorry, the city you requested could not be found.", color=0xFF0000)
+            embed = embeds.build(title=f"City {city} not found", description="Sorry, the city you requested could not be found.", accent="error")
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="humidity", description="Get the humidity of a city.")
@@ -723,9 +723,9 @@ class WeatherCog(commands.Cog):
         city = await self._city_for(interaction, city)
         data = requests.get(f"{CURRENT_URL}?appid={API_KEY}&q={city}&units=metric").json()
         if data.get("cod") != "404":
-            embed = Embed(title=f"Current Humidity in {city}", description=f"**{data['main'].get('humidity', 'N/A')}%**", color=0x00FF00)
+            embed = embeds.build(title=f"Current Humidity in {city}", description=f"**{data['main'].get('humidity', 'N/A')}%**", accent="info")
         else:
-            embed = Embed(title=f"City {city} not found", description="Sorry, the city you requested could not be found.", color=0xFF0000)
+            embed = embeds.build(title=f"City {city} not found", description="Sorry, the city you requested could not be found.", accent="error")
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="pressure", description="Get the atmospheric pressure of a city.")
@@ -733,9 +733,9 @@ class WeatherCog(commands.Cog):
         city = await self._city_for(interaction, city)
         data = requests.get(f"{CURRENT_URL}?appid={API_KEY}&q={city}&units=metric").json()
         if data.get("cod") != "404":
-            embed = Embed(title=f"Current Pressure in {city}", description=f"**{data['main'].get('pressure', 'N/A')} hPa**", color=0x00FF00)
+            embed = embeds.build(title=f"Current Pressure in {city}", description=f"**{data['main'].get('pressure', 'N/A')} hPa**", accent="info")
         else:
-            embed = Embed(title=f"City {city} not found", description="Sorry, the city you requested could not be found.", color=0xFF0000)
+            embed = embeds.build(title=f"City {city} not found", description="Sorry, the city you requested could not be found.", accent="error")
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="windspeed", description="Get the wind speed of a city.")
@@ -743,9 +743,9 @@ class WeatherCog(commands.Cog):
         city = await self._city_for(interaction, city)
         data = requests.get(f"{CURRENT_URL}?appid={API_KEY}&q={city}&units=metric").json()
         if data.get("cod") != "404":
-            embed = Embed(title=f"Current Wind Speed in {city}", description=f"**{data['wind'].get('speed', 'N/A')} m/s**", color=0x00FF00)
+            embed = embeds.build(title=f"Current Wind Speed in {city}", description=f"**{data['wind'].get('speed', 'N/A')} m/s**", accent="info")
         else:
-            embed = Embed(title=f"City {city} not found", description="Sorry, the city you requested could not be found.", color=0xFF0000)
+            embed = embeds.build(title=f"City {city} not found", description="Sorry, the city you requested could not be found.", accent="error")
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="use", description="Provides a link to the web application version of this bot.")
@@ -757,7 +757,7 @@ class WeatherCog(commands.Cog):
     async def slash_precipitation(self, interaction: discord.Interaction, city: str = None):
         city = await self._city_for(interaction, city)
         data = requests.get(f"{CURRENT_URL}?appid={API_KEY}&q={city}&units=metric").json()
-        embed = Embed(title=f"Precipitation in {city}", color=0x00FFFF)
+        embed = embeds.build(title=f"Precipitation in {city}", accent="info")
         if data.get("cod") != "404":
             rain = data.get('rain')
             snow = data.get('snow')
@@ -771,7 +771,7 @@ class WeatherCog(commands.Cog):
             if not rain and not snow and pop is None:
                 embed.add_field(name="No Rain or Snow", value="No significant precipitation reported.", inline=False)
         else:
-            embed = Embed(title=f"City {city} Not Found", description="We couldn't find weather data for this city.", color=0xFF0000)
+            embed = embeds.build(title=f"City {city} Not Found", description="We couldn't find weather data for this city.", accent="error")
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="typhoon", description="Get the latest typhoon alert for Iloilo City.")
@@ -782,7 +782,7 @@ class WeatherCog(commands.Cog):
             for alert in alerts:
                 if "typhoon" in alert.get("event", "").lower() or "cyclone" in alert.get("event", "").lower():
                     name = alert.get('event', 'Unknown Typhoon')
-                    embed = Embed(title="⚠️ Typhoon Alert for Iloilo City!", color=0xFF4500)
+                    embed = embeds.build(title="⚠️ Typhoon Alert for Iloilo City!", accent="warning")
                     embed.add_field(name="Typhoon Name", value=name, inline=False)
                     embed.add_field(name="Description", value=alert.get('description', 'N/A'), inline=False)
                     embed.add_field(name="Start Time", value=_format_datetime_pht(alert.get('start', 0)), inline=False)
@@ -790,7 +790,7 @@ class WeatherCog(commands.Cog):
                     embed.add_field(name="TCWS Status", value=get_tcws_description(0), inline=False)
                     await interaction.response.send_message(embed=embed)
                     return
-        embed = Embed(title="✅ No Typhoon Alerts for Iloilo City", description="There are currently no typhoon alerts in effect. Stay safe!", color=0x32CD32)
+        embed = embeds.build(title="✅ No Typhoon Alerts for Iloilo City", description="There are currently no typhoon alerts in effect. Stay safe!", accent="success")
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="air", description="Get the air quality for a specific city.")
@@ -810,11 +810,11 @@ class WeatherCog(commands.Cog):
                 f"SO₂: {comp.get('so2', 0)} µg/m³\nNH₃: {comp.get('nh3', 0)} µg/m³\n"
                 f"PM2.5: {comp.get('pm2_5', 0)} µg/m³\nPM10: {comp.get('pm10', 0)} µg/m³"
             )
-            embed = Embed(title=f"Air Quality in {city}", color=0x87CEEB)
+            embed = embeds.build(title=f"Air Quality in {city}", accent="info")
             embed.add_field(name="Air Quality", value=desc, inline=False)
             embed.add_field(name="Pollutants", value=pollutants, inline=False)
         else:
-            embed = Embed(title=f"City {city} Not Found", description="We couldn't find weather data for this city.", color=0xFF0000)
+            embed = embeds.build(title=f"City {city} Not Found", description="We couldn't find weather data for this city.", accent="error")
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="weather", description="Get current weather, air quality, and precipitation for a city.")
@@ -834,7 +834,7 @@ class WeatherCog(commands.Cog):
             aqi = aqi_data['list'][0]['main']['aqi'] if 'list' in aqi_data and aqi_data['list'] else None
             aqi_desc = {1: "Good", 2: "Fair", 3: "Moderate", 4: "Poor", 5: "Very Poor"}.get(aqi, "Unknown")
 
-            embed = Embed(title=f"Current Weather in {city}", color=discord.Color.blue())
+            embed = embeds.build(title=f"Current Weather in {city}", accent="info")
             embed.add_field(name="Date", value=_format_datetime_pht(data['dt']))
             embed.add_field(name="Temperature", value=f"{temp}°C")
             embed.add_field(name="Description", value=desc.capitalize())
@@ -848,7 +848,7 @@ class WeatherCog(commands.Cog):
                 precip += f"Snow: {snow.get('1h', 'N/A')} mm/hr\n"
             embed.add_field(name="Precipitation", value=precip or "No significant rain or snow reported.", inline=False)
         else:
-            embed = Embed(title=f"City {city} not found.", color=discord.Color.red())
+            embed = embeds.build(title=f"City {city} not found.", accent="error")
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="forecast", description="Get a clean 3-day forecast for a city.")
@@ -875,13 +875,13 @@ class WeatherCog(commands.Cog):
                 fallback = True
             except Exception as e:
                 await interaction.followup.send(
-                    embed=Embed(title="❌ Forecast unavailable", description=str(e), color=discord.Color.red())
+                    embed=embeds.build(title="❌ Forecast unavailable", description=str(e), accent="error")
                 )
                 return
 
         if not days:
             await interaction.followup.send(
-                embed=Embed(title="❌ Forecast unavailable", description="No forecast data returned.", color=discord.Color.red())
+                embed=embeds.build(title="❌ Forecast unavailable", description="No forecast data returned.", accent="error")
             )
             return
 
@@ -895,11 +895,8 @@ class WeatherCog(commands.Cog):
     def _build_forecast_embed(city: str, day: dict) -> Embed:
         """Build a clean, laid-out embed for one forecast day."""
         condition = day.get("description") or wmo_description(day.get("weather_code"))
-        embed = Embed(
-            title=f"🌤️ Forecast for {city}",
-            description=f"**{_format_date_label(day['date'])}**\n{condition}",
-            color=discord.Color.blue(),
-        )
+        embed = embeds.build(title=f"🌤️ Forecast for {city}",
+            description=f"**{_format_date_label(day['date'])}**\n{condition}", accent="info")
         embed.add_field(name="🌡 High", value=f"{day['temp_max']}°C", inline=True)
         embed.add_field(name="🌡 Low", value=f"{day['temp_min']}°C", inline=True)
         embed.add_field(name="🥵 Feels Like High", value=f"{day['feels_like_max']}°C", inline=True)
@@ -922,7 +919,7 @@ class WeatherCog(commands.Cog):
             aqi_data = requests.get(f"http://api.openweathermap.org/data/2.5/air_pollution?lat={lat}&lon={lon}&appid={API_KEY}").json()
             aqi = aqi_data['list'][0]['main']['aqi'] if 'list' in aqi_data and aqi_data['list'] else None
             aqi_desc = {1: "Good", 2: "Fair", 3: "Moderate", 4: "Poor", 5: "Very Poor"}.get(aqi, "Unknown")
-            embed = Embed(title=f"Current Weather in {city}", color=discord.Color.blue())
+            embed = embeds.build(title=f"Current Weather in {city}", accent="info")
             embed.add_field(name="Date", value=_format_datetime_pht(data['dt']))
             embed.add_field(name="Temperature", value=f"{temp}°C")
             embed.add_field(name="Description", value=desc.capitalize())
@@ -930,12 +927,12 @@ class WeatherCog(commands.Cog):
             embed.add_field(name="Wind Speed", value=f"{wind} m/s")
             embed.add_field(name="Air Quality", value=aqi_desc)
         else:
-            embed = Embed(title=f"City {city} not found.", color=discord.Color.red())
+            embed = embeds.build(title=f"City {city} not found.", accent="error")
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="ping", description="Shows the bot's ping")
     async def slash_ping(self, interaction: discord.Interaction):
-        embed = Embed(title="Bot Ping", color=discord.Color.blue())
+        embed = embeds.build(title="Bot Ping", accent="info")
         embed.add_field(name="Latency", value=f"{round(interaction.client.latency * 1000)}ms")
         await interaction.response.send_message(embed=embed)
 
@@ -962,14 +959,14 @@ class WeatherCog(commands.Cog):
                 fallback = True
             except Exception as e:
                 await interaction.followup.send(
-                    embed=Embed(title="⚠ Error fetching weather data", description=str(e), color=discord.Color.red()),
+                    embed=embeds.build(title="⚠ Error fetching weather data", description=str(e), accent="error"),
                     ephemeral=True,
                 )
                 return
 
         if not current or not daily or len(daily) < 3:
             await interaction.followup.send(
-                embed=Embed(title="⚠ Error fetching weather data", description="Try again later.", color=discord.Color.red()),
+                embed=embeds.build(title="⚠ Error fetching weather data", description="Try again later.", accent="error"),
                 ephemeral=True,
             )
             return

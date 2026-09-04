@@ -20,6 +20,7 @@ from zephyr.core.ffmpeg import FFMPEG_PATH
 from zephyr.core.streaming import StreamingReply
 from zephyr.db.guild_settings import read_ai_channel_policies, read_prefixes
 from zephyr.services import bridge
+from zephyr.utils import command_registry, embeds
 from zephyr.services.bridge import write_guild_snapshot
 from zephyr.services.gemini import generate_gemini_response, send_response
 from zephyr.services.storage import storage
@@ -462,12 +463,36 @@ class ZephyrBot(commands.AutoShardedBot):
             log.exception("Failed to publish the guild snapshot")
 
     async def on_ready(self):
+        # Here rather than in setup_hook: the bot's own avatar URL does not
+        # exist until the gateway hands the user object over, and every embed
+        # the factory builds carries it in the footer.
+        embeds.configure(
+            name=self.user.name if self.user else None,
+            icon_url=self.user.display_avatar.url if self.user else None,
+        )
         await type_print(f"{self.user} has connected to Discord!")
         await type_print(f"🔹 Synced {self._synced_count} slash command(s)")
         await type_print(f"🔹 Total prefix commands: {len(self.commands)}")
         activity = discord.Activity(type=discord.ActivityType.listening, name="/help")
         await self.change_presence(status=discord.Status.online, activity=activity)
         await self._publish_guilds()
+        await self._publish_commands()
+
+    async def _publish_commands(self):
+        """Publish the command list the tree actually holds.
+
+        Best effort and after everything else: the bot works without a
+        dashboard, and a Redis that is down must not stop it starting. The
+        derived list is the fix for three hand-maintained copies of "which
+        commands exist" -- during Phase 15 the docs said 75 while the tree held
+        114, and nothing noticed.
+        """
+        if not REDIS_URL:
+            return
+        try:
+            await asyncio.to_thread(bridge.write_commands, command_registry.payload(self.tree))
+        except Exception:
+            log.warning("Could not publish the command list", exc_info=True)
 
     async def on_guild_remove(self, guild):
         await self._publish_guilds()
@@ -487,10 +512,9 @@ class ZephyrBot(commands.AutoShardedBot):
         server itself nominated for joins and is tried first.
         """
         await self._publish_guilds()
-        embed = discord.Embed(
+        embed = embeds.brand(
+            "Weather, music, AI chat, reminders and moderation. `/help` lists everything.",
             title="Thanks for adding Zephyr 🌦️",
-            description="Weather, music, AI chat, reminders and moderation. `/help` lists everything.",
-            color=discord.Color.gold(),
         )
         embed.add_field(name="Weather", value="`/weather` · `/forecast` · `/weather-subscribe`", inline=False)
         embed.add_field(name="Music", value="`/play` · `/queue` · `/dj-only`", inline=False)

@@ -28,6 +28,7 @@ from discord.ext import commands, tasks
 
 from zephyr.core.logging import get_logger
 from zephyr.db import starboard as repo
+from zephyr.utils import embeds
 from zephyr.db.starboard import (
     DEFAULT_EMOJI,
     DEFAULT_THRESHOLD,
@@ -53,11 +54,14 @@ def build_embed(message, *, count: int, emoji: str) -> discord.Embed:
     copy would strip the thread, the replies and the reactions that made the
     message worth starring in the first place.
     """
-    embed = discord.Embed(
-        description=(message.content or "")[:MAX_PREVIEW_CHARS] or "*no text*",
-        color=discord.Color.gold(),
-        timestamp=message.created_at,
+    embed = embeds.brand(
+        (message.content or "")[:MAX_PREVIEW_CHARS] or "*no text*",
+        # The message's own time, not the promotion's: a starboard is an index
+        # of things people said, and stamping it with "now" would make an
+        # eight-month-old post look like it was written this afternoon.
+        timestamp=False,
     )
+    embed.timestamp = message.created_at
     author = message.author
     embed.set_author(
         name=getattr(author, "display_name", str(author)),
@@ -72,7 +76,9 @@ def build_embed(message, *, count: int, emoji: str) -> discord.Embed:
             embed.set_image(url=attachment.url)
             break
 
-    embed.set_footer(text=f"{emoji} {count}")
+    embed.set_footer(
+        text=embeds.footer_text(f"{emoji} {count}"), icon_url=embeds.icon_url()
+    )
     return embed
 
 

@@ -8,6 +8,9 @@ from dataclasses import dataclass, field
 
 import discord
 
+# Aliased: the rendering helpers below use `embeds` as a local list name, and
+# an unaliased import would be shadowed inside them.
+from zephyr.utils import embeds as embed_factory
 from zephyr.utils.pagination import _send_paginated_embeds
 
 
@@ -82,7 +85,7 @@ HELP_CATEGORIES = [
         title="Music — Effects & Audio",
         commands=[
             HelpEntry("/volume <0-1000>", "Set the player volume"),
-            HelpEntry("/bassboost <dB>", "Boost or cut bass (use 'reset' to disable)"),
+            HelpEntry("/bass_boost  /  /bassboost <dB>", "Boost or cut bass (use 'reset' to disable)"),
             HelpEntry("/pitch <0.5-2.0>", "Adjust pitch (use 'reset' to reset)"),
             HelpEntry("/nightcore", "Toggle nightcore mode"),
             HelpEntry("/vaporwave", "Toggle vaporwave mode"),
@@ -134,6 +137,8 @@ HELP_CATEGORIES = [
             HelpEntry("/weather-subs", "List this server's weather subscriptions"),
             HelpEntry("/weather-unsubscribe <id>", "Remove a subscription"),
             HelpEntry("/weather-preview <id>", "Show what a subscription would post right now"),
+            HelpEntry("/weather-run <id>", "Send a subscription's next post right now"),
+            HelpEntry("/weather-snooze <id> <duration>", "Mute a subscription for a while without deleting it"),
         ],
     ),
     HelpCategory(
@@ -158,6 +163,8 @@ HELP_CATEGORIES = [
             HelpEntry("/token", "Show Gemini usage stats"),
             HelpEntry("/image-gen <prompt>", "Generate an image with Gemini"),
             HelpEntry("/generate <prompt>", "Generate an image (legacy)"),
+            HelpEntry("/summarize", "Privately summarize recent messages in this channel"),
+            HelpEntry("/translate <text> <language>", "Translate text into another language"),
         ],
     ),
     HelpCategory(
@@ -273,7 +280,6 @@ HELP_CATEGORIES = [
 def _category_embeds(
     categories: list[HelpCategory],
     title: str,
-    color: discord.Color,
     *,
     include_toc: bool = False,
     seen: set[str] | None = None,
@@ -300,17 +306,16 @@ def _category_embeds(
     embeds: list[discord.Embed] = []
 
     if include_toc:
-        toc = discord.Embed(
+        toc = embed_factory.brand(
+            "Browse commands by category using the buttons below.",
             title=f"📖 {title}",
-            description="Browse commands by category using the buttons below.",
-            color=color,
         )
         for cat, _ in filtered:
             toc.add_field(name=f"{cat.emoji} {cat.title}", value="\u200b", inline=False)
         embeds.append(toc)
 
     for cat, commands in filtered:
-        embed = discord.Embed(title=f"{cat.emoji} {title} — {cat.title}", color=color)
+        embed = embed_factory.brand(title=f"{cat.emoji} {title} — {cat.title}")
         for cmd in commands:
             embed.add_field(name=cmd.name, value=cmd.value, inline=False)
         embeds.append(embed)
@@ -322,13 +327,18 @@ async def _send_categorized_help(
     interaction: discord.Interaction,
     categories: list[HelpCategory],
     title: str,
-    color: discord.Color,
     *,
     include_toc: bool = False,
     seen: set[str] | None = None,
 ) -> None:
-    """Send categorized help pages with pagination."""
-    embeds = _category_embeds(categories, title, color, include_toc=include_toc, seen=seen)
+    """Send categorized help pages with pagination.
+
+    The ``color`` parameter is gone.  The four help commands passed four
+    different colours -- green, blurple, gold and blue -- for four views of the
+    *same* command list, which is the inconsistency 16.1 exists to remove.  All
+    of it is the bot describing itself, so all of it is the brand accent.
+    """
+    embeds = _category_embeds(categories, title, include_toc=include_toc, seen=seen)
     if not embeds:
         await interaction.response.send_message("No commands to display.", ephemeral=True)
         return
