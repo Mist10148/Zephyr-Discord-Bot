@@ -95,6 +95,38 @@ class TestCreateSchema:
         assert "JSON" in str(guilds["enabled_cogs"]["type"]).upper()
 
 
+class TestAutoCreateIsSqliteOnly:
+    """create_all() builds SQLite; Alembic owns a configured server database.
+
+    Note the monkeypatch target. ``zephyr/db/engine.py`` does
+    ``from zephyr.config import DB_AUTO_CREATE``, which binds the value at
+    import, so patching ``zephyr.config`` would have no effect -- the same
+    reason ``tests/test_ai_memory_reset.py`` patches ``session.DATABASE_URL``
+    rather than the config module.
+    """
+
+    def test_sqlite_creates_itself(self):
+        from zephyr.db.engine import should_auto_create
+
+        assert should_auto_create("sqlite:///data/zephyr.db") is True
+
+    def test_a_server_database_is_left_to_alembic(self):
+        from zephyr.db.engine import should_auto_create
+
+        assert should_auto_create("postgresql+psycopg://u:p@host/db") is False
+        # The bare postgres:// form Render hands out is normalised first, so the
+        # decision must survive the rewrite rather than pattern-match the input.
+        assert should_auto_create("postgres://u:p@host/db") is False
+
+    def test_the_env_var_overrides_in_both_directions(self, monkeypatch):
+        from zephyr.db import engine
+
+        monkeypatch.setattr(engine, "DB_AUTO_CREATE", True)
+        assert engine.should_auto_create("postgresql+psycopg://u:p@host/db") is True
+        monkeypatch.setattr(engine, "DB_AUTO_CREATE", False)
+        assert engine.should_auto_create("sqlite:///data/zephyr.db") is False
+
+
 class TestAlembicBaseline:
     """The 0001 revision must be able to build a database from nothing."""
 
