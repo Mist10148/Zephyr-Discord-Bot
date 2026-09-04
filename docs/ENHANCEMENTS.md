@@ -31,9 +31,9 @@ running code, and every defect in Phase 13 was confirmed in the source rather th
 
 | Phase | Theme | Status |
 |---|---|---|
-| A–F | Surface unused API data, code-splitting, PWA, a11y basics | Shipped, except **A3**, **F4**, **E5** |
+| A–F | Surface unused API data, code-splitting, PWA, a11y basics | Shipped; **A3** done with 9.3, **F4** and **E5** open |
 | **8** | **UX correctness — dead and misbehaving controls** | **Shipped** |
-| **9** | **Feedback layer and display vocabulary** | **Not started** |
+| **9** | **Feedback layer and display vocabulary** | **Shipped** (with **A3**) |
 | **10** | **Layout, density and loading states** | **Not started** |
 | **11** | **Navigation and information architecture** | **Not started** |
 | **12** | **Public site layer** | **Not started** |
@@ -43,7 +43,7 @@ running code, and every defect in Phase 13 was confirmed in the source rather th
 | **16** | **Discord-side presentation** | **Not started** |
 | **17** | **Code quality and infrastructure** | **17.3 shipped**, rest not started |
 
-**Phase 8 is shipped.** Next is **13.1 and 13.2** — they are why every bot bug after
+**Phases 8 and 9 are shipped.** Next is **13.1 and 13.2** — they are why every bot bug after
 them is hard to find.
 
 One note carried out of Phase 8 for the phases that follow: the frontend suite now has a
@@ -156,7 +156,7 @@ action button, and mark the active one (`aria-current="true"` plus the accent to
 
 The largest single UX gap in the app, plus the raw machine values that leak through it.
 
-### 9.1 — There is no transient feedback anywhere · M · ✅
+### 9.1 — There is no transient feedback anywhere · M · ✅ · **DONE**
 
 **Highest-value item in this document.**
 
@@ -183,7 +183,7 @@ region `aria-live="polite"` while errors keep `role="alert"`.
 failure, no success/error state changes page layout, and `/kitchen-sink` demonstrates the
 host with toasts stacked.
 
-### 9.2 — Weather numbers carry no units · S · ✅
+### 9.2 — Weather numbers carry no units · S · ✅ · **DONE**
 
 [`routes/Weather.tsx`](../website/frontend/src/routes/Weather.tsx) renders `Wind {…}`,
 `Rain {…}` and `wind {day.wind_speed_max}` as bare numbers. C8 added a metric/imperial
@@ -195,7 +195,7 @@ scale to the current-conditions card so the page declares its system once.
 
 **Done when:** no dimensioned number renders without its unit in either system.
 
-### 9.3 — Raw Discord snowflakes on the server overview · M · ⚠️
+### 9.3 — Raw Discord snowflakes on the server overview · M · ⚠️ · **DONE**
 
 [`routes/GuildOverview.tsx`](../website/frontend/src/routes/GuildOverview.tsx) — the
 Configuration list prints `dj_role_id` and a comma-joined `music_channel_ids` as bare
@@ -213,7 +213,7 @@ wrapping, so three channels push the row apart.
 **Done when:** the overview shows names, not ids, and degrades to ids only when the bridge
 is down.
 
-### 9.4 — Audio effect names are unmapped identifiers · S · ✅
+### 9.4 — Audio effect names are unmapped identifiers · S · ✅ · **DONE**
 
 [`routes/GuildMusic.tsx`](../website/frontend/src/routes/GuildMusic.tsx) labels effects with
 `effect.replace('_', ' ')`, so the UI reads "sixteen d" and "slownrev".
@@ -224,7 +224,7 @@ unguessable from the name.
 
 **Done when:** no effect row shows a snake_case identifier.
 
-### 9.5 — Now-playing art placeholder prints its own name · S · ✅
+### 9.5 — Now-playing art placeholder prints its own name · S · ✅ · **DONE**
 
 [`routes/GuildMusic.tsx`](../website/frontend/src/routes/GuildMusic.tsx) — the fallback is
 `<span className="art-placeholder" aria-hidden>track art</span>`, which renders the literal
@@ -232,7 +232,7 @@ words "track art" where the thumbnail should be. Replace with an icon from
 [`components/icons.tsx`](../website/frontend/src/components/icons.tsx) on a `--surface-2`
 tile.
 
-### 9.6 — The hourly strip uses text emoji · S · ✅
+### 9.6 — The hourly strip uses text emoji · S · ✅ · **DONE**
 
 [`routes/Weather.tsx`](../website/frontend/src/routes/Weather.tsx) draws `☀ ☂ ☁` as text
 inside the hour cards while the rest of the app uses the `currentColor` SVG set. Those
