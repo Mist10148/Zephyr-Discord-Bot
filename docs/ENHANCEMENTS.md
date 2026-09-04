@@ -34,7 +34,7 @@ running code, and every defect in Phase 13 was confirmed in the source rather th
 | A–F | Surface unused API data, code-splitting, PWA, a11y basics | Shipped; **A3** done with 9.3, **F4** and **E5** open |
 | **8** | **UX correctness — dead and misbehaving controls** | **Shipped** |
 | **9** | **Feedback layer and display vocabulary** | **Shipped** (with **A3**) |
-| **10** | **Layout, density and loading states** | **Not started** |
+| **10** | **Layout, density and loading states** | **Shipped** |
 | **11** | **Navigation and information architecture** | **Not started** |
 | **12** | **Public site layer** | **Not started** |
 | **13** | **Bot correctness and observability** | **Not started** |
@@ -43,7 +43,7 @@ running code, and every defect in Phase 13 was confirmed in the source rather th
 | **16** | **Discord-side presentation** | **Not started** |
 | **17** | **Code quality and infrastructure** | **17.3 shipped**, rest not started |
 
-**Phases 8 and 9 are shipped.** Next is **13.1 and 13.2** — they are why every bot bug after
+**Phases 8, 9 and 10 are shipped.** Next is **13.1 and 13.2** — they are why every bot bug after
 them is hard to find.
 
 One note carried out of Phase 8 for the phases that follow: the frontend suite now has a
@@ -254,7 +254,7 @@ cell.
 
 A well-built phone layout currently being stretched to 1600px.
 
-### 10.1 — List rows are unreadable at desktop width · M · ✅
+### 10.1 — List rows are unreadable at desktop width · M · ✅ · **DONE**
 
 [`styles/theme.css`](../website/frontend/src/styles/theme.css) — `.app` is
 `max-width: 1600px` and every screen is a single column. `.row-label` is `flex: 1 1 auto`
@@ -272,7 +272,7 @@ free to use the full width.
 **Done when:** at 1600px every label/value pair reads as a pair, and grids still fill the
 shell.
 
-### 10.2 — Music is one flat scroll of nine control groups · M · ✅
+### 10.2 — Music is one flat scroll of nine control groups · M · ✅ · **DONE**
 
 [`routes/GuildMusic.tsx`](../website/frontend/src/routes/GuildMusic.tsx) stacks search → now
 playing → transport → loop/volume/autoplay → eight effects → queue → playlists in one
@@ -286,7 +286,7 @@ second layout mechanism.
 
 **Done when:** at 1440px the queue is visible without scrolling past the player.
 
-### 10.3 — Skeletons still have one generic shape · S · ✅
+### 10.3 — Skeletons still have one generic shape · S · ✅ · **DONE**
 
 D7 is marked shipped, but `Skeleton` in
 [`components/ios/index.tsx`](../website/frontend/src/components/ios/index.tsx) is still a
@@ -768,7 +768,19 @@ reverse — so this is one list rather than two, ordered by value per hour.
 12. **10.2, 10.3, 11.5, 12.5–12.7, 14.1, 14.3–14.5, 16.2, 17.3, 17.4** — by appetite.
 13. **Phase 15** — new features, once the corrections above are done. Each needs a product
     decision first.
-14. **A3, F4, E5** — the three original backend items, still open.
+14. **F4** — the last open original backend item. **A3** shipped with 9.3.
+
+**E5 (the SSE player stream) is deliberately deferred to its own branch**, and the
+blocker is deployment rather than code. `Procfile` runs gunicorn with **default sync
+workers**, so one dashboard tab holding an `EventSource` occupies a worker for the life
+of the connection and a handful of tabs starve the app. Doing it honestly means
+`--worker-class gthread --threads 8` plus a hard server-side stream lifetime (~60s;
+`EventSource` reconnects natively) and `X-Accel-Buffering: no` — a deployment change with
+its own risk budget. Two notes for whoever takes it: `connect-src 'self'` already permits
+it, and an `EventSource` is not a navigation so the service worker's
+`navigateFallbackDenylist` is irrelevant. Phase 9 also removed the *urgency* — the
+"confirmation arrives whenever the 3s poll lands" symptom was exactly what the toast host
+fixed, so E5 is now a latency nicety rather than a correctness fix.
 
 ---
 
