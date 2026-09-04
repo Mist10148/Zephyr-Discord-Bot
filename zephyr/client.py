@@ -473,18 +473,44 @@ class ZephyrBot(commands.AutoShardedBot):
         await self._publish_guilds()
 
     async def on_guild_join(self, guild):
+        """Introduce the bot, once, in the server's own greeting channel.
+
+        The embed said "I am your Weather Bot" and listed five commands, three
+        of them weather.  Zephyr has been a music, AI, moderation and reminder
+        bot for some time, so the first thing a new server saw was a description
+        of a different product.
+
+        The channel choice changed too.  It used to post in the first channel
+        the bot could write to, which in a server with an ordered channel list
+        is #rules or #announcements -- exactly where an unsolicited bot
+        introduction is least welcome.  `system_channel` is the channel the
+        server itself nominated for joins and is tried first.
+        """
         await self._publish_guilds()
-        welcome_embed = discord.Embed(title="Hello! I am your Weather Bot 🌦️", color=discord.Color.gold())
-        welcome_embed.description = "Here are some commands you can use:"
-        welcome_embed.add_field(name="/weather <city>", value="Current weather", inline=False)
-        welcome_embed.add_field(name="/forecast <city>", value="3-day forecast", inline=False)
-        welcome_embed.add_field(name="/prompt", value="Ask me anything", inline=False)
-        welcome_embed.add_field(name="/play", value="Play music", inline=False)
-        welcome_embed.add_field(name="/help", value="See all commands", inline=False)
-        for channel in guild.text_channels:
-            if channel.permissions_for(guild.me).send_messages:
-                await channel.send(embed=welcome_embed)
-                break
+        embed = discord.Embed(
+            title="Thanks for adding Zephyr 🌦️",
+            description="Weather, music, AI chat, reminders and moderation. `/help` lists everything.",
+            color=discord.Color.gold(),
+        )
+        embed.add_field(name="Weather", value="`/weather` · `/forecast` · `/weather-subscribe`", inline=False)
+        embed.add_field(name="Music", value="`/play` · `/queue` · `/dj-only`", inline=False)
+        embed.add_field(name="AI", value="`/prompt` · mention Zephyr to chat", inline=False)
+        embed.add_field(name="Reminders", value="`/remindme 2h take the bins out`", inline=False)
+        embed.add_field(name="Moderation", value="`/warn` · `/timeout` · `/modlog`", inline=False)
+        embed.add_field(name="Dashboard", value="`/use` for the web player and settings", inline=False)
+
+        candidates = [guild.system_channel, *guild.text_channels]
+        for channel in candidates:
+            if channel is None:
+                continue
+            try:
+                if channel.permissions_for(guild.me).send_messages:
+                    await channel.send(embed=embed)
+                    break
+            except discord.HTTPException:
+                # Try the next one rather than giving up: a single channel with
+                # an odd overwrite must not cost the introduction entirely.
+                log.warning("Could not introduce Zephyr in %s", channel.id, exc_info=True)
 
     async def _read_attachments(self, message):
         """The first image and the first text file on a message.
