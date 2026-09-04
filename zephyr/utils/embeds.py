@@ -158,6 +158,20 @@ def brand(description: str | None = None, **kwargs) -> discord.Embed:
     return build(description=description, accent="brand", **kwargs)
 
 
+def recolour(embed: discord.Embed, accent: str) -> discord.Embed:
+    """Change an already-built embed's accent, by role.
+
+    For the legacy shape in ``weather``'s prefix commands, which build an embed
+    and then turn it red if the city was not found. Restructuring those into
+    early returns is a larger change than this module is for, and the thing
+    worth keeping either way is that the colour is named by *role* rather than
+    picked by hand -- so a "not found" in one command cannot be a different red
+    from the next.
+    """
+    embed.colour = ACCENTS.get(accent, ACCENTS[DEFAULT_ACCENT])
+    return embed
+
+
 def footer_text(extra: str | None = None) -> str:
     """The composed footer, for a caller stamping an embed it did not build.
 

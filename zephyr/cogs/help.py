@@ -26,7 +26,6 @@ class HelpCog(commands.Cog):
             interaction,
             HELP_CATEGORIES,
             title="Command Help",
-            color=discord.Color.green(),
             include_toc=True,
         )
 
@@ -43,7 +42,6 @@ class HelpCog(commands.Cog):
                 "music_dj",
             ),
             title="Music Help",
-            color=discord.Color.blurple(),
         )
 
     @app_commands.command(name="helpchat", description="Show chat and TTS commands.")
@@ -52,7 +50,6 @@ class HelpCog(commands.Cog):
             interaction,
             categories_by_key("chat", "tts"),
             title="Chat Help",
-            color=discord.Color.gold(),
         )
 
     @app_commands.command(name="helpweather", description="Show weather-related commands.")
@@ -61,7 +58,6 @@ class HelpCog(commands.Cog):
             interaction,
             categories_by_key("weather", "weather_alerts"),
             title="Weather Help",
-            color=discord.Color.blue(),
         )
 
 
