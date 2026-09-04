@@ -44,6 +44,12 @@ DEFAULT_SETTINGS = {
     # Where moderation cases are posted. None means the modlog is off; cases
     # are still recorded and readable with /case.
     "modlog_channel_id": None,
+    # The DJ lock is off by default: turning it on for existing servers would
+    # silently take the player away from everybody who could use it yesterday.
+    "dj_only": False,
+    "vote_skip_ratio": 0.5,
+    "always_on": False,
+    "always_on_channel_id": None,
 }
 
 
@@ -132,6 +138,35 @@ def _clean_volume(value):
     return volume
 
 
+def _clean_flag(value):
+    """A strict boolean.
+
+    `bool("false")` is True, so accepting a string here would turn a JSON
+    payload of "false" from a hand-rolled client into an enabled DJ lock.
+    """
+    if isinstance(value, bool):
+        return value
+    raise ValueError("That setting is either true or false.")
+
+
+def _clean_skip_ratio(value):
+    """A fraction, stored as a fraction.
+
+    The command takes a percent because that is how people say it; the column
+    is a ratio because that is what `_skip_threshold` multiplies by. Converting
+    at the edge means only one of the two representations reaches the database.
+    """
+    if value in (None, ""):
+        return None
+    try:
+        ratio = float(value)
+    except (TypeError, ValueError):
+        raise ValueError("The skip ratio must be a number between 0.05 and 1.") from None
+    if not 0.05 <= ratio <= 1:
+        raise ValueError("The skip ratio must be between 0.05 and 1.")
+    return ratio
+
+
 def _clean_snowflake(value):
     if value in (None, ""):
         return None
@@ -189,6 +224,10 @@ CLEANERS = {
     "dj_role_id": _clean_snowflake,
     "music_channel_ids": _clean_snowflake_list,
     "modlog_channel_id": _clean_snowflake,
+    "dj_only": _clean_flag,
+    "vote_skip_ratio": _clean_skip_ratio,
+    "always_on": _clean_flag,
+    "always_on_channel_id": _clean_snowflake,
 }
 
 
@@ -224,10 +263,11 @@ def patch_guild_settings(guild_id: str):
         database_url=current_app.config["DATABASE_URL"],
     )
 
-    # The bot caches dj_role_id for its permission check, so a save that did not
-    # reach it would leave the DJ role wrong until the next slow refresh.  Best
-    # effort: the setting is saved either way, and the cache self-corrects.
-    if "dj_role_id" in values:
+    # The bot caches the DJ role and the player policy for its permission check
+    # and its skip threshold, so a save that did not reach it would leave both
+    # wrong until the next slow refresh.  Best effort: the setting is saved
+    # either way, and the cache self-corrects within ten minutes.
+    if values.keys() & {"dj_role_id", "dj_only", "vote_skip_ratio", "always_on"}:
         try:
             bridge.send_command("settings.reload", url=current_app.config["REDIS_URL"], timeout=2.0)
         except Exception as exc:
