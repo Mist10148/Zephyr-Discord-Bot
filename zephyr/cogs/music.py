@@ -108,6 +108,10 @@ AUTOPLAY_MEMORY = 50
 # How often the now-playing progress bar is redrawn.  Each tick is a message
 # edit, so this is a rate-limit budget, not a smoothness setting.
 NOW_PLAYING_REFRESH_SECONDS = 10
+# How long to wait after the last listener leaves. Short enough not to keep a
+# connection open for nothing, long enough to survive somebody hopping between
+# channels -- leaving instantly would mean rejoining a second later.
+EMPTY_CHANNEL_GRACE_SECONDS = 60
 
 _VIDEO_ID_RE = re.compile(r'(?:v=|youtu\.be/|/shorts/|/embed/)([A-Za-z0-9_-]{11})')
 
@@ -1078,6 +1082,12 @@ class VoiceState:
             await self.voice.disconnect()
             self.voice = None
         await self.retire_now_playing()
+        # `exists` is the flag peek_voice_state reads to answer "is anything
+        # playing". Only the idle-timeout path used to set it, so every other
+        # route through stop() -- /stop, a bridge stop, a disconnect -- left a
+        # torn-down state advertising itself as live, and ensure_voice_state
+        # then handed that dead object to the next /play.
+        self.exists = False
         self.changed()
 
     def _skip_threshold(self):
@@ -1120,6 +1130,8 @@ class MusicCog(commands.Cog):
         # guild id -> DJ role id.  Absent means "no DJ role configured", which is
         # a different rule rather than a stricter one; see _authorize.
         self._dj_role_ids: dict[int, str] = {}
+        # guild_id -> the pending "everyone left" timer, so a rejoin can cancel it.
+        self._empty_timers: dict[int, asyncio.Task] = {}
         creds = SpotifyClientCredentials(client_id=SPOTIFY_CLIENT_ID, client_secret=SPOTIFY_CLIENT_SECRET)
         self.sp = spotipy.Spotify(client_credentials_manager=creds)
 
@@ -1147,6 +1159,107 @@ class MusicCog(commands.Cog):
             state.np_channel_id = channel_id
         return state
 
+    async def teardown_voice_state(self, guild_id: int) -> None:
+        """Stop playback and forget the guild's state entirely.
+
+        `stop()` alone leaves the entry in `self.voice_states`. That mattered
+        because three callers popped the dict by hand -- /leave, TTS's
+        /disconnect, and cog_unload -- and every other path did not, so the
+        dict accumulated dead states for the life of the process. One method
+        now owns both halves, and the snapshot is cleared so the dashboard stops
+        showing a player for a guild the bot has left.
+        """
+        state = self.voice_states.pop(int(guild_id), None)
+        if state is None:
+            return
+        try:
+            await state.stop()
+        except Exception:
+            log.exception("Could not stop the player for %s during teardown", guild_id)
+        await self._clear_snapshot(int(guild_id))
+
+    @commands.Cog.listener()
+    async def on_voice_state_update(self, member, before, after):
+        """React to the channel emptying, and to being removed from it.
+
+        There was no listener of any kind in this package. The 180s idle timeout
+        is armed by `async_timeout` around the *queue read* inside
+        audio_player_task, so it only ever starts once the queue runs dry -- a
+        long track playing to an empty channel never arms it at all, and the bot
+        would keep streaming to nobody until the track ended.
+
+        Two cases:
+
+        * The bot itself left or was moved. `after.channel is None` means a
+          moderator disconnected it, and without this the state stayed in the
+          dict with `exists` True, so the dashboard kept showing a player and
+          the next /play reused a state whose voice client was gone.
+        * The last human left. Pause immediately (there is no point decoding
+          audio for an empty room) and start a short grace timer rather than
+          leaving at once, because the common case is somebody hopping between
+          channels for a few seconds.
+        """
+        guild = member.guild
+        state = self.peek_voice_state(guild.id)
+        if state is None:
+            return
+
+        if member.id == self.bot.user.id:
+            if after.channel is None:
+                log.info("Disconnected from voice in %s; tearing down the player", guild.id)
+                await self.teardown_voice_state(guild.id)
+            return
+
+        channel = state.voice.channel if state.voice else None
+        if channel is None:
+            return
+
+        # Only movements involving the bot's own channel can change the answer.
+        if before.channel != channel and after.channel != channel:
+            return
+
+        listeners = [m for m in channel.members if not m.bot]
+        if listeners:
+            self._cancel_empty_timer(guild.id)
+            return
+
+        if state.voice.is_playing():
+            state.voice.pause()
+        self._start_empty_timer(guild.id, channel)
+
+    def _cancel_empty_timer(self, guild_id: int) -> None:
+        timer = self._empty_timers.pop(int(guild_id), None)
+        if timer and not timer.done():
+            timer.cancel()
+
+    def _start_empty_timer(self, guild_id: int, channel) -> None:
+        self._cancel_empty_timer(guild_id)
+        self._empty_timers[int(guild_id)] = asyncio.create_task(self._leave_if_still_empty(guild_id, channel))
+
+    async def _leave_if_still_empty(self, guild_id: int, channel) -> None:
+        """Wait out the grace period, then leave if nobody came back."""
+        try:
+            await asyncio.sleep(EMPTY_CHANNEL_GRACE_SECONDS)
+            state = self.peek_voice_state(guild_id)
+            if state is None or not state.voice:
+                return
+            if any(not m.bot for m in state.voice.channel.members):
+                return
+            # Announced, unlike the idle timeout, which says nothing at all --
+            # coming back to a stopped player with no explanation reads as a
+            # crash.
+            await state._notify(embed=discord.Embed(
+                description=f'👋 Left {channel} — everyone had gone.',
+                color=discord.Color.blue(),
+            ))
+            await self.teardown_voice_state(guild_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("Could not leave the empty channel in %s", guild_id)
+        finally:
+            self._empty_timers.pop(int(guild_id), None)
+
     def get_voice_state(self, ctx: commands.Context):
         """Context-flavoured wrapper, so the existing command call sites are unchanged."""
         channel_id = ctx.channel.id if getattr(ctx, 'channel', None) else None
@@ -1156,10 +1269,14 @@ class MusicCog(commands.Cog):
         self._snapshot_loop.cancel()
         self._settings_loop.cancel()
         self._now_playing_loop.cancel()
+        for timer in list(self._empty_timers.values()):
+            if not timer.done():
+                timer.cancel()
+        # One task per guild rather than two loops doing half the job each:
+        # teardown_voice_state stops the player, forgets the state and clears
+        # the snapshot together.
         for guild_id in list(self.voice_states):
-            self.bot.loop.create_task(self._clear_snapshot(guild_id))
-        for state in self.voice_states.values():
-            self.bot.loop.create_task(state.stop())
+            self.bot.loop.create_task(self.teardown_voice_state(guild_id))
 
     # ---------------- Web bridge ----------------
 
@@ -1605,8 +1722,7 @@ class MusicCog(commands.Cog):
         if not state.voice:
             await interaction.response.send_message("Not connected to any voice channel.", ephemeral=True)
             return
-        await state.stop()
-        self.voice_states.pop(ctx.guild.id, None)
+        await self.teardown_voice_state(ctx.guild.id)
         await interaction.response.send_message(embed=discord.Embed(description='👋 Left voice channel.', color=discord.Color.green()))
 
     # ---------------- Playback Control ----------------
