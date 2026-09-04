@@ -1,3 +1,5 @@
+import { Fragment } from 'react'
+import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
 import { api } from '../lib/api'
@@ -5,7 +7,15 @@ import type { GuildOverview as Overview } from '../types/api'
 import { GuildIcon } from '../components/DiscordAvatar'
 import { ErrorNote } from '../components/ErrorNote'
 import { GuildShell } from '../components/GuildNav'
+import { useGuildMeta } from '../lib/player'
 import { BackLink, GlassSurface, LargeTitleHeader, ListGroup, ListRow, SectionLabel, Skeleton, WidgetGrid } from '../components/ios'
+
+// A raw id, but marked as one. DESIGN.md allows the fallback only when the
+// lookup is unavailable, and it has to read as a fallback -- a bare 19-digit
+// number is indistinguishable from a value somebody chose.
+function RawId({ id }: { id: string }) {
+  return <span className="mono faint" title="Zephyr is not reachable, so this could not be named">{id}</span>
+}
 
 function presence(botPresent: boolean | null) {
   if (botPresent === null) return { text: 'Unknown', tone: 'unknown' }
@@ -27,6 +37,17 @@ export function GuildOverview() {
   // No refetchInterval: guild settings are static. Polling belongs to the player
   // snapshot, not here.
   const guild = useQuery({ queryKey: ['guild', guildId], queryFn: () => api<Overview>(`/guilds/${guildId}`), enabled: !!guildId })
+  // Both are best-effort name lookups, declared above the early returns so the
+  // hook order is stable. useGuildMeta already carries retry:false and a 5min
+  // staleTime; /commands is unauthenticated and ETagged, and its `categories`
+  // are the same cog-key -> title map /commands renders.
+  const meta = useGuildMeta(guildId)
+  const commands = useQuery({
+    queryKey: ['commands'],
+    queryFn: () => api<{ categories: { key: string; title: string }[] }>('/commands'),
+    staleTime: 10 * 60_000,
+    retry: false,
+  })
 
   if (guild.isPending) return <main className="app"><Skeleton lines={6} /></main>
   // 403 and 404 arrive with a message from the API envelope, so no per-status
@@ -36,13 +57,30 @@ export function GuildOverview() {
 
   const g = guild.data
   const bot = presence(g.bot_present)
-  const facts = [
+  // Same query and staleTime the settings pickers use, so arriving from there
+  // costs nothing. retry:false and a {} fallback are its own defaults: an
+  // unreachable bot must degrade to ids, not fail the page.
+  const roleName = (id: string) => meta.data?.roles.find(role => role.id === id)?.name
+  const channelName = (id: string) => meta.data?.channels.find(channel => channel.id === id)?.name
+  const cogTitle = (key: string) => commands.data?.categories.find(category => category.key === key)?.title
+
+  const facts: Array<{ k: string; v: ReactNode }> = [
     { k: 'Locale', v: g.locale },
     { k: 'Timezone', v: g.timezone },
     { k: 'Default volume', v: `${g.default_volume}%` },
-    { k: 'DJ role', v: g.dj_role_id ?? 'Not set' },
-    { k: 'Music channels', v: g.music_channel_ids.length ? g.music_channel_ids.join(', ') : 'Any channel' },
-    { k: 'Enabled modules', v: g.enabled_cogs.join(' · ') },
+    { k: 'DJ role', v: !g.dj_role_id ? 'Not set' : roleName(g.dj_role_id) ?? <RawId id={g.dj_role_id} /> },
+    {
+      k: 'Music channels',
+      // The separator is its own node rather than concatenated into the name,
+      // so each channel stays one addressable piece of text.
+      v: !g.music_channel_ids.length ? 'Any channel' : g.music_channel_ids.map((id, index) => (
+        <Fragment key={id}>
+          {index > 0 && <span aria-hidden>, </span>}
+          {channelName(id) ? <span>#{channelName(id)}</span> : <RawId id={id} />}
+        </Fragment>
+      )),
+    },
+    { k: 'Enabled modules', v: g.enabled_cogs.map(key => cogTitle(key) ?? key).join(' · ') },
     { k: 'Your role', v: g.owner ? 'Owner' : 'Manager' },
   ]
 

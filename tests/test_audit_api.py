@@ -71,3 +71,60 @@ class TestCaching:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestActorNames:
+    """A3: the log stores an actor_id and nothing else, so every row read as a
+    19-digit number. The bot is the only thing that can name one."""
+
+    def _seed(self, db_url):
+        from zephyr.db import audit
+
+        audit.record(
+            guild_id="1",
+            actor_id="900000000000000001",
+            action="settings.update",
+            payload={"prefix": "z!"},
+            database_url=db_url,
+        )
+
+    def test_names_come_back_keyed_by_id(self, client, logged_in, fake_redis, db_url):
+        self._seed(db_url)
+
+        def responder(channel, raw):
+            import json
+
+            from zephyr.services import bridge
+
+            if channel != bridge.COMMAND_CHANNEL:
+                return
+            command = json.loads(raw)
+            assert command["action"] == "meta.members"
+            # Asked once for the distinct set, not once per row.
+            assert command["args"]["ids"] == ["900000000000000001"]
+            bridge.publish_response(
+                command["id"],
+                ok=True,
+                data={"members": [{"id": "900000000000000001", "name": "Mist", "avatar_url": None}]},
+            )
+
+        fake_redis.on_publish = responder
+        body = client.get("/api/v1/guilds/1/audit").get_json()
+        assert body["actors"]["900000000000000001"]["name"] == "Mist"
+
+    def test_an_unreachable_bot_leaves_the_ids_standing(self, client, logged_in, fake_redis, db_url):
+        """A name lookup failing must not turn the audit log into a 503."""
+        self._seed(db_url)
+        # No responder: the bridge call times out.
+        response = client.get("/api/v1/guilds/1/audit")
+        assert response.status_code == 200
+        body = response.get_json()
+        assert body["actors"] == {}
+        assert body["entries"][0]["actor_id"] == "900000000000000001"
+
+    def test_no_bridge_call_at_all_when_nothing_has_an_actor(self, client, logged_in, fake_redis, db_url):
+        calls = []
+        fake_redis.on_publish = lambda channel, raw: calls.append(channel)
+        body = client.get("/api/v1/guilds/1/audit").get_json()
+        assert body["actors"] == {}
+        assert calls == []

@@ -434,7 +434,12 @@ a.list-row:hover, button.list-row:hover { background: var(--surface-2); text-dec
 .row-label small { font-size: 12.5px; font-weight: 400; color: var(--text-muted); }
 .row-label.strong { font-weight: 600; font-size: 15px; }
 .row-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; margin-left: auto; }
-.row-value { flex: 0 0 auto; font-size: 14px; color: var(--text-muted); text-align: right; }
+/* min-width:0 and shrink allowed, so a long value wraps inside the row
+   instead of pushing the label away from it -- three music channels used
+   to force the pair apart with the name at the far left and the list at
+   the far right. */
+.row-value { flex: 0 1 auto; min-width: 0; font-size: 14px; color: var(--text-muted); text-align: right; overflow-wrap: anywhere; }
+.row-value .faint { color: var(--text-faint); }
 .chevron { flex: 0 0 auto; color: var(--text-faint); font-size: 18px; line-height: 1; }
 
 /* An error takes a full basis so it always wraps onto its own line under the
