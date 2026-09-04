@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { groupByDay, timeOfDay } from '../src/lib/audit-groups'
 import { airQualityLabel, heatAdvisory, weatherGlyph } from '../src/lib/weather-icons'
 import type { AuditEntry } from '../src/types/api'
+import { formatUnit, unitLabel } from '../src/lib/units'
 
 function entry(id: number, createdAt: string | null): AuditEntry {
   return { id, guild_id: '1', actor_id: '2', action: 'settings.update', payload: null, source: 'web', created_at: createdAt }
@@ -101,5 +102,32 @@ describe('timeOfDay', () => {
 
   it('formats a real timestamp', () => {
     expect(timeOfDay(new Date(2026, 7, 1, 14, 2).toISOString())).toMatch(/\d/)
+  })
+})
+
+describe('formatUnit', () => {
+  it('labels wind and rain in both systems', () => {
+    expect(formatUnit(12, 'metric', 'speed')).toBe('12 km/h')
+    expect(formatUnit(12, 'imperial', 'speed')).toBe('12 mph')
+    expect(formatUnit(0.4, 'metric', 'length')).toBe('0.4 mm')
+    expect(formatUnit(0.4, 'imperial', 'length')).toBe('0.4 in')
+  })
+
+  it('keeps the degree tight against a temperature', () => {
+    // Every other temperature on the page renders as "26°", so a spaced
+    // "26 °C" beside them would read as a different kind of value.
+    expect(formatUnit(26, 'metric', 'temperature')).toBe('26°C')
+    expect(unitLabel('imperial', 'temperature')).toBe('°F')
+  })
+
+  it('reads as "not reported" rather than looking broken when there is no value', () => {
+    // A chip reading "Wind" with nothing after it looks like a rendering bug.
+    expect(formatUnit(null, 'metric', 'speed')).toBe('—')
+    expect(formatUnit(undefined, 'metric', 'speed')).toBe('—')
+    expect(formatUnit(Number.NaN, 'metric', 'speed')).toBe('—')
+  })
+
+  it('treats zero as a reading, not as missing', () => {
+    expect(formatUnit(0, 'metric', 'length')).toBe('0 mm')
   })
 })

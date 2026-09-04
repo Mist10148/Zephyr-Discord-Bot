@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useTheme } from '../lib/theme-context'
 import { BackLink, CapsuleToast, Chevron, GlassSurface, IconButton, LargeTitleHeader, ListGroup, ListRow, PressableButton, SectionLabel, SegmentedControl, Skeleton, Slider, Stepper, Toggle, WidgetGrid } from '../components/ios'
-import { CloudIcon, PauseIcon, PlayIcon, RainIcon, ShuffleIcon, SkipIcon, StopIcon, SunIcon } from '../components/icons'
+import { CloudIcon, DiscIcon, PauseIcon, PlayIcon, RainIcon, ShuffleIcon, SkipIcon, StopIcon, SunIcon } from '../components/icons'
 import { useToast } from '../lib/toast'
 
 // The design-system review page: every primitive on one screen, in whichever theme
@@ -42,8 +42,11 @@ export function KitchenSink() {
 
     <SectionLabel>Weather glyphs</SectionLabel>
     <div className="actions glyph-row">
-      <SunIcon /><CloudIcon /><RainIcon />
+      <SunIcon /><CloudIcon /><RainIcon /><DiscIcon />
     </div>
+    {/* The art fallback tile, which used to render the words "track art" in 8px
+        mono where the thumbnail should be. */}
+    <div className="actions"><span className="art-placeholder" aria-hidden><DiscIcon /></span></div>
 
     <SectionLabel>Segmented control</SectionLabel>
     <SegmentedControl values={['Today', 'Tomorrow', 'Week']} value={segment} onChange={setSegment} />

@@ -857,6 +857,10 @@ select.text-input { appearance: auto; }
 
 /* ---- Weather ---------------------------------------------------------------- */
 .current-weather { padding: 24px; margin-bottom: 18px; }
+/* The scale, declared once beside the hero reading rather than repeated on
+   every number. Sized well down: the temperature is the thing being read, and
+   "26.9 °C" with both at the same weight reads as two facts. */
+.temp-scale { font-size: .38em; font-weight: 500; vertical-align: super; margin-left: 1px; letter-spacing: 0; }
 .weather-tools { display: flex; flex-wrap: wrap; gap: 8px; margin: -4px 0 14px; }
 /* Saved places. Deliberately not .ios-button: an action and a piece of saved
    data reading identically is the defect this replaces, so the chip borrows
@@ -894,7 +898,7 @@ select.text-input { appearance: auto; }
 .day-temp { margin: 0; font-family: var(--font-serif); font-size: 22px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
 .day-low { font-size: 15px; font-weight: 400; color: var(--text-faint); }
 .day-desc { display: block; margin-top: 6px; font-size: 12px; color: var(--text-muted); }
-.hourly-strip { display: flex; gap: 8px; overflow-x: auto; padding: 2px 0 16px; margin-bottom: 6px; }.hour-card { position: relative; min-width: 70px; min-height: 110px; display: grid; justify-items: center; align-content: space-between; padding: 10px; border: 1px solid var(--surface-glass-border); border-radius: var(--radius-control); background: var(--surface-glass); overflow: hidden; font-size: 12px; }.hour-card b { color: var(--text-muted); font-weight: 600; }.hour-card strong { font-family: var(--font-serif); font-size: 18px; }.hour-card i { position: absolute; bottom: 0; left: 0; right: 0; background: var(--accent-soft); z-index: -1; }.air-detail summary { cursor: pointer; }.air-detail div { position: absolute; z-index: 2; margin-top: 8px; width: 240px; padding: 10px; border: 1px solid var(--hairline); border-radius: var(--radius-control); background: var(--surface-1); color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+.hourly-strip { display: flex; gap: 8px; overflow-x: auto; padding: 2px 0 16px; margin-bottom: 6px; }.hour-card { position: relative; min-width: 70px; min-height: 110px; display: grid; justify-items: center; align-content: space-between; padding: 10px; border: 1px solid var(--surface-glass-border); border-radius: var(--radius-control); background: var(--surface-glass); overflow: hidden; font-size: 12px; }.hour-card b { color: var(--text-muted); font-weight: 600; }.hour-card strong { font-family: var(--font-serif); font-size: 18px; }.hour-glyph { display: grid; place-items: center; color: var(--text-muted); }.hour-glyph svg { width: 20px; height: 20px; }/* The track is the full scale; the fill is the reading against it. */.hour-rain { position: absolute; inset: auto 0 0 0; height: 100%; background: color-mix(in oklab, var(--text-faint) 12%, transparent); z-index: -1; }.hour-rain i { position: absolute; bottom: 0; left: 0; right: 0; background: var(--accent-soft); }.air-detail summary { cursor: pointer; }.air-detail div { position: absolute; z-index: 2; margin-top: 8px; width: 240px; padding: 10px; border: 1px solid var(--hairline); border-radius: var(--radius-control); background: var(--surface-1); color: var(--text-muted); font-size: 12px; line-height: 1.5; }
 
 /* ---- Login ------------------------------------------------------------------ */
 .error-banner {
@@ -975,12 +979,13 @@ select.text-input { appearance: auto; }
 .now-playing .art { flex: none; width: 74px; height: 74px; border-radius: 16px; object-fit: cover; }
 /* Diagonal hatch rather than a grey block: it reads as "no artwork" instead of
    "artwork that failed to load". */
+/* A plain --surface-2 tile with an icon. The diagonal hatch and the 8px mono
+   type were there to make the words "track art" fit, which is not a thing a
+   placeholder should be doing. */
 .art-placeholder {
   display: grid; place-items: center; flex: none;
-  width: 74px; height: 74px; border-radius: 16px; padding: 4px;
-  background: repeating-linear-gradient(135deg, var(--surface-3) 0 6px, var(--surface-2) 6px 12px);
-  font-family: var(--font-mono); font-size: 8px; font-weight: 500; line-height: 1.2;
-  color: var(--text-faint); text-align: center;
+  width: 74px; height: 74px; border-radius: 16px;
+  background: var(--surface-2); color: var(--text-faint);
 }
 .now-playing .meta { flex: 1; min-width: 0; }
 .now-playing h2 { margin: 0; font-size: 20px; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

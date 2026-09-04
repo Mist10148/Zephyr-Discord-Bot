@@ -178,3 +178,32 @@ describe('feedback', () => {
     expect(posts[1].body).toEqual({ query: 'https://y.tld/second', mode: 'next' })
   })
 })
+
+describe('display vocabulary', () => {
+  it('names every effect instead of showing its identifier', async () => {
+    stubPlayer()
+    render()
+    fireEvent.click(await screen.findByText('Audio effects'))
+
+    // `effect.replace('_', ' ')` is non-global, so these read as "sixteen d"
+    // and "slownrev" -- and none of them is guessable even with the underscore
+    // handled, hence the one-line detail per row.
+    expect(screen.getByText('16D Audio')).toBeInTheDocument()
+    expect(screen.getByText('Slowed + Reverb')).toBeInTheDocument()
+    expect(screen.getByText('Pans the track around your head')).toBeInTheDocument()
+
+    for (const identifier of ['sixteen d', 'sixteen_d', 'slownrev', 'nightcore']) {
+      expect(screen.queryByText(identifier)).not.toBeInTheDocument()
+    }
+  })
+
+  it('draws an icon where the track art would be, not the words "track art"', async () => {
+    stubPlayer({ ...PLAYER, track: { ...PLAYER.track!, thumbnail: null } })
+    render()
+    await waitFor(() => expect(screen.getByText('Now Playing')).toBeInTheDocument())
+
+    const placeholder = document.querySelector('.art-placeholder')!
+    expect(placeholder.textContent).toBe('')
+    expect(placeholder.querySelector('svg')).not.toBeNull()
+  })
+})

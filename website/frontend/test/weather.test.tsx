@@ -161,3 +161,44 @@ describe('Saved places', () => {
     expect(screen.getByRole('button', { name: 'Iloilo City' }).className).not.toContain('ios-button')
   })
 })
+
+describe('display vocabulary', () => {
+  it('never renders a dimensioned number without its unit', async () => {
+    stubApi({ '/geocode': { body: { results: [PLACE] } }, '/weather': { body: FORECAST } })
+    render()
+    fireEvent.click(await screen.findByRole('button', { name: 'Use' }))
+    await waitFor(() => expect(screen.getByText('Partly cloudy')).toBeInTheDocument())
+
+    // "Wind 12" was genuinely ambiguous once C8 added the units preference.
+    expect(screen.getByText(/Wind 12 km\/h/)).toBeInTheDocument()
+    expect(screen.getByText(/Rain 0.4 mm/)).toBeInTheDocument()
+    expect(screen.getByText(/wind 18 km\/h/)).toBeInTheDocument()
+    // The page declares its scale once, on the hero reading.
+    expect(screen.getByText('°C')).toBeInTheDocument()
+  })
+
+  it('draws the hourly strip with the icon set, not text emoji', async () => {
+    stubApi({ '/geocode': { body: { results: [PLACE] } }, '/weather': { body: FORECAST } })
+    render()
+    fireEvent.click(await screen.findByRole('button', { name: 'Use' }))
+    await waitFor(() => expect(document.querySelector('.hourly-strip')).not.toBeNull())
+
+    // DESIGN.md names ☀ ☂ ☁ specifically: platform colour glyphs are
+    // off-palette in both themes and different on every OS.
+    const strip = document.querySelector('.hourly-strip')!
+    expect(strip.textContent).not.toMatch(/[☀☂☁]/)
+    expect(strip.querySelectorAll('.hour-glyph svg').length).toBeGreaterThan(0)
+  })
+
+  it('gives each hour cell an accessible name carrying its rain figure', async () => {
+    stubApi({ '/geocode': { body: { results: [PLACE] } }, '/weather': { body: FORECAST } })
+    render()
+    fireEvent.click(await screen.findByRole('button', { name: 'Use' }))
+
+    // The number used to sit in a `title` on an aria-hidden background element.
+    const cell = await waitFor(() => screen.getByRole('group', { name: /14:00, 31°C, 40% chance of rain/ }))
+    expect(cell).toBeInTheDocument()
+    // The bar now has a full-scale track behind it, so its height means something.
+    expect(cell.querySelector('.hour-rain i')).not.toBeNull()
+  })
+})
