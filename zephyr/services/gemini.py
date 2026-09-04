@@ -30,6 +30,7 @@ from zephyr.services.storage import storage
 from zephyr.db import ai as ai_db
 from zephyr.db.weather_subs import read_bot_user
 from zephyr.core.logging import get_logger
+from zephyr.utils import embeds
 
 
 log = get_logger(__name__)
@@ -997,8 +998,17 @@ async def send_response(destination, response_text, context_obj):
 
     parts = [response_text[i:i + 4000] for i in range(0, len(response_text), 4000)]
     for i, part in enumerate(parts):
-        embed = discord.Embed(description=part, color=discord.Color.purple())
+        # info, not the old purple: the AI was the only thing in the bot
+        # answering in purple, which is precisely the inconsistency 16.1 exists
+        # to remove.
+        embed = embeds.info(part)
         if i == 0:
             embed.title = "🤖 My Response"
-            embed.set_footer(text=f"Requested by {author.display_name}", icon_url=author.display_avatar.url)
+            # The asker's own name and avatar replace the shared footer here,
+            # deliberately: a multi-part answer in a busy channel needs to say
+            # who it is for, and that is more useful on this one embed than the
+            # bot's name is.
+            embed.set_footer(
+                text=f"Requested by {author.display_name}", icon_url=author.display_avatar.url
+            )
         await destination.send(embed=embed)

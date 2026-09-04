@@ -34,6 +34,7 @@ from zephyr.db.weather_subs import (
     normalise_zone,
     parse_local_time,
 )
+from zephyr.utils import embeds
 from zephyr.utils.weather_alerts import DEFAULT_THRESHOLDS, evaluate
 from zephyr.utils.weather_utils import (
     WeatherProviderError,
@@ -49,18 +50,21 @@ KIND_LABELS = {
     "severe": "Severe weather watch",
     "class_suspension": "Class suspension watch",
 }
-KIND_COLORS = {
-    "daily": discord.Color.blue(),
-    "severe": discord.Color.orange(),
-    "class_suspension": discord.Color.red(),
+# Severity, expressed in the factory's roles rather than in three of
+# discord.Color's constants. A daily digest is information, a severe-weather
+# watch is a warning, and a class suspension is the one people act on.
+KIND_ACCENTS = {
+    "daily": "info",
+    "severe": "warning",
+    "class_suspension": "error",
 }
 
 
 def alert_embed(alert: dict) -> discord.Embed:
-    embed = discord.Embed(
+    embed = embeds.build(
         title=alert["title"],
         description=alert.get("summary"),
-        color=KIND_COLORS.get(alert["kind"], discord.Color.blue()),
+        accent=KIND_ACCENTS.get(alert["kind"], "info"),
     )
     for field in alert.get("fields") or []:
         embed.add_field(name=field["name"], value=field["value"], inline=True)
@@ -290,10 +294,9 @@ class WeatherAlertsCog(commands.Cog):
 
         when = f" at {schedule} ({zone_name})" if schedule else ""
         note = "" if zone_accepted else f"\n⚠️ `{tz}` is not an IANA timezone name, so UTC was used instead."
-        await interaction.followup.send(embed=discord.Embed(
-            description=f"✅ **{KIND_LABELS[kind.value]}** for **{created['location']}** will post in "
-                        f"{destination.mention}{when}. (#{created['id']}){note}",
-            color=discord.Color.green()))
+        await interaction.followup.send(embed=embeds.success(
+            f"✅ **{KIND_LABELS[kind.value]}** for **{created['location']}** will post in "
+            f"{destination.mention}{when}. (#{created['id']}){note}"))
 
     @app_commands.command(name="weather-subs", description="List this server's weather subscriptions.")
     async def list_subs(self, interaction: discord.Interaction):
@@ -305,7 +308,7 @@ class WeatherAlertsCog(commands.Cog):
         if not rows:
             await interaction.followup.send("No weather subscriptions here yet. Add one with `/weather-subscribe`.", ephemeral=True)
             return
-        embed = discord.Embed(title="🌦️ Weather subscriptions", color=discord.Color.blue())
+        embed = embeds.info(title="🌦️ Weather subscriptions")
         for row in rows[:25]:
             when = f" at {row['schedule_local_time']} ({row['tz']})" if row["schedule_local_time"] else ""
             state = "" if row["enabled"] else " • disabled"

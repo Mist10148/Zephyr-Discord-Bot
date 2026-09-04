@@ -35,6 +35,7 @@ from zephyr.services.gemini import (
     DEFAULT_CHAT_MODEL,
 )
 from zephyr.db import audit
+from zephyr.utils import embeds
 
 
 # Persistence runs in a worker thread; serialize the state mutation and write.
@@ -180,10 +181,9 @@ class ChatCog(commands.Cog):
                 settings={"ai_model": ai_model.value, "response_format": response_format.value},
             )
             await asyncio.to_thread(save_user_settings)
-        embed = discord.Embed(
+        embed = embeds.success(
+            "Your preferences have been saved for this context (Server or DM).",
             title="✅ Settings Updated!",
-            description="Your preferences have been saved for this context (Server or DM).",
-            color=discord.Color.green()
         )
         embed.add_field(name="AI Model", value=ai_model.name)
         embed.add_field(name="Response Format", value=response_format.name)
@@ -207,10 +207,9 @@ class ChatCog(commands.Cog):
             set_context_settings(server_id=server_id, user_id=interaction.user.id, settings=current)
             await asyncio.to_thread(save_user_settings)
         await interaction.followup.send(
-            embed=discord.Embed(
+            embed=embeds.success(
+                f"Responses will now be sent as **{format.name}**.",
                 title="✅ Output Format Updated",
-                description=f"Responses will now be sent as **{format.name}**.",
-                color=discord.Color.green()
             ),
             ephemeral=True
         )
@@ -236,14 +235,11 @@ class ChatCog(commands.Cog):
         from zephyr.services.gemini import _durable_quota_url
 
         durable = bool(_durable_quota_url())
-        embed = discord.Embed(
+        embed = embeds.info(
+            "Counters are shared across every Zephyr process and survive a restart."
+            if durable else
+            "No Redis is configured, so these counters are local to this process and reset on restart.",
             title="📊 Gemini Usage",
-            description=(
-                "Counters are shared across every Zephyr process and survive a restart."
-                if durable else
-                "No Redis is configured, so these counters are local to this process and reset on restart."
-            ),
-            color=discord.Color.blurple(),
         )
         embed.add_field(name="Effective Model", value=effective_model, inline=False)
         embed.add_field(name="Fallback Chain", value=fallback_label, inline=False)

@@ -158,6 +158,21 @@ def brand(description: str | None = None, **kwargs) -> discord.Embed:
     return build(description=description, accent="brand", **kwargs)
 
 
+def footer_text(extra: str | None = None) -> str:
+    """The composed footer, for a caller stamping an embed it did not build.
+
+    ``pagination`` needs this: it is handed embeds by its callers and adds
+    "Page 2/5" to them, and a bare `set_footer` would silently drop the bot's
+    name from every paginated reply.
+    """
+    return _footer_text(extra)
+
+
+def icon_url() -> str | None:
+    """The configured avatar URL, for the same callers as ``footer_text``."""
+    return _icon_url
+
+
 def _footer_text(extra: str | None) -> str:
     text = f"{extra} · {_name}" if extra else _name
     return _clip(text, MAX_FOOTER) or _name
