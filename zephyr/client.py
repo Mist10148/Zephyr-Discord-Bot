@@ -15,6 +15,7 @@ from discord.ext import commands, tasks
 
 from zephyr.config import ENABLED_COGS, REDIS_URL
 from zephyr.core.opus_loader import load_opus
+from zephyr.core.errors import report as report_command_error
 from zephyr.core.ffmpeg import FFMPEG_PATH
 from zephyr.services import bridge
 from zephyr.services.bridge import write_guild_snapshot
@@ -51,6 +52,12 @@ class ZephyrBot(commands.Bot):
         self._command_stream = None
 
     async def setup_hook(self):
+        # Every slash command's errors, in one place. Assigned rather than
+        # decorated: `self.tree` is the default CommandTree that
+        # commands.Bot.__init__ built, so there is no module-level tree object
+        # to hang a @tree.error decorator on.
+        self.tree.on_error = self._on_app_command_error
+
         # Voice prerequisites
         load_opus()
         print(f"[Startup] Using FFmpeg: {FFMPEG_PATH}")
@@ -168,6 +175,44 @@ class ZephyrBot(commands.Bot):
                 stream.close()
             except Exception:
                 pass
+
+    async def _on_app_command_error(self, interaction: discord.Interaction, error: Exception):
+        """Every slash command's last line of defence.
+
+        Before this, an unhandled exception in any of the 75 slash commands
+        produced "The application did not respond" and nothing in any log.
+        """
+        await report_command_error(interaction, error)
+
+    async def on_command_error(self, ctx: commands.Context, error: Exception):
+        """The same for the prefix surface.
+
+        Replaces MusicCog.cog_command_error, which sent a red embed containing
+        str(error) for any failure -- no logging, and no distinction between a
+        cooldown and a crash.
+        """
+        from zephyr.core.errors import GENERIC, new_reference, user_facing_message
+
+        message = user_facing_message(error)
+        if message == "":
+            return
+        if message is None:
+            reference = new_reference()
+            log.error(
+                "Unhandled error in prefix command %s",
+                ctx.command.qualified_name if ctx.command else "unknown",
+                exc_info=error,
+                extra={
+                    "reference": reference,
+                    "guild_id": str(ctx.guild.id) if ctx.guild else None,
+                    "user_id": str(ctx.author.id),
+                },
+            )
+            message = GENERIC.format(reference=reference)
+        try:
+            await ctx.send(message)
+        except discord.HTTPException:
+            log.warning("Could not deliver an error message for %s", ctx.command)
 
     def _bridge_actions(self) -> dict:
         """Every action any loaded cog serves, plus the bot's own.

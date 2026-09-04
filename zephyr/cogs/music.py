@@ -1509,9 +1509,6 @@ class MusicCog(commands.Cog):
                 state.songs.put_nowait(track)
         return {'added': len(tracks), 'title': tracks[0].title}
 
-    async def cog_command_error(self, ctx: commands.Context, error: commands.CommandError):
-        await ctx.send(embed=discord.Embed(description=f'An error occurred: {str(error)}', color=discord.Color.red()))
-
     @staticmethod
     async def _interaction_ctx(interaction: discord.Interaction):
         ctx = await commands.Context.from_interaction(interaction)
