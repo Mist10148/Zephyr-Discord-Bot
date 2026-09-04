@@ -16,7 +16,10 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from zephyr.config import DATABASE_URL, DEFAULT_DATABASE_URL
 from zephyr.db.engine import build_engine, create_schema, should_auto_create
+from zephyr.core.logging import get_logger
 
+
+log = get_logger(__name__)
 _lock = threading.Lock()
 _engines: dict[str, Engine] = {}
 
@@ -44,7 +47,7 @@ def get_engine(url: str | None = None) -> Engine:
             try:
                 create_schema(engine)
             except SQLAlchemyError as exc:
-                print(f"[DB] create_schema skipped: {exc}")
+                log.warning("create_schema skipped: %s", exc)
         _engines[target] = engine
         return engine
 

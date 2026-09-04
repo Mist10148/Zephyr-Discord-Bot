@@ -19,7 +19,10 @@ from website.api import api, error
 from website.api.guard import clear_auth_cookies, current_session, set_csrf_cookie, set_session_cookie
 from website.repo import upsert_web_user
 from website.session import SessionStoreError, consume_state, create_session, destroy, store_state
+from zephyr.core.logging import get_logger
 
+
+log = get_logger(__name__)
 MAX_NEXT_LENGTH = 256
 
 
@@ -182,7 +185,7 @@ def auth_callback():
     try:
         upsert_web_user(user, database_url=current_app.config["DATABASE_URL"])
     except Exception as exc:
-        print(f"[Auth] Could not record the web_users row: {exc}")
+        log.exception("Could not record the web_users row")
 
     try:
         # Rotate: destroy whatever session the browser presented before minting a

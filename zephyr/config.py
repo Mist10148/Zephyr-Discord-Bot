@@ -72,6 +72,17 @@ DB_AUTO_CREATE: bool | None = (
     else _DB_AUTO_CREATE_RAW.lower() in {"1", "true", "yes"}
 )
 
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+# Read here rather than in zephyr/core/logging.py so every environment-driven
+# value lives in one file, matching the rest of this module.
+LOG_LEVEL = (os.getenv("LOG_LEVEL") or "INFO").upper()
+# Plain lines locally, JSON in the cloud, because a log platform can index a
+# level and a logger name but not prose. RENDER is the same signal TRUST_PROXY
+# already keys off.
+LOG_FORMAT = (os.getenv("LOG_FORMAT") or ("json" if os.getenv("RENDER") else "plain")).lower()
+
 # Optional custom path for the local settings file (useful for mounted volumes).
 SETTINGS_PATH = os.getenv("SETTINGS_PATH") or str(PROJECT_ROOT / "settings.json")
 

@@ -11,7 +11,6 @@ import re
 import json
 import asyncio
 import threading
-import traceback
 from collections import defaultdict, deque
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
@@ -29,7 +28,10 @@ from zephyr.config import (
 )
 from zephyr.services.storage import storage
 from zephyr.db import ai as ai_db
+from zephyr.core.logging import get_logger
 
+
+log = get_logger(__name__)
 # ---------------------------------------------------------------------------
 # Gemini client
 #
@@ -148,7 +150,7 @@ def load_user_settings():
     try:
         settings_store = storage.load()
     except Exception as exc:
-        print(f"Failed to load settings: {exc}")
+        log.exception("Failed to load AI settings")
         settings_store = {}
         return
 
@@ -175,7 +177,7 @@ def save_user_settings():
         storage.save(payload)
         settings_store = payload
     except Exception as e:
-        print(f"Failed to save settings: {e}")
+        log.exception("Failed to save AI settings")
 
 
 def get_context_key(server_id=None, user_id=None):
@@ -322,7 +324,7 @@ async def fetch_image_data(image_url):
                 if response.status == 200:
                     return await response.read(), response.content_type or "image/png"
     except Exception as e:
-        print(f"Error fetching image data: {e}")
+        log.exception("Could not fetch image data")
     return None, None
 
 
@@ -346,7 +348,7 @@ async def count_input_tokens(model_name, contents):
         if isinstance(total, int) and total > 0:
             return total
     except Exception as exc:
-        print(f"Token count failed for {model_name}: {exc}")
+        log.warning("Token count failed for %s, falling back to an estimate: %s", model_name, exc)
     return estimate_tokens_from_contents(contents)
 
 
@@ -546,7 +548,7 @@ async def try_generate_with_model(model_name, contents, input_tokens, system_per
         if retry_after_seconds:
             await store_model_cooldown(model_name, retry_after_seconds)
         if is_quota_error(exc) or is_model_availability_error(exc) or is_temporary_model_error(exc):
-            print(f"[Gemini warning] {model_name}: {str(exc).splitlines()[0]}")
+            log.warning("Model %s unavailable, trying the next: %s", model_name, str(exc).splitlines()[0])
             return {"ok": False, "quota_handled": True, "retry_after_seconds": retry_after_seconds, "exception": exc}
         raise
 
@@ -643,8 +645,7 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
 
         return build_quota_message(selected_model, retry_after_seconds=best_retry_after, attempted_fallbacks=attempted_fallbacks)
     except Exception as exc:
-        print(f"[Gemini error] {selected_model}: {exc}")
-        traceback.print_exc()
+        log.exception("Gemini request failed on %s", selected_model)
         return "An unexpected error occurred while generating a response. Please try again in a moment."
 
 
@@ -677,7 +678,7 @@ async def reset_conversation(server_id, user_id, channel_id):
             purged = await asyncio.to_thread(ai_db.purge_conversation, server_id, channel_id)
         except Exception as exc:
             error = str(exc)
-            print(f"[Gemini] Could not purge the stored conversation for channel {channel_id}: {exc}")
+            log.exception("Could not purge the stored conversation for channel %s", channel_id)
     cached = clear_history_for_context(server_id, user_id)
     return {"purged": purged, "cached": cached, "error": error}
 

@@ -14,7 +14,6 @@ approximation of it.
 """
 
 import asyncio
-import traceback
 from datetime import datetime, timezone
 
 import discord
@@ -40,7 +39,10 @@ from zephyr.utils.weather_utils import (
     geocode_search,
     get_openmeteo_bundle,
 )
+from zephyr.core.logging import get_logger
 
+
+log = get_logger(__name__)
 KIND_LABELS = {
     "daily": "Daily digest",
     "severe": "Severe weather watch",
@@ -91,7 +93,7 @@ class WeatherAlertsCog(commands.Cog):
         try:
             due = await asyncio.to_thread(claim_due, datetime.now(timezone.utc))
         except Exception as exc:
-            print(f"[WeatherAlerts] Could not claim due subscriptions: {exc}")
+            log.exception("Could not claim due subscriptions")
             return
         for subscription in due:
             await self._deliver(subscription)
@@ -106,7 +108,7 @@ class WeatherAlertsCog(commands.Cog):
         try:
             watched = await asyncio.to_thread(list_watched)
         except Exception as exc:
-            print(f"[WeatherAlerts] Could not read watched subscriptions: {exc}")
+            log.exception("Could not read watched subscriptions")
             return
         for subscription in watched:
             await self._deliver(subscription, dedupe=True)
@@ -131,10 +133,10 @@ class WeatherAlertsCog(commands.Cog):
                 units=subscription.get("units") or "metric",
             )
         except WeatherProviderError as exc:
-            print(f"[WeatherAlerts] Provider failed for subscription {subscription['id']}: {exc}")
+            log.warning("Weather provider failed for subscription %s: %s", subscription["id"], exc)
             return
         except Exception:
-            traceback.print_exc()
+            log.exception("Could not evaluate subscription %s", subscription["id"])
             return
 
         alert = evaluate(
@@ -151,7 +153,7 @@ class WeatherAlertsCog(commands.Cog):
 
         channel = self.bot.get_channel(int(subscription["channel_id"]))
         if channel is None:
-            print(f"[WeatherAlerts] Channel {subscription['channel_id']} is not reachable.")
+            log.warning("Channel %s is not reachable", subscription["channel_id"])
             return
         try:
             await channel.send(embed=alert_embed(alert))
@@ -159,10 +161,10 @@ class WeatherAlertsCog(commands.Cog):
             # Posting is not permitted any more. Left enabled deliberately: a
             # permission change is usually temporary, and silently disabling the
             # subscription would be discovered much later than a missing message.
-            print(f"[WeatherAlerts] Cannot post in {subscription['channel_id']}.")
+            log.warning("Cannot post in channel %s", subscription["channel_id"])
             return
         except Exception:
-            traceback.print_exc()
+            log.exception("Could not deliver subscription %s", subscription["id"])
             return
 
         if dedupe:
@@ -241,7 +243,7 @@ class WeatherAlertsCog(commands.Cog):
             await interaction.followup.send(f"❌ {exc}")
             return
         except Exception as exc:
-            traceback.print_exc()
+            log.exception("Could not create a weather subscription")
             await interaction.followup.send(f"❌ Could not save that subscription: {exc}")
             return
 

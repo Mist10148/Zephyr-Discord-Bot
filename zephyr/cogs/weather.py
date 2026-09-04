@@ -40,8 +40,11 @@ from zephyr.utils.weather_utils import (
     get_openmeteo_current,
 )
 from zephyr.utils.pagination import _send_paginated_embeds
+from zephyr.core.logging import get_logger
 
 
+
+log = get_logger(__name__)
 # ---------------------------------------------------------------------------
 # Weather Prefix Commands
 # ---------------------------------------------------------------------------
@@ -608,7 +611,7 @@ class WeatherCog(commands.Cog):
         try:
             stored = await asyncio.to_thread(read_bot_user, str(interaction.user.id))
         except Exception as exc:
-            print(f"[Weather] Could not read the default city: {exc}")
+            log.exception("Could not read the default city")
             return self.FALLBACK_CITY
         return (stored or {}).get("default_city") or self.FALLBACK_CITY
 
@@ -825,7 +828,7 @@ class WeatherCog(commands.Cog):
             if coords:
                 days = get_openmeteo_daily_forecast(*coords, days=3)
         except Exception as e:
-            print(f"[Forecast Open-Meteo Error] {e}")
+            log.exception("Open-Meteo forecast request failed")
 
         # Fall back to OpenWeatherMap if Open-Meteo failed or returned nothing
         if not days:
@@ -909,7 +912,7 @@ class WeatherCog(commands.Cog):
         try:
             current, daily = _get_class_weather_data()
         except Exception as e:
-            print(f"[Class Open-Meteo Error] {e}")
+            log.exception("Open-Meteo class-suspension request failed")
 
         # Fall back to OpenWeatherMap for Iloilo
         if not current or not daily or len(daily) < 3:

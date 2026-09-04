@@ -14,7 +14,10 @@ from flask import current_app, g, request
 from website.api import api, error
 from website.session import SessionStoreError, load_session
 from zephyr.services import redis_client
+from zephyr.core.logging import get_logger
 
+
+log = get_logger(__name__)
 CSRF_HEADER = "X-Zephyr-CSRF"
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
@@ -108,7 +111,7 @@ def rate_limit(bucket: str, *, limit: int, window: int) -> bool:
         if used == 1:
             client.expire(key, window + 1)
     except Exception as exc:
-        print(f"[RateLimit] Could not count {bucket}: {exc}")
+        log.warning("Could not count rate-limit bucket %s, failing open: %s", bucket, exc)
         return True
     return used <= limit
 

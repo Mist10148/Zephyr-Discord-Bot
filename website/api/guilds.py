@@ -13,7 +13,10 @@ from website.api.guard import guild_scoped
 from zephyr.db import audit
 from zephyr.db.guild_settings import read_guild_settings, write_guild_settings
 from zephyr.services import bridge
+from zephyr.core.logging import get_logger
 
+
+log = get_logger(__name__)
 # Applied when a guild has no row yet, which is the normal state until somebody
 # saves settings.  Reported with defaults_applied so the UI can say so.
 # The writers only ever set these two, so an unknown value is a client bug
@@ -48,7 +51,7 @@ def guild_overview(guild_id: str):
     try:
         snapshot, snapshot_at = bridge.read_guild_snapshot(url=current_app.config["REDIS_URL"])
     except Exception as exc:
-        print(f"[Guilds] Could not read the guild snapshot: {exc}")
+        log.exception("Could not read the guild snapshot")
         snapshot, snapshot_at = None, None
     bot_present = None if snapshot is None else guild_id in snapshot
 
@@ -183,7 +186,7 @@ def patch_guild_settings(guild_id: str):
         try:
             bridge.send_command("settings.reload", url=current_app.config["REDIS_URL"], timeout=2.0)
         except Exception as exc:
-            print(f"[Guilds] Could not tell the bot to reload settings: {exc}")
+            log.warning("Could not tell the bot to reload settings: %s", exc)
 
     settings = dict(DEFAULT_SETTINGS)
     settings["enabled_cogs"] = list(current_app.config["ENABLED_COGS"])
@@ -241,7 +244,7 @@ def guild_audit(guild_id: str):
     try:
         page = audit.read(guild_id, **kwargs)
     except Exception as exc:
-        print(f"[Guilds] Could not read the audit log for {guild_id}: {exc}")
+        log.exception("Could not read the audit log for %s", guild_id)
         return error("audit_unavailable", "Could not read the audit log.", 503)
     return jsonify({"id": guild_id, **page, "actors": _actor_names(guild_id, page.get("entries") or [])})
 
@@ -270,7 +273,7 @@ def _actor_names(guild_id: str, entries: list[dict]) -> dict:
             "meta.members", guild_id=guild_id, args={"ids": ids}, url=redis_url
         )
     except Exception as exc:
-        print(f"[Guilds] Could not resolve audit actors for {guild_id}: {exc}")
+        log.warning("Could not resolve audit actors for %s: %s", guild_id, exc)
         return {}
     return {member["id"]: member for member in answer.get("members") or [] if member.get("id")}
 

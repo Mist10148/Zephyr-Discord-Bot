@@ -23,8 +23,11 @@ from zephyr.config import (
 )
 from zephyr.db.engine import build_engine, create_schema, should_auto_create
 from zephyr.db.models import AISettings, AppState
+from zephyr.core.logging import get_logger
 
 
+
+log = get_logger(__name__)
 class BaseStorage(ABC):
     """Abstract storage backend for Zephyr's persisted settings."""
 
@@ -54,7 +57,7 @@ class FileStorage(BaseStorage):
                 data = json.load(file)
             return data if isinstance(data, dict) else {}
         except Exception as exc:
-            print(f"[Storage] Failed to load {self.path}: {exc}")
+            log.exception("Failed to load %s", self.path)
             return {}
 
     def save(self, data: dict) -> None:
@@ -65,7 +68,7 @@ class FileStorage(BaseStorage):
             with open(self.path, "w", encoding="utf-8") as file:
                 json.dump(data, file, indent=4)
         except Exception as exc:
-            print(f"[Storage] Failed to save {self.path}: {exc}")
+            log.exception("Failed to save %s", self.path)
 
 
 class RedisStorage(BaseStorage):
@@ -86,14 +89,14 @@ class RedisStorage(BaseStorage):
                 return {}
             return json.loads(raw.decode("utf-8"))
         except Exception as exc:
-            print(f"[Storage] Failed to load from Redis: {exc}")
+            log.exception("Failed to load from Redis")
             return {}
 
     def save(self, data: dict) -> None:
         try:
             self.client.set(self.KEY, json.dumps(data, indent=4))
         except Exception as exc:
-            print(f"[Storage] Failed to save to Redis: {exc}")
+            log.exception("Failed to save to Redis")
 
     def close(self) -> None:
         try:
@@ -168,7 +171,7 @@ class DatabaseStorage(BaseStorage):
             result.update(copy.deepcopy(nested))
             return result
         except Exception as exc:
-            print(f"[Storage] Failed to load from database: {exc}")
+            log.exception("Failed to load from the database")
             return {}
 
     def save(self, data: dict) -> None:
@@ -188,7 +191,7 @@ class DatabaseStorage(BaseStorage):
                         [{"key": key, "data": value} for key, value in app_state.items()],
                     )
         except Exception as exc:
-            print(f"[Storage] Failed to save to database: {exc}")
+            log.exception("Failed to save to the database")
 
     def close(self) -> None:
         self.engine.dispose()
@@ -219,8 +222,7 @@ def get_storage() -> BaseStorage:
             return RedisStorage()
         return _database_storage(DEFAULT_DATABASE_URL)
     except Exception as exc:
-        print(f"[Storage] {backend} storage is unavailable: {exc}")
-        print("[Storage] Falling back to file storage.")
+        log.exception("%s storage is unavailable; falling back to file storage", backend)
         return FileStorage()
 
 

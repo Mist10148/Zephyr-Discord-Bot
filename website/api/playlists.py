@@ -11,7 +11,10 @@ from website.api import api, error
 from website.api.guard import current_session, require_session
 from zephyr.db import playlists as repo
 from zephyr.services import spotify
+from zephyr.core.logging import get_logger
 
+
+log = get_logger(__name__)
 MAX_TITLE_LENGTH = 300
 
 
@@ -202,7 +205,7 @@ def import_spotify():
     except ValueError as exc:
         return error("invalid_value", str(exc), 400)
     except Exception as exc:
-        print(f"[Playlists] Spotify import failed: {exc}")
+        log.exception("Spotify import failed")
         return error("spotify_unavailable", "Spotify did not answer.", 502)
 
     if not tracks:
