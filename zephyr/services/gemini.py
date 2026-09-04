@@ -268,6 +268,25 @@ def normalize_history_entries(raw_history):
     return normalized[-MAX_HISTORY_MESSAGES:]
 
 
+def forget_user_buffers(user_id) -> int:
+    """Drop the in-process conversation buffers belonging to one person.
+
+    Only their DM buffer can be identified: ``get_context_key`` keys a guild
+    buffer on the *server*, so a guild conversation holds several people's
+    turns and dropping it would erase everybody's context to satisfy one
+    request. Their stored ``ai_messages`` rows are deleted regardless -- this is
+    only about the volatile buffer that would otherwise keep answering with
+    context that has just been erased.
+    """
+    dm_key = f"DM-{user_id}"
+    removed = 0
+    if conversation_history.pop(dm_key, None) is not None:
+        removed += 1
+    if user_settings.pop(dm_key, None) is not None:
+        removed += 1
+    return removed
+
+
 def get_history_for_context(server_id=None, user_id=None):
     key = get_context_key(server_id, user_id)
     return normalize_history_entries(conversation_history.get(key, []))
@@ -876,6 +895,7 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
                 if channel_id:
                     await asyncio.to_thread(
                         ai_db.append_exchange, channel_id, server_id, user_input or "", bot_response,
+                        author_id=user_id,
                         token_count=input_tokens,
                     )
                     # Keep durable context bounded. The generated summary retains
