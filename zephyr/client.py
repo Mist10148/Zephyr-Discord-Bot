@@ -13,10 +13,12 @@ import time
 import discord
 from discord.ext import commands, tasks
 
-from zephyr.config import COMMAND_PREFIX, ENABLED_COGS, REDIS_URL
+from zephyr.config import COMMAND_PREFIX, ENABLED_COGS, REDIS_URL, SHARD_COUNT
 from zephyr.core.opus_loader import load_opus
 from zephyr.core.errors import report as report_command_error
 from zephyr.core.ffmpeg import FFMPEG_PATH
+from zephyr.core.streaming import StreamingReply
+from zephyr.db.guild_settings import read_ai_channel_policies, read_prefixes
 from zephyr.services import bridge
 from zephyr.services.bridge import write_guild_snapshot
 from zephyr.services.gemini import generate_gemini_response, send_response
@@ -39,7 +41,22 @@ async def type_print(text, delay=0.03):
     await asyncio.sleep(1)
 
 
-class ZephyrBot(commands.Bot):
+class ZephyrBot(commands.AutoShardedBot):
+    """The bot.
+
+    AutoShardedBot rather than Bot even at one shard: with SHARD_COUNT unset it
+    opens a single connection and behaves identically, so there is no separate
+    "sharded" code path to keep working. Discord requires sharding past roughly
+    2,500 guilds, and discovering then that the base class has to change is a
+    worse time to find out.
+
+    All shards run in this one process. That is deliberate rather than
+    incidental: MusicCog.voice_states, the bridge command listener and gemini's
+    in-memory conversation buffer are all per-process, and splitting shards
+    across processes would need each of them redesigned. What sharding buys here
+    is several gateway connections, which is the part Discord actually requires.
+    """
+
     def __init__(self):
         # Enumerated rather than Intents.all(). `all()` requests every
         # privileged intent, including presences and typing, which this bot
@@ -60,10 +77,13 @@ class ZephyrBot(commands.Bot):
         intents.dm_messages = True
 
         super().__init__(
+            # None lets Discord pick, which is right until somebody has a
+            # reason to pin it.
+            shard_count=SHARD_COUNT,
             # Not when_mentioned_or: a mention is already the AI's trigger in
             # on_message, so accepting it as a prefix too would make
             # "@Zephyr weather" both ask the AI and run the weather command.
-            command_prefix=COMMAND_PREFIX,
+            command_prefix=self._resolve_prefix,
             intents=intents,
             # None, not DefaultHelpCommand: zephyr/cogs/help.py provides the
             # real help surface, and registering both meant two implementations
@@ -73,6 +93,73 @@ class ZephyrBot(commands.Bot):
         self._synced_count = 0
         self._started_at = time.time()
         self._command_stream = None
+        # guild_id (str) -> prefix. Absent means COMMAND_PREFIX. Cached because
+        # command_prefix is consulted for every message the bot can see, so a
+        # query there would put the database on the path of *reading a chat
+        # message*.
+        self._prefixes: dict[str, str] = {}
+        # guild_id -> (mode, channel_ids). Absent means the AI answers wherever
+        # it can read, which is the historical behaviour.
+        self._ai_channel_policies: dict[str, tuple[str, set[str]]] = {}
+
+    def _resolve_prefix(self, bot, message):
+        """The prefix for this message's guild, or the deployment default.
+
+        Synchronous by necessity -- discord.py calls this per message and will
+        await a coroutine, but doing IO here would be a query per message. The
+        cache is refreshed on a loop and updated directly by a /prefix change.
+        """
+        if message.guild is None:
+            return COMMAND_PREFIX
+        return self._prefixes.get(str(message.guild.id), COMMAND_PREFIX)
+
+    async def reload_prefixes(self) -> None:
+        try:
+            self._prefixes = await asyncio.to_thread(read_prefixes)
+        except Exception:
+            # A stale cache answers with the previous prefix; an exception here
+            # would take the loop down and stop it refreshing at all.
+            log.exception("Could not read guild prefixes")
+        try:
+            self._ai_channel_policies = await asyncio.to_thread(read_ai_channel_policies)
+        except Exception:
+            log.exception("Could not read AI channel policies")
+
+    def ai_may_answer(self, message) -> bool:
+        """Whether the AI is allowed to answer in this channel.
+
+        The mention/reply handler answered anywhere the bot could read, so a
+        server that wanted Zephyr for music had no way to stop people
+        conversing with it in every channel. A guild with no policy still
+        answers everywhere -- this adds a restriction, it does not impose one.
+
+        Checked against the *parent* for a thread, because a policy naming
+        #bot-spam should cover threads started in it rather than being silently
+        bypassed by anyone who opens one.
+        """
+        if message.guild is None:
+            return True
+        policy = self._ai_channel_policies.get(str(message.guild.id))
+        if policy is None:
+            return True
+        mode, channel_ids = policy
+
+        candidates = {str(message.channel.id)}
+        parent_id = getattr(message.channel, "parent_id", None)
+        if parent_id is not None:
+            candidates.add(str(parent_id))
+
+        if mode == "allow":
+            return bool(candidates & channel_ids)
+        return not (candidates & channel_ids)
+
+    @tasks.loop(minutes=10)
+    async def _prefix_loop(self):
+        await self.reload_prefixes()
+
+    @_prefix_loop.before_loop
+    async def _before_prefix_loop(self):
+        await self.wait_until_ready()
 
     async def setup_hook(self):
         # Every slash command's errors, in one place. Assigned rather than
@@ -100,12 +187,17 @@ class ZephyrBot(commands.Bot):
         except Exception as e:
             log.exception("Failed to sync the command tree")
 
+        # Not gated on REDIS_URL, unlike the two below: the prefix is a
+        # database read, and the database is always configured.
+        self._prefix_loop.start()
+
         if REDIS_URL:
             self._presence_loop.start()
             self._command_loop.start()
 
     async def close(self):
         """Dispose persistent storage before Discord tears down the loop."""
+        self._prefix_loop.cancel()
         self._presence_loop.cancel()
         self._command_loop.cancel()
         self._close_command_stream()
@@ -139,7 +231,11 @@ class ZephyrBot(commands.Bot):
                     # discord.py reports NaN until the first heartbeat lands.
                     "latency_ms": None if math.isnan(self.latency) else round(self.latency * 1000),
                     "uptime_s": int(time.time() - self._started_at),
+                    # shard_id is None on an AutoShardedBot: it owns several
+                    # rather than one, so the count is the meaningful number
+                    # and the dashboard reports that instead.
                     "shard": self.shard_id,
+                    "shard_count": self.shard_count,
                 },
             )
         except Exception as e:
@@ -390,6 +486,49 @@ class ZephyrBot(commands.Bot):
                 await channel.send(embed=welcome_embed)
                 break
 
+    async def _read_attachments(self, message):
+        """The first image and the first text file on a message.
+
+        Only the *first* attachment was considered before, so a message with a
+        caption file and an image saw whichever came first and silently
+        discarded the other.
+        """
+        image_url, text_content = None, None
+        for attachment in getattr(message, "attachments", None) or []:
+            content_type = attachment.content_type or ""
+            if image_url is None and content_type.startswith("image/"):
+                image_url = attachment.url
+            elif text_content is None and attachment.filename.lower().endswith((".txt", ".md")):
+                try:
+                    text_content = (await attachment.read()).decode("utf-8", errors="replace")
+                except Exception:
+                    log.warning("Could not read attachment %s", attachment.filename, exc_info=True)
+            if image_url and text_content:
+                break
+        return image_url, text_content
+
+    async def _read_referenced_attachments(self, message):
+        """The same, for the message being replied to.
+
+        ``reference.resolved`` is only populated when Discord happened to
+        include it, so the message is fetched when it is not -- once, and only
+        on a reply that carried no attachment of its own.
+        """
+        reference = getattr(message, "reference", None)
+        if reference is None:
+            return None, None
+
+        referenced = reference.resolved
+        if referenced is None or isinstance(referenced, discord.DeletedReferencedMessage):
+            if reference.message_id is None:
+                return None, None
+            try:
+                referenced = await message.channel.fetch_message(reference.message_id)
+            except Exception:
+                # Deleted, or in a channel history the bot cannot read.
+                return None, None
+        return await self._read_attachments(referenced)
+
     async def on_message(self, message):
         if message.author == self.user:
             return
@@ -398,25 +537,43 @@ class ZephyrBot(commands.Bot):
         if not (self.user.mentioned_in(message) or is_reply_to_bot or in_dm):
             await self.process_commands(message)
             return
+        if not self.ai_may_answer(message):
+            # Silently, not with a refusal: a channel configured to keep the AI
+            # out should be quiet, and "I am not allowed to talk here" is still
+            # the bot talking there.
+            await self.process_commands(message)
+            return
 
         async with message.channel.typing():
             server_id = message.guild.id if message.guild else None
             user_id = message.author.id
-            image_url, text_content = None, None
-            if message.attachments:
-                attachment = message.attachments[0]
-                if attachment.content_type and attachment.content_type.startswith("image/"):
-                    image_url = attachment.url
-                elif attachment.filename.endswith(".txt"):
-                    text_content = (await attachment.read()).decode("utf-8")
+            image_url, text_content = await self._read_attachments(message)
+            if image_url is None:
+                # The common flow this used to miss entirely: reply to somebody
+                # else's screenshot and ask about it. Only the *replying*
+                # message was inspected, so the image was invisible and the
+                # answer was about nothing.
+                image_url, referenced_text = await self._read_referenced_attachments(message)
+                text_content = text_content or referenced_text
             clean_message = message.content.replace(f"<@!{self.user.id}>", "").replace(f"<@{self.user.id}>", "").strip()
-            final_message = text_content or clean_message
+            # Both, not either: a .txt used to *replace* whatever was typed, so
+            # "summarise this" plus a file lost the instruction.
+            final_message = "\n\n".join(part for part in (clean_message, text_content) if part)
             if not final_message and not image_url:
                 if not (in_dm and image_url):
                     await message.channel.send("Please provide a message when mentioning or replying to me.")
                 await self.process_commands(message)
                 return
-            response = await generate_gemini_response(server_id, user_id, final_message, image_url, channel_id=message.channel.id)
+            # The reply is shown as it arrives, then replaced by the real
+            # message. send_response still owns the final formatting -- the
+            # three output formats, the chunking and the file fallback all stay
+            # in one place, and this only replaces the waiting.
+            async with StreamingReply(message.channel) as preview:
+                response = await generate_gemini_response(
+                    server_id, user_id, final_message, image_url,
+                    channel_id=message.channel.id,
+                    on_progress=preview.update,
+                )
             await send_response(message.channel, response, message)
 
         await self.process_commands(message)

@@ -72,6 +72,28 @@ DB_AUTO_CREATE: bool | None = (
     else _DB_AUTO_CREATE_RAW.lower() in {"1", "true", "yes"}
 )
 
+# Number of gateway shards, or None to let Discord decide.
+#
+# Discord requires sharding past roughly 2,500 guilds. AutoShardedBot is close
+# to a drop-in *because* the quota counters now live in Redis (13.5): with the
+# previous per-process dicts, N shard processes would each have believed they
+# had the whole daily allowance and the key would have 429'd immediately.
+#
+# All shards still run in **one process** here, which is what keeps the rest of
+# the design intact -- MusicCog.voice_states, the bridge listener and the
+# in-memory conversation buffer are all per-process, and multiple processes
+# would need each of them redesigned. One process with N shards is many
+# gateway connections sharing one interpreter, which is the version of
+# sharding this codebase is actually ready for.
+SHARD_COUNT = int(os.getenv("SHARD_COUNT") or "0") or None
+
+# Per-person daily Gemini ceiling, in tokens. 0 disables the cap entirely.
+#
+# Exists because the model limits are per *model*: one person could consume a
+# guild's whole daily allowance and everybody else would see a rate-limit
+# message with no explanation. A per-user row overrides this.
+AI_USER_DAILY_TOKENS = int(os.getenv("AI_USER_DAILY_TOKENS") or "0")
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------

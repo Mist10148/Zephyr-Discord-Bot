@@ -38,12 +38,13 @@ running code, and every defect in Phase 13 was confirmed in the source rather th
 | **11** | **Navigation and information architecture** | **Shipped** (with **F4**) |
 | **12** | **Public site layer** | **Not started** |
 | **13** | **Bot correctness and observability** | **Shipped** |
-| **14** | **Bot functionality gaps** | **Not started** |
+| **14** | **Bot functionality gaps** | **Shipped** |
 | **15** | **New bot features** | **Not started** |
 | **16** | **Discord-side presentation** | **Not started** |
 | **17** | **Code quality and infrastructure** | **17.3 shipped**, rest not started |
 
-**Phases 8 to 11 and 13 are shipped.** Next is **Phase 14** (bot functionality gaps).
+**Phases 8 to 11, 13 and 14 are shipped.** Next is **Phase 15** (new bot features), starting
+with 15.2, which unblocks 12.2.
 
 One note carried out of Phase 8 for the phases that follow: the frontend suite now has a
 jsdom baseline and a route harness (`test/setup.ts`, `test/helpers.tsx`), so a route-level spec
@@ -564,14 +565,14 @@ returns first, and a server-side disconnect leaves no orphaned voice state.
 
 Capability the bot is missing relative to what its own dashboard already does.
 
-### 14.1 — The prefix is hardcoded · M
+### 14.1 — The prefix is hardcoded · M · **DONE**
 
 Follows 13.4. Once the prefix is no longer `/`, it should be per-guild and editable from
 [`routes/GuildSettings.tsx`](../website/frontend/src/routes/GuildSettings.tsx), which already
 edits every other guild-scoped value. `command_prefix` accepts a callable, so this is a
 settings lookup rather than a restructure.
 
-### 14.2 — No autocomplete on any command · M
+### 14.2 — No autocomplete on any command · M · **DONE**
 
 `/play` takes a free-text string; `/setlocation` and the weather commands take raw city
 names. `app_commands.autocomplete` would surface live search results, the user's saved
@@ -582,7 +583,7 @@ Discord side and every data source for it already exists.
 Autocomplete callbacks must answer within 3 seconds, so cache the geocode and search lookups
 rather than calling upstream per keystroke — the same mistake 8.3 fixes on the web.
 
-### 14.3 — The queue is richer on the web than in Discord · M
+### 14.3 — The queue is richer on the web than in Discord · M · **DONE**
 
 The dashboard can drag-reorder, clear, jump and remove (C1–C5); the bot has bridge handlers
 for all of it — `_bridge_move`, `_bridge_jump`, `_bridge_remove`, `_bridge_clear` in
@@ -592,7 +593,7 @@ exists.
 
 **Done when:** the queue can be reordered and trimmed from Discord without opening the site.
 
-### 14.4 — AI chat gaps · M
+### 14.4 — AI chat gaps · M · **DONE**
 
 Four separate items across [`zephyr/services/gemini.py`](../zephyr/services/gemini.py) and
 [`zephyr/cogs/chat.py`](../zephyr/cogs/chat.py):
@@ -610,7 +611,7 @@ Four separate items across [`zephyr/services/gemini.py`](../zephyr/services/gemi
 Treat these as four independent paths rather than one tool-using agent: on the free-tier key
 the 2.5 models cannot combine most tools in a single request.
 
-### 14.5 — Weather subscriptions cannot be paused or tested · S
+### 14.5 — Weather subscriptions cannot be paused or tested · S · **DONE**
 
 [`zephyr/db/weather_subs.py`](../zephyr/db/weather_subs.py) models enable/disable but there
 is no snooze (mute until a date) and no "run this one now", so a user setting up a digest
@@ -618,7 +619,7 @@ cannot see what it will look like without waiting for the schedule. Both are sma
 to [`zephyr/cogs/weather_alerts.py`](../zephyr/cogs/weather_alerts.py) and
 [`website/api/weather_subs.py`](../website/api/weather_subs.py).
 
-### 14.6 — Single process, no sharding · L
+### 14.6 — Single process, no sharding · L · **DONE**
 
 `ZephyrBot` is a plain `commands.Bot`. Discord requires sharding past ~2500 guilds and
 `AutoShardedBot` is close to a drop-in — but the module-level state in 13.5 and

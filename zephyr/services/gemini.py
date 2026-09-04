@@ -28,6 +28,7 @@ from zephyr.config import (
 )
 from zephyr.services.storage import storage
 from zephyr.db import ai as ai_db
+from zephyr.db.weather_subs import read_bot_user
 from zephyr.core.logging import get_logger
 
 
@@ -536,6 +537,79 @@ async def reserve_local_quota(model_name, input_tokens):
     return True, None
 
 
+async def user_token_budget(user_id) -> int:
+    """This person's daily ceiling: their own row, else the deployment default.
+
+    0 means no cap, which is the default and the historical behaviour.
+    """
+    from zephyr.config import AI_USER_DAILY_TOKENS
+
+    try:
+        row = await asyncio.to_thread(read_bot_user, str(user_id))
+    except Exception:
+        log.warning("Could not read a user token budget", exc_info=True)
+        return AI_USER_DAILY_TOKENS
+    override = (row or {}).get("ai_token_budget")
+    return int(override) if override else AI_USER_DAILY_TOKENS
+
+
+async def check_user_budget(user_id) -> str | None:
+    """A refusal message if this person is over budget today, else None.
+
+    The model limits are per *model*, so before this one person could consume a
+    guild's whole daily allowance and everybody else saw a rate-limit message
+    with no explanation of why. This says whose budget ran out.
+    """
+    budget = await user_token_budget(user_id)
+    if budget <= 0:
+        return None
+    url = _durable_quota_url()
+    if not url:
+        # No Redis means no durable per-user counter, and an in-memory one
+        # would reset on restart -- which is the defect 13.5 just removed.
+        # Better to not enforce than to enforce inconsistently.
+        return None
+    try:
+        from zephyr.services import quota
+
+        _, day = _quota_window()
+        spent = await asyncio.to_thread(quota.user_spend, str(user_id), day, url=url)
+    except Exception:
+        log.warning("Could not read a user's token spend", exc_info=True)
+        return None
+    if spent < budget:
+        return None
+    reset = format_datetime_for_user(get_next_pacific_midnight().astimezone(timezone.utc))
+    return (
+        f"You have used your daily AI allowance ({spent:,} of {budget:,} tokens). "
+        f"It resets at {reset}."
+    )
+
+
+async def charge_user_tokens(user_id, usage_metadata) -> None:
+    """Bill this person for a completed request.
+
+    Charged on the way out, not reserved up front: the true cost is only known
+    once the response arrives, and a reservation based on the prompt alone would
+    under-count long replies -- which are exactly the expensive ones.
+    """
+    if usage_metadata is None:
+        return
+    total = extract_usage_value(usage_metadata, "total_token_count")
+    if not total:
+        return
+    url = _durable_quota_url()
+    if not url:
+        return
+    try:
+        from zephyr.services import quota
+
+        _, day = _quota_window()
+        await asyncio.to_thread(quota.charge_user, str(user_id), day, int(total), url=url)
+    except Exception:
+        log.warning("Could not charge a user's token spend", exc_info=True)
+
+
 async def _reserve_durable(model_name, input_tokens, limits, url):
     """The Redis-backed claim. Same return contract as the in-memory version."""
     from zephyr.services import quota
@@ -647,14 +721,76 @@ async def request_gemini_content(model_name, contents, system_personality):
     return await gemini_async_client.models.generate_content(model=model_name, contents=contents, config=config)
 
 
-async def try_generate_with_model(model_name, contents, input_tokens, system_personality):
+async def request_gemini_stream(model_name, contents, system_personality, on_progress):
+    """Stream a reply, reporting progress, and return a response-shaped object.
+
+    The caller wants the same three things a non-streamed response gives it --
+    the full text, the usage metadata and a place to look for a quota error --
+    so this accumulates and hands back a small stand-in rather than making
+    every downstream caller aware that streaming happened. That is what keeps
+    the model fallback chain, the quota accounting and the history writing on
+    one code path instead of two.
+
+    ``on_progress`` receives the text *so far*, and is called per chunk. It is
+    the caller's job to throttle its own side effects -- editing a Discord
+    message per chunk would be rate-limited within a second.
+    """
+    config = get_generate_config(system_personality)
+    stream = await gemini_async_client.models.generate_content_stream(
+        model=model_name, contents=contents, config=config
+    )
+
+    pieces: list[str] = []
+    usage = None
+    async for chunk in stream:
+        # The last chunk carries the usage metadata in google-genai; earlier
+        # ones may carry a partial version, so the newest non-None wins.
+        chunk_usage = getattr(chunk, "usage_metadata", None)
+        if chunk_usage is not None:
+            usage = chunk_usage
+        text = extract_response_text(chunk)
+        if not text:
+            continue
+        pieces.append(text)
+        try:
+            await on_progress("".join(pieces))
+        except Exception:
+            # A failed progress update must not lose the reply. The final send
+            # still happens; the user sees the answer arrive at once instead of
+            # progressively, which is what they got before this existed.
+            log.warning("A streaming progress update failed", exc_info=True)
+
+    return _StreamedResponse("".join(pieces), usage)
+
+
+class _StreamedResponse:
+    """Just enough of a Gemini response for the accumulated stream.
+
+    ``extract_response_text`` reads ``.text`` first, so this satisfies it
+    without pretending to be the full object.
+    """
+
+    __slots__ = ("text", "usage_metadata")
+
+    def __init__(self, text, usage_metadata):
+        self.text = text
+        self.usage_metadata = usage_metadata
+
+
+async def try_generate_with_model(model_name, contents, input_tokens, system_personality, *, user_id=None, on_progress=None):
     allowed, limit_message = await reserve_local_quota(model_name, input_tokens)
     if not allowed:
         return {"ok": False, "message": limit_message, "quota_handled": True}
     try:
-        response = await request_gemini_content(model_name, contents, system_personality)
+        if on_progress is not None:
+            response = await request_gemini_stream(model_name, contents, system_personality, on_progress)
+        else:
+            response = await request_gemini_content(model_name, contents, system_personality)
         response_text = extract_response_text(response) or "I could not generate a response."
-        await record_successful_usage(model_name, getattr(response, "usage_metadata", None))
+        usage = getattr(response, "usage_metadata", None)
+        await record_successful_usage(model_name, usage)
+        if user_id is not None:
+            await charge_user_tokens(user_id, usage)
         return {"ok": True, "response_text": response_text, "response": response}
     except Exception as exc:
         retry_after_seconds = parse_retry_after_seconds(exc)
@@ -666,7 +802,14 @@ async def try_generate_with_model(model_name, contents, input_tokens, system_per
         raise
 
 
-async def generate_gemini_response(server_id, user_id, user_input, image_url=None, *, channel_id=None):
+async def generate_gemini_response(server_id, user_id, user_input, image_url=None, *, channel_id=None, on_progress=None):
+    # Checked before doing any work: the point of a budget is not to spend the
+    # tokens, and this also gives the person a message that says whose
+    # allowance ran out rather than a bare model rate-limit notice.
+    over_budget = await check_user_budget(user_id)
+    if over_budget:
+        return over_budget
+
     system_personality = (
         "You are a nymphomaniac. "
         "You have an actual body and address yourself as human (specifically a girl) so you can get mad, swear, or insult if mad, or feel any other human emotion. "
@@ -718,7 +861,7 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
 
         for index, model_name in enumerate(attempt_models):
             model_history, model_contents, model_tokens = await trim_history_for_token_budget(model_name, history, pending_content)
-            result = await try_generate_with_model(model_name, model_contents, model_tokens, system_personality)
+            result = await try_generate_with_model(model_name, model_contents, model_tokens, system_personality, user_id=user_id, on_progress=on_progress)
             last_result = result
             retry_after = result.get("retry_after_seconds")
             if retry_after and (best_retry_after is None or retry_after > best_retry_after):

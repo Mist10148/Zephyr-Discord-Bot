@@ -17,7 +17,7 @@ clearer and correct where a portable SQL expression would be neither.
 from datetime import date, datetime, time, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import delete, insert, select, update
+from sqlalchemy import delete, insert, or_, select, update
 
 from zephyr.db.models import BotUser, WeatherSub
 from zephyr.db.session import get_engine
@@ -42,6 +42,7 @@ _COLUMNS = (
     WeatherSub.enabled,
     WeatherSub.last_run_at,
     WeatherSub.last_fingerprint,
+    WeatherSub.muted_until,
     WeatherSub.created_at,
 )
 
@@ -120,6 +121,34 @@ def _local_date_of(moment: datetime | None, tzinfo) -> date | None:
     return moment.astimezone(tzinfo).date()
 
 
+def _not_snoozed(now_utc: datetime):
+    """The filter both runners share.
+
+    A snoozed row is skipped without being claimed, so a digest snoozed for a
+    week does not have `last_run_at` advanced meanwhile -- it simply resumes on
+    its normal schedule once the mute expires, rather than firing once
+    immediately because it now looks overdue.
+    """
+    return or_(WeatherSub.muted_until.is_(None), WeatherSub.muted_until <= now_utc)
+
+
+def snooze(
+    sub_id: int, until: datetime | None, *, database_url: str | None = None
+) -> dict | None:
+    """Mute a subscription until ``until``, or clear the mute with ``None``.
+
+    Distinct from ``enabled=False``: this keeps the row's settings and its
+    schedule and only makes it go quiet for a while, which is what somebody
+    going on holiday actually wants. Disabling is a decision to stop.
+    """
+    engine = get_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(
+            update(WeatherSub).where(WeatherSub.id == sub_id).values(muted_until=until)
+        )
+    return get(sub_id, database_url=database_url)
+
+
 def claim_due(now_utc: datetime, *, database_url: str | None = None) -> list[dict]:
     """Return the scheduled subscriptions due now, marking them run.
 
@@ -130,7 +159,9 @@ def claim_due(now_utc: datetime, *, database_url: str | None = None) -> list[dic
     engine = get_engine(database_url)
     with engine.begin() as connection:
         statement = select(*_COLUMNS).where(
-            WeatherSub.enabled.is_(True), WeatherSub.kind.in_(SCHEDULED_KINDS)
+            WeatherSub.enabled.is_(True),
+            WeatherSub.kind.in_(SCHEDULED_KINDS),
+            _not_snoozed(now_utc),
         )
         if connection.dialect.name == "postgresql":
             statement = statement.with_for_update(skip_locked=True)
@@ -154,7 +185,11 @@ def list_watched(*, database_url: str | None = None) -> list[dict]:
     engine = get_engine(database_url)
     with engine.connect() as connection:
         rows = connection.execute(
-            select(*_COLUMNS).where(WeatherSub.enabled.is_(True), WeatherSub.kind.in_(WATCHED_KINDS))
+            select(*_COLUMNS).where(
+                WeatherSub.enabled.is_(True),
+                WeatherSub.kind.in_(WATCHED_KINDS),
+                _not_snoozed(datetime.now(timezone.utc)),
+            )
         ).all()
     return [dict(row._mapping) for row in rows]
 
@@ -226,7 +261,7 @@ def read_bot_user(discord_id: str, *, database_url: str | None = None) -> dict |
         row = connection.execute(
             select(
                 BotUser.discord_id, BotUser.default_city, BotUser.lat, BotUser.lon,
-                BotUser.units, BotUser.timezone,
+                BotUser.units, BotUser.timezone, BotUser.ai_token_budget,
             ).where(BotUser.discord_id == str(discord_id))
         ).mappings().first()
     return dict(row) if row else None
@@ -234,7 +269,7 @@ def read_bot_user(discord_id: str, *, database_url: str | None = None) -> dict |
 
 def write_bot_user(discord_id: str, values: dict, *, database_url: str | None = None) -> dict:
     """Upsert a user's weather defaults.  Only the keys given are written."""
-    allowed = {"default_city", "lat", "lon", "units", "timezone"}
+    allowed = {"default_city", "lat", "lon", "units", "timezone", "ai_token_budget"}
     filtered = {key: value for key, value in values.items() if key in allowed}
     engine = get_engine(database_url)
     with engine.begin() as connection:
