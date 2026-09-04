@@ -41,6 +41,17 @@ def new_reference() -> str:
     return f"ZP-{secrets.token_hex(3).upper()}"
 
 
+class Refused(app_commands.CheckFailure):
+    """A check failure whose message is already written for the person.
+
+    A bare ``CheckFailure`` carries no reason, so the branch below can only say
+    "You cannot use that command here." That is fine for a library check and
+    useless for one of ours: "the DJ role is required in this server" tells
+    somebody what to do, and "you cannot use that command here" sends them to
+    ask an administrator why the bot is broken.
+    """
+
+
 def user_facing_message(error: Exception) -> str | None:
     """The sentence to show, or ``None`` when this is a bug rather than a
     misuse.
@@ -79,7 +90,12 @@ def user_facing_message(error: Exception) -> str | None:
         # with the prefix.
         return ""
 
-    # Last, because the three above are all CheckFailures. A bare check that
+    # Before the bare branch, because Refused *is* a CheckFailure and matching
+    # the base first would throw away the sentence it carries.
+    if isinstance(error, Refused):
+        return f"❌ {error}"
+
+    # Last, because the four above are all CheckFailures. A bare check that
     # returned False carries no reason, so this is as specific as it gets.
     if isinstance(error, (app_commands.CheckFailure, commands.CheckFailure)):
         return "You cannot use that command here."

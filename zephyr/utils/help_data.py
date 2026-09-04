@@ -102,7 +102,6 @@ HELP_CATEGORIES = [
             HelpEntry("/summon [channel]", "Summon the bot to a channel"),
             HelpEntry("/leave", "Leave the voice channel and clear the queue"),
             HelpEntry("/disconnect", "Disconnect the bot from voice"),
-            HelpEntry("/247", "Toggle 24/7 mode (no auto-disconnect)"),
         ],
     ),
     HelpCategory(
@@ -135,6 +134,16 @@ HELP_CATEGORIES = [
             HelpEntry("/weather-subs", "List this server's weather subscriptions"),
             HelpEntry("/weather-unsubscribe <id>", "Remove a subscription"),
             HelpEntry("/weather-preview <id>", "Show what a subscription would post right now"),
+        ],
+    ),
+    HelpCategory(
+        key="music_dj",
+        emoji="🎚️",
+        title="Music — DJ controls",
+        commands=[
+            HelpEntry("/dj-only <on|off>", "Restrict the player to DJs (Manage Server)"),
+            HelpEntry("/vote-skip-ratio <percent>", "What fraction of listeners must agree to skip"),
+            HelpEntry("/247", "Toggle 24/7 mode — persists across restarts"),
         ],
     ),
     HelpCategory(
