@@ -463,6 +463,49 @@ class ZephyrBot(commands.Bot):
                 await channel.send(embed=welcome_embed)
                 break
 
+    async def _read_attachments(self, message):
+        """The first image and the first text file on a message.
+
+        Only the *first* attachment was considered before, so a message with a
+        caption file and an image saw whichever came first and silently
+        discarded the other.
+        """
+        image_url, text_content = None, None
+        for attachment in getattr(message, "attachments", None) or []:
+            content_type = attachment.content_type or ""
+            if image_url is None and content_type.startswith("image/"):
+                image_url = attachment.url
+            elif text_content is None and attachment.filename.lower().endswith((".txt", ".md")):
+                try:
+                    text_content = (await attachment.read()).decode("utf-8", errors="replace")
+                except Exception:
+                    log.warning("Could not read attachment %s", attachment.filename, exc_info=True)
+            if image_url and text_content:
+                break
+        return image_url, text_content
+
+    async def _read_referenced_attachments(self, message):
+        """The same, for the message being replied to.
+
+        ``reference.resolved`` is only populated when Discord happened to
+        include it, so the message is fetched when it is not -- once, and only
+        on a reply that carried no attachment of its own.
+        """
+        reference = getattr(message, "reference", None)
+        if reference is None:
+            return None, None
+
+        referenced = reference.resolved
+        if referenced is None or isinstance(referenced, discord.DeletedReferencedMessage):
+            if reference.message_id is None:
+                return None, None
+            try:
+                referenced = await message.channel.fetch_message(reference.message_id)
+            except Exception:
+                # Deleted, or in a channel history the bot cannot read.
+                return None, None
+        return await self._read_attachments(referenced)
+
     async def on_message(self, message):
         if message.author == self.user:
             return
@@ -481,15 +524,18 @@ class ZephyrBot(commands.Bot):
         async with message.channel.typing():
             server_id = message.guild.id if message.guild else None
             user_id = message.author.id
-            image_url, text_content = None, None
-            if message.attachments:
-                attachment = message.attachments[0]
-                if attachment.content_type and attachment.content_type.startswith("image/"):
-                    image_url = attachment.url
-                elif attachment.filename.endswith(".txt"):
-                    text_content = (await attachment.read()).decode("utf-8")
+            image_url, text_content = await self._read_attachments(message)
+            if image_url is None:
+                # The common flow this used to miss entirely: reply to somebody
+                # else's screenshot and ask about it. Only the *replying*
+                # message was inspected, so the image was invisible and the
+                # answer was about nothing.
+                image_url, referenced_text = await self._read_referenced_attachments(message)
+                text_content = text_content or referenced_text
             clean_message = message.content.replace(f"<@!{self.user.id}>", "").replace(f"<@{self.user.id}>", "").strip()
-            final_message = text_content or clean_message
+            # Both, not either: a .txt used to *replace* whatever was typed, so
+            # "summarise this" plus a file lost the instruction.
+            final_message = "\n\n".join(part for part in (clean_message, text_content) if part)
             if not final_message and not image_url:
                 if not (in_dm and image_url):
                     await message.channel.send("Please provide a message when mentioning or replying to me.")
