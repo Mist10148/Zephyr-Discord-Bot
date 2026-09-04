@@ -152,7 +152,7 @@ export function GuildWeatherAlerts() {
     onSuccess: invalidate,
   })
 
-  if (subs.isPending) return <main className="app"><Skeleton lines={6} /></main>
+  if (subs.isPending) return <main className="app"><Skeleton variant="rows" count={5} /></main>
   if (subs.error || !subs.data) {
     return <main className="app">
       <LargeTitleHeader title="Weather alerts" />

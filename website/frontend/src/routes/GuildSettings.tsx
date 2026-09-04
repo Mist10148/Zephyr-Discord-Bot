@@ -58,7 +58,7 @@ export function GuildSettings() {
     },
   })
 
-  if (settings.isPending || !draft) return <main className="app"><Skeleton lines={6} /></main>
+  if (settings.isPending || !draft) return <main className="app"><Skeleton variant="rows" count={6} /></main>
   if (settings.error) return <main className="app"><LargeTitleHeader title="Settings" /><ErrorNote error={settings.error} onRetry={() => settings.refetch()} /><BackLink to={`/g/${guildId}`}>Back to the server</BackLink></main>
 
   const original = draftOf(settings.data!)

@@ -49,7 +49,7 @@ export function GuildOverview() {
     retry: false,
   })
 
-  if (guild.isPending) return <main className="app"><Skeleton lines={6} /></main>
+  if (guild.isPending) return <main className="app"><Skeleton variant="cards" count={2} /><Skeleton variant="rows" count={7} /></main>
   // 403 and 404 arrive with a message from the API envelope, so no per-status
   // branching is needed -- and deliberately no redirect to /login, because 403 is
   // not 401 and being signed in but lacking access is a different situation.

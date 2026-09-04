@@ -207,3 +207,32 @@ describe('display vocabulary', () => {
     expect(placeholder.querySelector('svg')).not.toBeNull()
   })
 })
+
+describe('the wide layout', () => {
+  it('groups the page into the three cells the grid places', async () => {
+    stubPlayer()
+    render()
+    await waitFor(() => expect(screen.getByText('Second')).toBeInTheDocument())
+
+    // The CSS places rather than reorders, so what a spec can hold onto is the
+    // grouping. At <1200px .music-columns is display:contents, so this same DOM
+    // is the phone layout -- which is why the search field has to stay first in
+    // document order rather than being moved into the queue column.
+    const columns = document.querySelector('.music-columns')!
+    const children = [...columns.children]
+    // GlassSurface prepends its own classes, so match on membership rather than
+    // on the first token.
+    const at = (name: string) => children.findIndex(child => child.classList.contains(name))
+    expect(at('music-search')).toBe(0)
+    expect(at('music-col-player')).toBeGreaterThan(0)
+    expect(at('music-col-queue')).toBeGreaterThan(at('music-col-player'))
+
+    // Player and effects left; queue and playlists right.
+    const player = columns.querySelector('.music-col-player')!
+    const queue = columns.querySelector('.music-col-queue')!
+    expect(player.querySelector('.transport')).not.toBeNull()
+    expect(player.querySelector('details.effects')).not.toBeNull()
+    expect(queue.textContent).toContain('Queue')
+    expect(queue.textContent).toContain('Second')
+  })
+})

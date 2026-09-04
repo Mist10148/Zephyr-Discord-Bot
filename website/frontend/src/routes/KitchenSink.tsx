@@ -126,7 +126,19 @@ export function KitchenSink() {
     </ListGroup>
 
     <SectionLabel>Loading</SectionLabel>
+    {/* All four shapes. D7 was marked shipped while one generic shape served
+        every screen, so the layout still jumped when data arrived -- a
+        placeholder whose shape does not match what replaces it is a slower
+        reflow, not a faster one. Each is shown beside the thing it stands in
+        for above. */}
+    <p className="muted small-note">Prose and detail rows</p>
     <Skeleton lines={3} />
+    <p className="muted small-note">A list group</p>
+    <Skeleton variant="rows" count={3} />
+    <p className="muted small-note">A widget grid</p>
+    <Skeleton variant="cards" count={2} />
+    <p className="muted small-note">Now playing</p>
+    <Skeleton variant="now-playing" />
 
     <SectionLabel>Feedback</SectionLabel>
     <div className="stack">

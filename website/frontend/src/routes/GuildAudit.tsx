@@ -58,7 +58,7 @@ export function GuildAudit() {
     getNextPageParam: last => last.next_before ?? undefined,
   })
 
-  if (query.isPending) return <main className="app"><Skeleton lines={6} /></main>
+  if (query.isPending) return <main className="app"><Skeleton variant="rows" count={6} /></main>
   if (query.error) return <main className="app"><LargeTitleHeader title="Audit log" /><ErrorNote error={query.error} onRetry={() => query.refetch()} /><BackLink to={`/g/${guildId}`}>Back to the server</BackLink></main>
 
   const entries = query.data.pages.flatMap(page => page.entries)

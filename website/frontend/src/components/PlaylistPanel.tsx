@@ -130,7 +130,7 @@ export function PlaylistPanel({ guildId }: { guildId: string | undefined }) {
       <h2>Playlists</h2>
       <PressableButton variant="secondary" className="small" onClick={() => setImporting(true)}>Import from Spotify</PressableButton>
     </div>
-    {playlists.isPending && <Skeleton lines={3} />}
+    {playlists.isPending && <Skeleton variant="rows" count={3} />}
     {playlists.error && <ErrorNote error={playlists.error} onRetry={() => playlists.refetch()} />}
     {playlists.data && (playlists.data.playlists.length === 0
       ? <GlassSurface tier="thin"><p className="muted">No playlists yet. Queue something up in Discord and run <code>/save</code>, or import one from Spotify.</p></GlassSurface>

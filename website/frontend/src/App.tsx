@@ -23,6 +23,9 @@ const GuildAudit = lazy(() => import('./routes/GuildAudit').then(m => ({ default
 const WebsiteSettings = lazy(() => import('./routes/WebsiteSettings').then(m => ({ default: m.WebsiteSettings })))
 const Commands = lazy(() => import('./routes/Commands').then(m => ({ default: m.Commands })))
 const NotFound = lazy(() => import('./routes/NotFound').then(m => ({ default: m.NotFound })))
+// Deliberately still the generic shape: this covers every lazy route, so
+// committing to one page's layout would be wrong on all the others. Each
+// route's own isPending branch renders the shape that page is about to show.
 const loading = <main className="app"><Skeleton lines={6} /></main>
 
 export default function App() {
