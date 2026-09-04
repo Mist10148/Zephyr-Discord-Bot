@@ -430,6 +430,52 @@ def build_local_limit_message(model_name, limit_name, retry_after_seconds):
     )
 
 
+def _durable_quota_url() -> str | None:
+    """The Redis URL to keep quota in, or None to stay in memory.
+
+    Read at call time rather than bound at import: `tests/test_web_imports.py`
+    runs a subprocess asserting that importing this module opens no client, and
+    `conftest.py`'s inert_env patches `zephyr.config.REDIS_URL` to None -- so a
+    module-level constant would both break that probe and freeze the answer.
+    """
+    from zephyr import config
+
+    return config.REDIS_URL or None
+
+
+def _quota_window():
+    """The fixed-window keys for right now.
+
+    The daily bucket keys on the **Pacific** date, not UTC. Google's free-tier
+    daily counters reset on Pacific midnight and `build_local_limit_message`
+    computes the rpd retry from `get_next_pacific_midnight`, so keying on the
+    UTC date would make the reported retry time wrong by up to eight hours.
+    """
+    now = utc_now()
+    return int(now.timestamp() // 60), get_pacific_today().isoformat()
+
+
+def utc_now():
+    """The clock, read through one function.
+
+    Every quota decision goes through here so a test can inject time with a
+    monkeypatch instead of the suite taking on freezegun -- which
+    tests/conftest.py's stance on fakeredis says is the right trade for a
+    codebase this size.
+    """
+    return datetime.now(timezone.utc)
+
+
+def reset_quota_state() -> None:
+    """Forget every counter. For tests, which need a clean slate per case
+    because all of this is module-level state that outlives one test."""
+    model_request_windows.clear()
+    model_token_windows.clear()
+    model_daily_requests.clear()
+    model_cooldowns.clear()
+    model_usage_totals.clear()
+
+
 def prune_model_usage(model_name, now_utc):
     request_window = model_request_windows[model_name]
     while request_window and (now_utc - request_window[0]).total_seconds() >= 60:
@@ -451,8 +497,19 @@ async def reserve_local_quota(model_name, input_tokens):
     limits = MODEL_LIMITS.get(model_name)
     if not limits:
         return True, None
+
+    url = _durable_quota_url()
+    if url:
+        try:
+            return await _reserve_durable(model_name, input_tokens, limits, url)
+        except Exception:
+            # A Redis blip must not stop the bot answering. Falling through to
+            # the in-memory counters is less accurate, not less safe: the
+            # remote limits still apply and a 429 is still handled.
+            log.warning("Durable quota unavailable, falling back to in-memory counters", exc_info=True)
+
     async with quota_lock:
-        now_utc = datetime.now(timezone.utc)
+        now_utc = utc_now()
         prune_model_usage(model_name, now_utc)
         cooldown_until = model_cooldowns.get(model_name)
         if cooldown_until and cooldown_until > now_utc:
@@ -479,27 +536,83 @@ async def reserve_local_quota(model_name, input_tokens):
     return True, None
 
 
+async def _reserve_durable(model_name, input_tokens, limits, url):
+    """The Redis-backed claim. Same return contract as the in-memory version."""
+    from zephyr.services import quota
+
+    minute, day = _quota_window()
+    allowed, limit_name, retry_after = await asyncio.to_thread(
+        quota.claim, model_name,
+        minute=minute, day=day, tokens=int(input_tokens or 0), limits=limits, url=url,
+    )
+    if allowed:
+        return True, None
+    if limit_name == "rpd":
+        # Calendar arithmetic, not a Redis TTL -- see quota.claim.
+        retry_after = int((get_next_pacific_midnight().astimezone(timezone.utc) - utc_now()).total_seconds())
+    return False, build_local_limit_message(model_name, limit_name, retry_after)
+
+
 async def store_model_cooldown(model_name, retry_after_seconds):
     if not retry_after_seconds:
         return
+    url = _durable_quota_url()
+    if url:
+        try:
+            from zephyr.services import quota
+
+            await asyncio.to_thread(quota.set_cooldown, model_name, int(retry_after_seconds), url=url)
+            return
+        except Exception:
+            log.warning("Could not store a durable cooldown", exc_info=True)
     async with quota_lock:
-        model_cooldowns[model_name] = datetime.now(timezone.utc) + timedelta(seconds=retry_after_seconds)
+        model_cooldowns[model_name] = utc_now() + timedelta(seconds=retry_after_seconds)
 
 
 async def record_successful_usage(model_name, usage_metadata):
     if usage_metadata is None:
         return
+    counted = {
+        "prompt_tokens": extract_usage_value(usage_metadata, "prompt_token_count"),
+        "output_tokens": extract_usage_value(usage_metadata, "candidates_token_count"),
+        "total_tokens": extract_usage_value(usage_metadata, "total_token_count"),
+        "successful_requests": 1,
+    }
+    url = _durable_quota_url()
+    if url:
+        try:
+            from zephyr.services import quota
+
+            await asyncio.to_thread(quota.add_totals, model_name, counted, url=url)
+            return
+        except Exception:
+            log.warning("Could not record durable usage totals", exc_info=True)
     async with quota_lock:
         totals = model_usage_totals[model_name]
-        totals["prompt_tokens"] += extract_usage_value(usage_metadata, "prompt_token_count")
-        totals["output_tokens"] += extract_usage_value(usage_metadata, "candidates_token_count")
-        totals["total_tokens"] += extract_usage_value(usage_metadata, "total_token_count")
-        totals["successful_requests"] += 1
+        for field, amount in counted.items():
+            totals[field] += amount
 
 
 async def get_model_usage_snapshot(model_name):
+    url = _durable_quota_url()
+    if url:
+        try:
+            from zephyr.services import quota
+
+            minute, day = _quota_window()
+            durable = await asyncio.to_thread(quota.snapshot, model_name, minute=minute, day=day, url=url)
+            remaining = durable.pop("cooldown_seconds", 0)
+            # The in-memory shape reports an absolute datetime, and /token and
+            # the dashboard both render it -- so convert rather than changing
+            # the contract for one of the two stores.
+            durable["cooldown_until"] = (
+                utc_now() + timedelta(seconds=remaining) if remaining > 0 else None
+            )
+            return durable
+        except Exception:
+            log.warning("Could not read the durable usage snapshot", exc_info=True)
     async with quota_lock:
-        now_utc = datetime.now(timezone.utc)
+        now_utc = utc_now()
         prune_model_usage(model_name, now_utc)
         return {
             "rpm": len(model_request_windows[model_name]),
