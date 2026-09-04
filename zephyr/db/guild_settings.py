@@ -25,6 +25,8 @@ WRITABLE_COLUMNS = (
     "dj_role_id",
     "music_channel_ids",
     "tts_language",
+    "ai_channel_mode",
+    "ai_channel_ids",
 )
 
 _COLUMNS = (
@@ -37,6 +39,8 @@ _COLUMNS = (
     Guild.music_channel_ids,
     Guild.enabled_cogs,
     Guild.tts_language,
+    Guild.ai_channel_mode,
+    Guild.ai_channel_ids,
 )
 
 
@@ -106,6 +110,34 @@ def read_tts_languages(*, database_url: str | None = None) -> dict[str, str]:
             select(Guild.id, Guild.tts_language).where(Guild.tts_language.is_not(None))
         ).mappings().all()
     return {str(row["id"]): str(row["tts_language"]) for row in rows}
+
+
+def read_ai_channel_policies(*, database_url: str | None = None) -> dict[str, tuple[str, set[str]]]:
+    """Where the AI may answer, per guild: ``{guild_id: (mode, channel_ids)}``.
+
+    ``mode`` is ``"allow"`` or ``"deny"``; anything else -- including NULL --
+    means everywhere the bot can read, and such guilds are absent from the map
+    entirely so the caller's ``.get`` is the whole "no policy" case.
+
+    Cached and bulk-read for the same reason as ``read_prefixes``: this is
+    consulted on every message that mentions the bot.
+    """
+    engine = get_engine(database_url)
+    with engine.connect() as connection:
+        rows = connection.execute(
+            select(Guild.id, Guild.ai_channel_mode, Guild.ai_channel_ids)
+            .where(Guild.ai_channel_mode.in_(("allow", "deny")))
+        ).all()
+    policies = {}
+    for row in rows:
+        ids = {str(value) for value in (row.ai_channel_ids or [])}
+        # An allowlist with nothing in it would silence the AI everywhere, which
+        # is never what somebody meant to configure -- it is what a
+        # half-finished edit looks like. Treated as no policy.
+        if row.ai_channel_mode == "allow" and not ids:
+            continue
+        policies[str(row.id)] = (str(row.ai_channel_mode), ids)
+    return policies
 
 
 def read_prefixes(*, database_url: str | None = None) -> dict[str, str]:

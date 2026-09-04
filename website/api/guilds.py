@@ -37,6 +37,10 @@ DEFAULT_SETTINGS = {
     "music_channel_ids": [],
     # gTTS language code for /say. "en" matches what the cog used to hardcode.
     "tts_language": "en",
+    # Where the AI answers a mention. None means everywhere it can read, which
+    # is the historical behaviour and stays the default.
+    "ai_channel_mode": None,
+    "ai_channel_ids": [],
 }
 
 
@@ -151,6 +155,16 @@ def _clean_tts_language(value):
     return text
 
 
+def _clean_ai_channel_mode(value):
+    """None, "allow" or "deny". None means everywhere the bot can read."""
+    if value in (None, "", "all"):
+        return None
+    text = str(value).strip().lower()
+    if text not in {"allow", "deny"}:
+        raise ValueError('ai_channel_mode must be "allow", "deny" or null.')
+    return text
+
+
 def _clean_snowflake_list(value):
     if value is None:
         return []
@@ -167,6 +181,8 @@ CLEANERS = {
     "timezone": _clean_timezone,
     "default_volume": _clean_volume,
     "tts_language": _clean_tts_language,
+    "ai_channel_mode": _clean_ai_channel_mode,
+    "ai_channel_ids": _clean_snowflake_list,
     "dj_role_id": _clean_snowflake,
     "music_channel_ids": _clean_snowflake_list,
 }

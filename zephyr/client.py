@@ -17,7 +17,7 @@ from zephyr.config import COMMAND_PREFIX, ENABLED_COGS, REDIS_URL
 from zephyr.core.opus_loader import load_opus
 from zephyr.core.errors import report as report_command_error
 from zephyr.core.ffmpeg import FFMPEG_PATH
-from zephyr.db.guild_settings import read_prefixes
+from zephyr.db.guild_settings import read_ai_channel_policies, read_prefixes
 from zephyr.services import bridge
 from zephyr.services.bridge import write_guild_snapshot
 from zephyr.services.gemini import generate_gemini_response, send_response
@@ -79,6 +79,9 @@ class ZephyrBot(commands.Bot):
         # query there would put the database on the path of *reading a chat
         # message*.
         self._prefixes: dict[str, str] = {}
+        # guild_id -> (mode, channel_ids). Absent means the AI answers wherever
+        # it can read, which is the historical behaviour.
+        self._ai_channel_policies: dict[str, tuple[str, set[str]]] = {}
 
     def _resolve_prefix(self, bot, message):
         """The prefix for this message's guild, or the deployment default.
@@ -98,6 +101,38 @@ class ZephyrBot(commands.Bot):
             # A stale cache answers with the previous prefix; an exception here
             # would take the loop down and stop it refreshing at all.
             log.exception("Could not read guild prefixes")
+        try:
+            self._ai_channel_policies = await asyncio.to_thread(read_ai_channel_policies)
+        except Exception:
+            log.exception("Could not read AI channel policies")
+
+    def ai_may_answer(self, message) -> bool:
+        """Whether the AI is allowed to answer in this channel.
+
+        The mention/reply handler answered anywhere the bot could read, so a
+        server that wanted Zephyr for music had no way to stop people
+        conversing with it in every channel. A guild with no policy still
+        answers everywhere -- this adds a restriction, it does not impose one.
+
+        Checked against the *parent* for a thread, because a policy naming
+        #bot-spam should cover threads started in it rather than being silently
+        bypassed by anyone who opens one.
+        """
+        if message.guild is None:
+            return True
+        policy = self._ai_channel_policies.get(str(message.guild.id))
+        if policy is None:
+            return True
+        mode, channel_ids = policy
+
+        candidates = {str(message.channel.id)}
+        parent_id = getattr(message.channel, "parent_id", None)
+        if parent_id is not None:
+            candidates.add(str(parent_id))
+
+        if mode == "allow":
+            return bool(candidates & channel_ids)
+        return not (candidates & channel_ids)
 
     @tasks.loop(minutes=10)
     async def _prefix_loop(self):
@@ -434,6 +469,12 @@ class ZephyrBot(commands.Bot):
         is_reply_to_bot = message.reference and message.reference.resolved and message.reference.resolved.author == self.user
         in_dm = isinstance(message.channel, discord.DMChannel)
         if not (self.user.mentioned_in(message) or is_reply_to_bot or in_dm):
+            await self.process_commands(message)
+            return
+        if not self.ai_may_answer(message):
+            # Silently, not with a refusal: a channel configured to keep the AI
+            # out should be quiet, and "I am not allowed to talk here" is still
+            # the bot talking there.
             await self.process_commands(message)
             return
 
