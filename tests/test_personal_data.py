@@ -6,11 +6,14 @@ negative: an export must not silently omit a store, and a deletion must not take
 somebody else's data with it.
 """
 
+from datetime import datetime, timezone
+
 import pytest
 from sqlalchemy import select
 
 from zephyr.db import ai as ai_db
 from zephyr.db import audit, personal_data, playlists
+from zephyr.db import reminders as reminders_repo
 from zephyr.db.models import AIMessage, AuditLog, Playlist, PlaylistTrack
 from zephyr.db.session import get_engine
 from zephyr.db.weather_subs import write_bot_user
@@ -33,6 +36,16 @@ def seeded(db_url):
 
     ai_db.append_exchange("10", "1", "my question", "the answer", author_id=ME, database_url=db_url)
     ai_db.append_exchange("10", "1", "their question", "their answer", author_id=SOMEBODY_ELSE, database_url=db_url)
+
+    for user_id, message in ((ME, "my reminder"), (SOMEBODY_ELSE, "their reminder")):
+        reminders_repo.create(
+            {
+                "user_id": user_id, "guild_id": "1", "channel_id": "5", "message": message,
+                "due_at": datetime(2026, 12, 1, tzinfo=timezone.utc), "tz": "UTC",
+                "repeat_every_seconds": None, "attempts": 0, "source": "discord",
+            },
+            database_url=db_url,
+        )
     return db_url
 
 
@@ -47,12 +60,14 @@ class TestExport:
         assert payload["playlists"][0]["tracks"][0]["title"] == "A"
         assert [entry["action"] for entry in payload["audit_entries"]] == ["settings.update"]
         assert any("my question" in message["content"] for message in payload["ai_messages"])
+        assert [row["message"] for row in payload["reminders"]] == ["my reminder"]
 
     def test_it_contains_nobody_elses_data(self, seeded):
         payload = personal_data.export(ME, database_url=seeded)
         serialised = str(payload)
         assert SOMEBODY_ELSE not in serialised
         assert "their question" not in serialised
+        assert "their reminder" not in serialised
         assert "Cebu" not in serialised
 
     def test_it_states_what_it_cannot_include(self, seeded):
@@ -83,6 +98,7 @@ class TestDelete:
         assert removed["bot_preferences"] == 1
         assert removed["playlists"] == 1
         assert removed["ai_messages"] >= 1
+        assert removed["reminders"] == 1
         after = personal_data.export(ME, database_url=seeded)
         assert after["bot_preferences"] is None
         assert after["playlists"] == []
@@ -95,6 +111,13 @@ class TestDelete:
         assert theirs["bot_preferences"]["default_city"] == "Cebu"
         assert [item["name"] for item in theirs["playlists"]] == ["Theirs"]
         assert any("their question" in message["content"] for message in theirs["ai_messages"])
+
+    def test_somebody_elses_reminder_survives(self, seeded):
+        personal_data.delete(ME, database_url=seeded)
+
+        assert [row["message"] for row in reminders_repo.list_pending(SOMEBODY_ELSE, database_url=seeded)] == [
+            "their reminder"
+        ]
 
     def test_playlist_tracks_go_too(self, seeded):
         """Deleted explicitly, not by cascade: build_engine sets no
@@ -159,6 +182,7 @@ class TestTheRetentionTable:
         assert set(personal_data.RETENTION) >= {
             "Dashboard sign-ins", "Weather defaults", "Saved playlists",
             "AI conversations", "Server audit log", "AI usage counters", "Sessions",
+            "Reminders",
         }
 
     def test_the_session_caveat_is_honest_about_the_limitation(self):
