@@ -36,15 +36,16 @@ running code, and every defect in Phase 13 was confirmed in the source rather th
 | **9** | **Feedback layer and display vocabulary** | **Shipped** (with **A3**) |
 | **10** | **Layout, density and loading states** | **Shipped** |
 | **11** | **Navigation and information architecture** | **Shipped** (with **F4**) |
-| **12** | **Public site layer** | **Not started** |
+| **12** | **Public site layer** | **Shipped** |
 | **13** | **Bot correctness and observability** | **Shipped** |
 | **14** | **Bot functionality gaps** | **Shipped** |
 | **15** | **New bot features** | **15.2 shipped**, rest in progress |
 | **16** | **Discord-side presentation** | **Not started** |
 | **17** | **Code quality and infrastructure** | **17.3 shipped**, rest not started |
 
-**Phases 8 to 11, 13 and 14 are shipped, plus 15.2.** Next is **Phase 12** (the public site),
-which 15.2 has now unblocked.
+**Phases 8 to 14 are shipped**, apart from Phase 15's remaining seven features. Next are those,
+then Phase 16 (the embed factory, deliberately after 15 so it migrates ~120 sites once) and
+Phase 17.
 
 One note carried out of Phase 8 for the phases that follow: the frontend suite now has a
 jsdom baseline and a route harness (`test/setup.ts`, `test/helpers.tsx`), so a route-level spec
@@ -356,7 +357,7 @@ Everything above assumes a visitor already knows what Zephyr is. This phase is w
 the deployment a website rather than a dashboard behind a URL. **12.1 and 12.2 are the only
 items here that block anything real** — 12.2 blocks Discord app verification.
 
-### 12.1 — A visitor cannot add the bot · S · ⚠️
+### 12.1 — A visitor cannot add the bot · S · ⚠️ · **DONE**
 
 `invite_url` is returned only by `GET /api/v1/me` and rendered only in
 [`routes/Guilds.tsx`](../website/frontend/src/routes/Guilds.tsx) — behind auth. Someone
@@ -368,7 +369,7 @@ derived from `DISCORD_CLIENT_ID` + `DISCORD_INVITE_PERMISSIONS` exactly as
 [`website/api/me.py`](../website/api/me.py) does, and make "Add Zephyr to Discord" the
 primary hero button.
 
-### 12.2 — No Privacy Policy or Terms · M · ⚠️
+### 12.2 — No Privacy Policy or Terms · M · ⚠️ · **DONE**
 
 Neither exists anywhere in the repo. Discord requires both URLs for app verification, and
 the service genuinely processes personal data: Discord user ids, OAuth tokens in Redis,
@@ -379,7 +380,7 @@ self-service, at minimum a stated contact route. The AI memory purge already imp
 deletion for the largest data category, so describe it. Link both from the footer (12.4)
 and register them on the Discord application.
 
-### 12.3 — No link previews, and one title for every route · S · ✅
+### 12.3 — No link previews, and one title for every route · S · ✅ · **DONE**
 
 [`website/frontend/index.html`](../website/frontend/index.html) has no Open Graph or Twitter
 card tags, so a link to the site pasted **into Discord** renders as a bare URL. For a
@@ -393,12 +394,12 @@ Separately, every route shares one static `<title>` ("Zephyr Weather"), so brows
 and tabs cannot tell `/commands` from `/weather`. Add per-route title, description and
 canonical.
 
-### 12.4 — No footer · S · ✅
+### 12.4 — No footer · S · ✅ · **DONE**
 
 No support-server link, no repository link, no legal links, no copyright. This is where most
 of the "is this a real product" signal lives, and where 12.2's pages get linked from.
 
-### 12.5 — Crawlers and soft 404s · M · ✅
+### 12.5 — Crawlers and soft 404s · M · ✅ · **DONE**
 
 No `robots.txt` or `sitemap.xml` in
 [`website/frontend/public/`](../website/frontend/public/) — add both, disallowing `/g/*`,
@@ -410,7 +411,7 @@ Separately, [`website/spa.py`](../website/spa.py) serves `index.html` with **HTT
 every unknown path, so `/nonsense` is an indexable soft 404 that renders `NotFound`. Return
 404 for paths outside the known route table.
 
-### 12.6 — Public endpoints are unguarded · M · ⚠️
+### 12.6 — Public endpoints are unguarded · M · ⚠️ · **DONE**
 
 `rate_limit()` in [`website/api/guard.py`](../website/api/guard.py) is used by
 [`website/api/player.py`](../website/api/player.py) only. On a public origin `/weather` and
@@ -421,7 +422,7 @@ every unknown path, so `/nonsense` is an indexable soft 404 that renders `NotFou
 `TRUST_PROXY` and `ProxyFix` are already wired, so the client address is trustworthy behind
 Render.
 
-### 12.7 — Operational blind spots · M · ⚠️
+### 12.7 — Operational blind spots · M · ⚠️ · **DONE**
 
 No error tracking (a production 500 is invisible), no analytics (no way to know whether
 anyone visits), no uptime monitoring. Render's free web tier also spins down, so a cold
