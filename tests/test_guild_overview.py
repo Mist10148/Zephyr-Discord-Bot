@@ -7,6 +7,7 @@ import pytest
 
 from website.session import create_session
 from zephyr.services.bridge import GUILDS_KEY, GUILDS_UPDATED_KEY
+from zephyr.config import COMMAND_PREFIX
 
 MANAGED = {"id": "1", "name": "Managed Guild", "icon": "icon1", "owner": True}
 
@@ -73,7 +74,12 @@ class TestDefaults:
         _sign_in(app, client)
         body = client.get("/api/v1/guilds/1").get_json()
         assert body["defaults_applied"] is True
-        assert body["prefix"] == "/"
+        # Read from config rather than hardcoded, so the dashboard and the bot
+        # cannot disagree about what "unconfigured" means. It was "/", which is
+        # the value the bot stopped using because it collided with the slash
+        # surface.
+        assert body["prefix"] == COMMAND_PREFIX
+        assert COMMAND_PREFIX != "/"
         assert body["locale"] == "en"
         assert body["timezone"] == "UTC"
         assert body["default_volume"] == 50
@@ -138,7 +144,7 @@ class TestStoredSettings:
     def test_a_row_for_another_guild_is_not_used(self, app, client):
         _sign_in(app, client)
         _seed_settings(app, id="999", prefix="!")
-        assert client.get("/api/v1/guilds/1").get_json()["prefix"] == "/"
+        assert client.get("/api/v1/guilds/1").get_json()["prefix"] == COMMAND_PREFIX
 
 
 class TestBotPresence:

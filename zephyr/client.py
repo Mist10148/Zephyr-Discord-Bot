@@ -17,6 +17,7 @@ from zephyr.config import COMMAND_PREFIX, ENABLED_COGS, REDIS_URL
 from zephyr.core.opus_loader import load_opus
 from zephyr.core.errors import report as report_command_error
 from zephyr.core.ffmpeg import FFMPEG_PATH
+from zephyr.db.guild_settings import read_prefixes
 from zephyr.services import bridge
 from zephyr.services.bridge import write_guild_snapshot
 from zephyr.services.gemini import generate_gemini_response, send_response
@@ -63,7 +64,7 @@ class ZephyrBot(commands.Bot):
             # Not when_mentioned_or: a mention is already the AI's trigger in
             # on_message, so accepting it as a prefix too would make
             # "@Zephyr weather" both ask the AI and run the weather command.
-            command_prefix=COMMAND_PREFIX,
+            command_prefix=self._resolve_prefix,
             intents=intents,
             # None, not DefaultHelpCommand: zephyr/cogs/help.py provides the
             # real help surface, and registering both meant two implementations
@@ -73,6 +74,38 @@ class ZephyrBot(commands.Bot):
         self._synced_count = 0
         self._started_at = time.time()
         self._command_stream = None
+        # guild_id (str) -> prefix. Absent means COMMAND_PREFIX. Cached because
+        # command_prefix is consulted for every message the bot can see, so a
+        # query there would put the database on the path of *reading a chat
+        # message*.
+        self._prefixes: dict[str, str] = {}
+
+    def _resolve_prefix(self, bot, message):
+        """The prefix for this message's guild, or the deployment default.
+
+        Synchronous by necessity -- discord.py calls this per message and will
+        await a coroutine, but doing IO here would be a query per message. The
+        cache is refreshed on a loop and updated directly by a /prefix change.
+        """
+        if message.guild is None:
+            return COMMAND_PREFIX
+        return self._prefixes.get(str(message.guild.id), COMMAND_PREFIX)
+
+    async def reload_prefixes(self) -> None:
+        try:
+            self._prefixes = await asyncio.to_thread(read_prefixes)
+        except Exception:
+            # A stale cache answers with the previous prefix; an exception here
+            # would take the loop down and stop it refreshing at all.
+            log.exception("Could not read guild prefixes")
+
+    @tasks.loop(minutes=10)
+    async def _prefix_loop(self):
+        await self.reload_prefixes()
+
+    @_prefix_loop.before_loop
+    async def _before_prefix_loop(self):
+        await self.wait_until_ready()
 
     async def setup_hook(self):
         # Every slash command's errors, in one place. Assigned rather than
@@ -100,12 +133,17 @@ class ZephyrBot(commands.Bot):
         except Exception as e:
             log.exception("Failed to sync the command tree")
 
+        # Not gated on REDIS_URL, unlike the two below: the prefix is a
+        # database read, and the database is always configured.
+        self._prefix_loop.start()
+
         if REDIS_URL:
             self._presence_loop.start()
             self._command_loop.start()
 
     async def close(self):
         """Dispose persistent storage before Discord tears down the loop."""
+        self._prefix_loop.cancel()
         self._presence_loop.cancel()
         self._command_loop.cancel()
         self._close_command_stream()

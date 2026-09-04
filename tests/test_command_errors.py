@@ -204,15 +204,27 @@ class TestBotConstruction:
     def test_the_prefix_no_longer_collides_with_slash_commands(self, bot):
         """It was "/", so every message beginning with a slash was also parsed
         as a prefix command: a mistyped "/pley" raised CommandNotFound on a code
-        path with no handler."""
-        assert bot.command_prefix != "/"
-        assert bot.command_prefix == "z!"
+        path with no handler.
+
+        A callable now, because the prefix is per guild -- so the assertion is
+        on what it resolves to rather than on the value.
+        """
+        from zephyr.config import COMMAND_PREFIX
+
+        message = MagicMock()
+        message.guild = None
+        assert bot._resolve_prefix(bot, message) == COMMAND_PREFIX
+        assert COMMAND_PREFIX != "/"
 
     def test_a_mention_is_not_a_prefix(self, bot):
-        """A mention is already the AI's trigger in on_message. Accepting it
-        here too would make "@Zephyr weather" both ask the AI and run the
-        weather command."""
-        assert not callable(bot.command_prefix)
+        """A mention is already the AI's trigger in on_message. Accepting it as
+        a prefix too would make a mention both ask the AI and run a command --
+        which is what when_mentioned_or would have done."""
+        message = MagicMock()
+        message.guild = None
+        resolved = bot._resolve_prefix(bot, message)
+        assert isinstance(resolved, str)
+        assert not resolved.startswith("<@")
 
     def test_there_is_one_help_implementation(self, bot):
         # DefaultHelpCommand was registered alongside zephyr/cogs/help.py.
@@ -232,3 +244,64 @@ class TestBotConstruction:
         # on_message has to receive messages at all, in guilds and in DMs.
         assert bot.intents.guild_messages is True
         assert bot.intents.dm_messages is True
+
+
+class TestThePerGuildPrefix:
+    """14.1. The resolver is called for every message the bot can see, so it is
+    synchronous and reads a cache -- doing IO there would put the database on
+    the path of reading a chat message."""
+
+    @pytest.fixture
+    def bot(self):
+        from zephyr.client import ZephyrBot
+
+        return ZephyrBot()
+
+    def _message(self, guild_id=None):
+        message = MagicMock()
+        if guild_id is None:
+            message.guild = None
+        else:
+            message.guild = MagicMock()
+            message.guild.id = guild_id
+        return message
+
+    def test_a_configured_guild_gets_its_own_prefix(self, bot):
+        bot._prefixes = {"7": "!"}
+        assert bot._resolve_prefix(bot, self._message(7)) == "!"
+
+    def test_an_unconfigured_guild_gets_the_default(self, bot):
+        from zephyr.config import COMMAND_PREFIX
+
+        bot._prefixes = {"7": "!"}
+        assert bot._resolve_prefix(bot, self._message(8)) == COMMAND_PREFIX
+
+    def test_a_dm_gets_the_default(self, bot):
+        from zephyr.config import COMMAND_PREFIX
+
+        assert bot._resolve_prefix(bot, self._message(None)) == COMMAND_PREFIX
+
+    def test_two_guilds_hold_two_prefixes(self, bot):
+        bot._prefixes = {"7": "!", "8": "?"}
+        assert bot._resolve_prefix(bot, self._message(7)) == "!"
+        assert bot._resolve_prefix(bot, self._message(8)) == "?"
+
+    @pytest.mark.asyncio
+    async def test_a_failed_refresh_keeps_the_previous_cache(self, bot, monkeypatch, caplog):
+        """An exception in the loop body would stop it refreshing at all."""
+        bot._prefixes = {"7": "!"}
+        monkeypatch.setattr(
+            "zephyr.client.read_prefixes", MagicMock(side_effect=RuntimeError("database is down"))
+        )
+        with caplog.at_level("ERROR", logger="zephyr.client"):
+            await bot.reload_prefixes()
+
+        assert bot._resolve_prefix(bot, self._message(7)) == "!"
+        assert "Could not read guild prefixes" in caplog.text
+
+    def test_the_repo_omits_guilds_using_the_default(self, db_url):
+        from zephyr.db.guild_settings import read_prefixes, write_guild_settings
+
+        write_guild_settings("7", {"prefix": "!"}, database_url=db_url)
+        write_guild_settings("8", {"locale": "en"}, database_url=db_url)
+        assert read_prefixes(database_url=db_url) == {"7": "!"}

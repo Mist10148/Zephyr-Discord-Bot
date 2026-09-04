@@ -108,6 +108,22 @@ def read_tts_languages(*, database_url: str | None = None) -> dict[str, str]:
     return {str(row["id"]): str(row["tts_language"]) for row in rows}
 
 
+def read_prefixes(*, database_url: str | None = None) -> dict[str, str]:
+    """Every configured command prefix, keyed by guild id.
+
+    Same shape and the same reason as ``read_dj_roles``: ``command_prefix`` is
+    consulted for **every message the bot can see**, so it has to be answered
+    from a cache. Guilds using the default are absent rather than
+    present-and-default, so a caller's ``.get(id, default)`` is the fallback.
+    """
+    engine = get_engine(database_url)
+    with engine.connect() as connection:
+        rows = connection.execute(
+            select(Guild.id, Guild.prefix).where(Guild.prefix.is_not(None))
+        ).all()
+    return {str(row.id): str(row.prefix) for row in rows}
+
+
 def read_dj_roles(*, database_url: str | None = None) -> dict[str, str]:
     """Every configured DJ role, keyed by guild id.
 

@@ -1460,6 +1460,16 @@ class MusicCog(commands.Cog):
 
     async def _bridge_reload_settings(self, guild, actor_id, args):
         await self.reload_dj_roles()
+        # The prefix and the TTS language are cached on the bot and the TTS cog
+        # respectively, both on slow loops. Refreshing them here means a
+        # dashboard save takes effect immediately rather than up to ten minutes
+        # later, which would read as the save not having worked.
+        reloader = getattr(self.bot, 'reload_prefixes', None)
+        if reloader is not None:
+            await reloader()
+        tts_cog = self.bot.get_cog('TTSCog')
+        if tts_cog is not None:
+            await tts_cog.reload_languages()
         return {'reloaded': True}
 
     def _require_state(self, guild_id) -> VoiceState:

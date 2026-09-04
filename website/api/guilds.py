@@ -10,6 +10,7 @@ from flask import current_app, g, jsonify, request
 from website import discord_api
 from website.api import api, error
 from website.api.guard import guild_scoped
+from zephyr.config import COMMAND_PREFIX
 from zephyr.db import audit
 from zephyr.db.guild_settings import read_guild_settings, write_guild_settings
 from zephyr.services import bridge
@@ -24,7 +25,11 @@ AUDIT_SOURCES = {"web", "discord"}
 # Applied when a guild has no row yet, which is the normal state until somebody
 # saves settings.  Reported with defaults_applied so the UI can say so.
 DEFAULT_SETTINGS = {
-    "prefix": "/",
+    # Was "/", which is the value the bot stopped using precisely because every
+    # message beginning with a slash was then also parsed as a prefix command.
+    # Read from config so the dashboard and the bot cannot disagree about what
+    # "unconfigured" means.
+    "prefix": COMMAND_PREFIX,
     "locale": "en",
     "timezone": "UTC",
     "default_volume": 50,
