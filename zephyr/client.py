@@ -20,6 +20,7 @@ from zephyr.core.ffmpeg import FFMPEG_PATH
 from zephyr.core.streaming import StreamingReply
 from zephyr.db.guild_settings import read_ai_channel_policies, read_prefixes
 from zephyr.services import bridge
+from zephyr.utils import embeds
 from zephyr.services.bridge import write_guild_snapshot
 from zephyr.services.gemini import generate_gemini_response, send_response
 from zephyr.services.storage import storage
@@ -462,6 +463,13 @@ class ZephyrBot(commands.AutoShardedBot):
             log.exception("Failed to publish the guild snapshot")
 
     async def on_ready(self):
+        # Here rather than in setup_hook: the bot's own avatar URL does not
+        # exist until the gateway hands the user object over, and every embed
+        # the factory builds carries it in the footer.
+        embeds.configure(
+            name=self.user.name if self.user else None,
+            icon_url=self.user.display_avatar.url if self.user else None,
+        )
         await type_print(f"{self.user} has connected to Discord!")
         await type_print(f"🔹 Synced {self._synced_count} slash command(s)")
         await type_print(f"🔹 Total prefix commands: {len(self.commands)}")
