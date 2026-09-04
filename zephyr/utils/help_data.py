@@ -191,6 +191,19 @@ HELP_CATEGORIES = [
         ],
     ),
     HelpCategory(
+        key="tags",
+        emoji="🏷️",
+        title="Tags",
+        commands=[
+            HelpEntry("/tag <name>", "Show a tag"),
+            HelpEntry("/tag-create <name> <content>", "Create a tag"),
+            HelpEntry("/tag-edit <name> <content>", "Change what a tag says"),
+            HelpEntry("/tag-delete <name>", "Delete a tag"),
+            HelpEntry("/tag-list", "Every tag in this server"),
+            HelpEntry("/tag-info <name>", "Who made a tag, and how often it is used"),
+        ],
+    ),
+    HelpCategory(
         key="activity",
         emoji="📈",
         title="Activity & Levels",

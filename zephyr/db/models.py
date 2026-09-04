@@ -611,3 +611,37 @@ class ActivityDailyUser(Base):
     day: Mapped[str] = mapped_column(String, primary_key=True)
     user_id: Mapped[str] = mapped_column(String, primary_key=True)
     messages: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class Tag(Base):
+    """One custom response, per guild.
+
+    ``UniqueConstraint(guild_id, name)`` is what makes ``/tag-create`` safe
+    without a read-then-write: two people creating the same tag at once both
+    read "no such tag", and without the constraint the second insert would
+    silently shadow the first -- with the lookup returning whichever row the
+    query planner reached first.
+
+    ``name`` is stored already normalised (lowercased and trimmed), so the
+    constraint means what a person means by "the same tag". Storing the raw text
+    and comparing case-insensitively would make ``Rules`` and ``rules`` two rows
+    that both answer to ``/tag rules``.
+    """
+
+    __tablename__ = "tags"
+    __table_args__ = (
+        UniqueConstraint("guild_id", "name", name="uq_tags_guild_id_name"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    guild_id: Mapped[str] = mapped_column(String, nullable=False)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[str] = mapped_column(String, nullable=False)
+    uses: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
