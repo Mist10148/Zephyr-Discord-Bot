@@ -19,6 +19,7 @@ somebody can check it is complete:
 | `ai_messages` | `author_id` | Their half of a conversation. |
 | `ai_conversations` | -- | Keyed on the *channel*, so shared. Never deleted for one person. |
 | `reminders` | `user_id` | Pending and delivered reminders. |
+| `activity_totals` / `activity_daily_users` | `user_id` | Message counts and XP per server. |
 | `mod_cases` | `target_id` | Moderation actions taken against them. Exported without the moderator's id, and retained -- see below. |
 | Redis sessions | -- | Keyed on the session id. See `SESSION_CAVEAT`. |
 | Redis quota counters | `user_id` | Today's token spend. |
@@ -65,6 +66,8 @@ from sqlalchemy import select, update
 
 from zephyr.core.logging import get_logger
 from zephyr.db.models import (
+    ActivityDailyUser,
+    ActivityTotal,
     AIMessage,
     AuditLog,
     BotUser,
@@ -96,6 +99,7 @@ RETENTION = {
     "Saved playlists": "Titles and links you saved, kept until you delete them.",
     "AI conversations": "Recent messages per channel, so replies have context. Erasable per channel with /forget, or entirely with /delete-my-data.",
     "Server audit log": "Who changed a server's settings. Retained for the server owner; your id is anonymised if you delete your data.",
+    "Activity counts": "How many messages you have sent in each server, and the level they earn. Deleted with your data.",
     "Reminders": "What you asked to be reminded about and when, kept until it fires or you cancel it.",
     "Moderation record": "Warnings, timeouts, kicks and bans a server recorded against you. Retained for that server; the moderator's identity is never disclosed to you.",
     "AI usage counters": "Tokens spent today, for rate limiting. Expires automatically within 48 hours.",
@@ -157,6 +161,13 @@ def export(user_id: str, *, database_url: str | None = None) -> dict:
             .order_by(AIMessage.id)
         ).mappings().all()
 
+        activity_rows = connection.execute(
+            select(
+                ActivityTotal.guild_id, ActivityTotal.messages, ActivityTotal.xp,
+                ActivityTotal.last_message_at,
+            ).where(ActivityTotal.user_id == user_id)
+        ).mappings().all()
+
         # No moderator_id: see "It does not delete moderation cases" above.
         mod_rows = connection.execute(
             select(
@@ -188,6 +199,7 @@ def export(user_id: str, *, database_url: str | None = None) -> dict:
         "audit_entries": [_serialise(row) for row in audit_rows],
         "ai_messages": [_serialise(row) for row in messages],
         "reminders": [_serialise(row) for row in reminder_rows],
+        "activity": [_serialise(row) for row in activity_rows],
         "moderation_record": [_serialise(row) for row in mod_rows],
         "notes": {
             "sessions": SESSION_CAVEAT,
@@ -255,6 +267,17 @@ def delete(user_id: str, *, database_url: str | None = None) -> dict:
             .where(AuditLog.actor_id == user_id)
             .values(actor_id=ANONYMISED_ACTOR)
         ).rowcount or 0
+
+        # Deleted, not retained: unlike a moderation case, a message count is
+        # not a record a server has a legitimate interest in keeping about
+        # somebody who has asked to be forgotten -- the leaderboard simply
+        # loses a row.
+        removed["activity_totals"] = connection.execute(
+            sql_delete(ActivityTotal).where(ActivityTotal.user_id == user_id)
+        ).rowcount or 0
+        connection.execute(
+            sql_delete(ActivityDailyUser).where(ActivityDailyUser.user_id == user_id)
+        )
 
         removed["reminders"] = connection.execute(
             sql_delete(Reminder).where(Reminder.user_id == user_id)

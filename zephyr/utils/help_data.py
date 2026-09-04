@@ -191,6 +191,18 @@ HELP_CATEGORIES = [
         ],
     ),
     HelpCategory(
+        key="activity",
+        emoji="📈",
+        title="Activity & Levels",
+        commands=[
+            HelpEntry("/rank [member]", "Your level, XP and message count here"),
+            HelpEntry("/leaderboard", "The most active members"),
+            HelpEntry("/activity-today", "How busy this server is today"),
+            HelpEntry("/activity <on|off>", "Turn tracking on or off (Manage Server)"),
+            HelpEntry("/activity-ignore <channel>", "Stop counting a channel"),
+        ],
+    ),
+    HelpCategory(
         key="starboard",
         emoji="⭐",
         title="Starboard",
