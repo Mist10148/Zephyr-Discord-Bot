@@ -537,3 +537,77 @@ class StarboardEntry(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class GuildActivity(Base):
+    """Activity-tracking configuration for one guild.
+
+    Off by default, and that is a decision rather than an oversight.  Leveling
+    counts every message every member sends; switching it on for existing
+    servers without being asked would start collecting that silently.  Opt-in
+    also means the listener's cache holds only the guilds that want it, which
+    makes the cheapest guard the smallest dictionary.
+    """
+
+    __tablename__ = "guild_activity"
+
+    guild_id: Mapped[str] = mapped_column(String, primary_key=True)
+    enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # Where level-ups are announced.  NULL means "in the channel they were
+    # earned in", which is what most servers want; a dedicated channel is for
+    # servers that find that noisy.
+    announce_channel_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    announce_level_ups: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    ignored_channel_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class ActivityTotal(Base):
+    """One member's running totals in one guild.
+
+    The composite primary key is the whole design: the flusher upserts by
+    ``(guild_id, user_id)`` and adds to the stored values, so a flush is
+    idempotent in shape even though it is additive in effect -- and two
+    processes flushing the same guild cannot create two rows for one person.
+    """
+
+    __tablename__ = "activity_totals"
+    __table_args__ = (
+        # "The top ten in this server", which is the only query the leaderboard
+        # runs and the only reason an index beyond the primary key is needed.
+        Index("ix_activity_totals_guild_id_xp", "guild_id", "xp"),
+    )
+
+    guild_id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String, primary_key=True)
+    messages: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    xp: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_message_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class ActivityDailyUser(Base):
+    """One member's message count on one day in one guild.
+
+    This table exists because **a distinct count cannot be derived from
+    increments.**  "How many people spoke yesterday" is not answerable from a
+    per-day total, however that total is accumulated -- the only way to know is
+    to have a row per person per day.  The daily *total* is then the sum of this
+    table's counts, so a separate rollup table would be a second copy of a
+    number already stored here.
+
+    ``day`` is a UTC date.  A guild-local day would be more meaningful and is
+    not worth the cost: the row would have to be written against whatever the
+    guild's timezone was at flush time, so changing the setting would silently
+    re-attribute history.
+    """
+
+    __tablename__ = "activity_daily_users"
+
+    guild_id: Mapped[str] = mapped_column(String, primary_key=True)
+    day: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String, primary_key=True)
+    messages: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
