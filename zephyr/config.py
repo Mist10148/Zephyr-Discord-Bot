@@ -72,6 +72,11 @@ DB_AUTO_CREATE: bool | None = (
     else _DB_AUTO_CREATE_RAW.lower() in {"1", "true", "yes"}
 )
 
+# Links the site's footer and privacy page offer. All optional: a deployment
+# with no support server should show no support link rather than a dead one.
+SUPPORT_URL = os.getenv("SUPPORT_URL") or None
+REPOSITORY_URL = os.getenv("REPOSITORY_URL") or "https://github.com/Mist10148/Zephyr-Discord-Bot"
+
 # Number of gateway shards, or None to let Discord decide.
 #
 # Discord requires sharding past roughly 2,500 guilds. AutoShardedBot is close
@@ -93,6 +98,11 @@ SHARD_COUNT = int(os.getenv("SHARD_COUNT") or "0") or None
 # guild's whole daily allowance and everybody else would see a rate-limit
 # message with no explanation. A per-user row overrides this.
 AI_USER_DAILY_TOKENS = int(os.getenv("AI_USER_DAILY_TOKENS") or "0")
+
+# Error tracking. Without a DSN there is none, which is the default -- a
+# production 500 is then invisible, which is exactly what 12.7/17.2 records.
+SENTRY_DSN = os.getenv("SENTRY_DSN") or None
+SENTRY_ENVIRONMENT = os.getenv("SENTRY_ENVIRONMENT") or ("production" if os.getenv("RENDER") else "development")
 
 # ---------------------------------------------------------------------------
 # Logging

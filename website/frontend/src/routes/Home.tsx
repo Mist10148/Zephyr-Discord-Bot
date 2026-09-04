@@ -11,12 +11,28 @@ const FEATURES = [
 ]
 
 export function Home() {
-  const status = useQuery({ queryKey: ['status'], queryFn: () => api<{ bot: { online: boolean } }>('/status') })
+  const status = useQuery({
+    queryKey: ['status'],
+    queryFn: () => api<{ bot: { online: boolean; published_at?: number | null }; invite_url?: string | null }>('/status'),
+    // Render's free web tier spins down, so a cold visitor's first request can
+    // take many seconds. Polling means the pill corrects itself once the bot
+    // reports in, rather than reading "offline" until a manual refresh.
+    refetchInterval: query => (query.state.data?.bot.online ? false : 15_000),
+  })
   const navigate = useNavigate()
   const online = status.data?.bot.online
-  // Three states, not two: "we have not asked yet" must not render as "offline".
-  const statusClass = status.isPending ? '' : online ? 'ok' : 'off'
-  const statusText = status.isPending ? 'Connecting…' : online ? 'Bot online' : 'Bot offline'
+  const inviteUrl = status.data?.invite_url
+  // Four states, not three. "Waking" is the one 12.7 asks for: Render's free
+  // tier spins the *web* service down, so on a cold visit the API answers late
+  // and the bot may not have published a heartbeat yet -- which is not the same
+  // thing as the bot being offline, and saying "Bot offline" to somebody
+  // deciding whether to install it is both wrong and the worst possible moment.
+  // A presence key that exists but is stale is exactly that state.
+  const waking = !online && !!status.data?.bot.published_at
+  const statusClass = status.isPending ? '' : online ? 'ok' : waking ? 'unknown' : 'off'
+  const statusText = status.isPending
+    ? 'Connecting…'
+    : online ? 'Bot online' : waking ? 'Waking up…' : 'Bot offline'
 
   return <main className="app">
     <section className="hero">
@@ -24,8 +40,16 @@ export function Home() {
       <h1>Zephyr</h1>
       <p className="hero-tagline">A weather-first Discord companion — forecasts, music and AI, with a dashboard to match.</p>
       <span className={`status-pill ${statusClass}`.trim()} role="status" data-glass="1"><i aria-hidden />{statusText}</span>
+      {/* The invite is the primary action: this is a bot's website, and
+          somebody landing here was previously offered "check the weather" and
+          no way to install the thing at all. An anchor rather than
+          PressableButton because it leaves the site -- the primitive
+          deliberately has no href. */}
       <div className="hero-actions">
-        <PressableButton onClick={() => navigate('/weather')}>Check the weather</PressableButton>
+        {inviteUrl
+          ? <a className="ios-button primary" href={inviteUrl} rel="noreferrer">Add Zephyr to Discord</a>
+          : null}
+        <PressableButton variant={inviteUrl ? 'secondary' : 'primary'} onClick={() => navigate('/weather')}>Check the weather</PressableButton>
         <PressableButton variant="secondary" onClick={() => navigate('/g')}>Open dashboard</PressableButton>
       </div>
     </section>

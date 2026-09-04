@@ -104,6 +104,9 @@ def configure_logging(*, service: str, level: str | None = None, json_output: bo
 
     _configured = True
 
+    # After the handler exists, so a failure inside init is itself logged.
+    install_error_tracking(service=service)
+
 
 class _ServiceFilter(logging.Filter):
     def __init__(self, service: str):
@@ -113,6 +116,51 @@ class _ServiceFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         record.service = self.service
         return True
+
+
+def install_error_tracking(*, service: str) -> bool:
+    """Wire Sentry to the logging config, if a DSN is set.
+
+    Attached to *logging* rather than to Flask or discord.py, which is what
+    makes one call cover both processes: every failure in this codebase now
+    reaches a logger (13.2), so an integration on the logging handler sees them
+    all -- including the slash-command handler's `log.error(..., exc_info=...)`,
+    which no framework integration would have caught.
+
+    Returns whether it was installed. Optional at every level: no DSN means no
+    tracking, and a missing package means no tracking rather than a crash --
+    a production 500 being invisible is bad, and a bot that will not start
+    because an observability library is absent is worse.
+    """
+    from zephyr.config import SENTRY_DSN, SENTRY_ENVIRONMENT
+
+    if not SENTRY_DSN:
+        return False
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.logging import LoggingIntegration
+    except ImportError:
+        logging.getLogger(__name__).info("SENTRY_DSN is set but sentry-sdk is not installed")
+        return False
+
+    try:
+        sentry_sdk.init(
+            dsn=SENTRY_DSN,
+            environment=SENTRY_ENVIRONMENT,
+            # ERROR and above become events; INFO and above become breadcrumbs,
+            # so an event arrives with the log lines that led to it. WARNING as
+            # the event level would ship every rate-limit fail-open.
+            integrations=[LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)],
+            # No performance tracing: this is about finding the 500s that were
+            # previously invisible, and traces on a free tier are mostly noise.
+            traces_sample_rate=0.0,
+            send_default_pii=False,
+        )
+        sentry_sdk.set_tag("service", service)
+    except Exception:
+        logging.getLogger(__name__).warning("Could not initialise error tracking", exc_info=True)
+        return False
+    return True
 
 
 def get_logger(name: str) -> logging.Logger:
