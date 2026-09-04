@@ -174,7 +174,7 @@ DISCORD_INVITE_PERMISSIONS = os.getenv("DISCORD_INVITE_PERMISSIONS", "3197952")
 # reports them as a guild's default enabled_cogs without importing the client.
 ENABLED_COGS = (
     "weather", "weather_alerts", "music", "voice_tts", "chat", "help", "privacy",
-    "reminders", "moderation",
+    "reminders", "moderation", "greetings",
 )
 
 # The prefix for the 13 classic text commands.
