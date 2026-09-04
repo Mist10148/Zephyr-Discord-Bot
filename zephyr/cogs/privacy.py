@@ -19,6 +19,7 @@ from discord.ext import commands
 from zephyr.config import REDIS_URL
 from zephyr.core.logging import get_logger
 from zephyr.db import personal_data
+from zephyr.utils import embeds
 
 log = get_logger(__name__)
 
@@ -133,7 +134,7 @@ def _summarise(payload: dict) -> str:
 
 
 def _confirm_embed() -> discord.Embed:
-    embed = discord.Embed(
+    embed = embeds.error(
         title="Delete everything?",
         description=(
             "This removes your dashboard record, your weather and AI preferences, "
@@ -141,7 +142,6 @@ def _confirm_embed() -> discord.Embed:
             "in every server's audit log.\n\n"
             "**This cannot be undone.** Run `/export-my-data` first if you want a copy."
         ),
-        color=discord.Color.red(),
     )
     # Named, because "everything" that quietly excludes two things is not
     # everything, and somebody should not discover that afterwards.

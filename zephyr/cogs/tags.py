@@ -27,6 +27,7 @@ from discord.ext import commands
 from zephyr.core.logging import get_logger
 from zephyr.db import tags as repo
 from zephyr.db.tags import MAX_CONTENT_CHARS, MAX_NAME_CHARS, MAX_TAGS_PER_GUILD, TagError
+from zephyr.utils import embeds
 from zephyr.utils.autocomplete import MAX_CHOICES, cached, truncate
 
 log = get_logger(__name__)
@@ -177,17 +178,14 @@ class TagsCog(commands.Cog):
             )
             return
 
-        embed = discord.Embed(
-            title="Tags",
+        embed = embeds.info(
             # Names only, in code spans: a listing that rendered content would
             # be both enormous and a way to make the bot repeat fifty tags at
             # once.
-            description=" ".join(f"`{row['name']}`" for row in rows),
-            color=discord.Color.blurple(),
-        )
-        embed.set_footer(
-            text=f"{total} of {MAX_TAGS_PER_GUILD} used"
-            + (f" · showing the {LIST_LIMIT} most used" if total > LIST_LIMIT else "")
+            " ".join(f"`{row['name']}`" for row in rows),
+            title="Tags",
+            footer=f"{total} of {MAX_TAGS_PER_GUILD} used"
+            + (f" · showing the {LIST_LIMIT} most used" if total > LIST_LIMIT else ""),
         )
         await interaction.followup.send(embed=embed, allowed_mentions=NO_MENTIONS, ephemeral=True)
 
@@ -201,7 +199,7 @@ class TagsCog(commands.Cog):
             await interaction.followup.send(f"❌ There is no tag called `{name}` here.", ephemeral=True)
             return
 
-        embed = discord.Embed(title=f"`{found['name']}`", color=discord.Color.blurple())
+        embed = embeds.info(title=f"`{found['name']}`")
         embed.add_field(name="Created by", value=f"<@{found['created_by']}>", inline=True)
         embed.add_field(name="Uses", value=f"{found['uses']:,}", inline=True)
         embed.add_field(

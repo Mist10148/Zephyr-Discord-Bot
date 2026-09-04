@@ -25,6 +25,7 @@ from discord.ext import commands, tasks
 
 from zephyr.core.logging import get_logger
 from zephyr.db import greetings as repo
+from zephyr.utils import embeds
 
 log = get_logger(__name__)
 
@@ -276,7 +277,7 @@ class GreetingsCog(commands.Cog):
             )
             return
 
-        embed = discord.Embed(title="Greetings", color=discord.Color.blurple())
+        embed = embeds.info(title="Greetings")
         for kind, default in (("welcome", DEFAULT_WELCOME), ("farewell", DEFAULT_FAREWELL)):
             if not config[f"{kind}_enabled"]:
                 embed.add_field(name=kind.title(), value="*off*", inline=False)

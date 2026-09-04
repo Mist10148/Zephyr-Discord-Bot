@@ -26,6 +26,7 @@ from discord.ext import commands
 from zephyr.core.logging import get_logger
 from zephyr.db import mod_cases as repo
 from zephyr.db.guild_settings import read_guild_settings, write_guild_settings
+from zephyr.utils import embeds
 
 log = get_logger(__name__)
 
@@ -42,17 +43,18 @@ MAX_PURGE = 100
 # moderator deciding what to do needs the recent ones, not all of them.
 CASES_SHOWN = 10
 
-# One colour per action, so a modlog channel is skimmable. Kept local: 16.1
-# introduces the shared embed factory that collapses these, and inventing a
-# global palette here would be the thing 16.1 then has to undo.
-_COLOURS = {
-    "warn": discord.Color.gold(),
-    "timeout": discord.Color.orange(),
-    "untimeout": discord.Color.green(),
-    "kick": discord.Color.orange(),
-    "ban": discord.Color.red(),
-    "unban": discord.Color.green(),
-    "purge": discord.Color.blurple(),
+# One accent per action, so a modlog channel is skimmable at a glance. Now
+# expressed in the shared factory's six roles rather than in seven of
+# discord.Color's constants -- which is what 16.1 was for: a kick and a timeout
+# are both "warning" here, and they were two different oranges before.
+_ACCENTS = {
+    "warn": "warning",
+    "timeout": "warning",
+    "untimeout": "success",
+    "kick": "warning",
+    "ban": "error",
+    "unban": "success",
+    "purge": "neutral",
 }
 _VERBS = {
     "warn": "Warned",
@@ -142,9 +144,9 @@ def case_embed(case: dict) -> discord.Embed:
     depending on where it is read.
     """
     verb = _VERBS.get(case["action"], case["action"].title())
-    embed = discord.Embed(
+    embed = embeds.build(
         title=f"Case #{case['case_number']} · {verb}",
-        color=_COLOURS.get(case["action"], discord.Color.greyple()),
+        accent=_ACCENTS.get(case["action"], "neutral"),
     )
     target = case.get("target_tag") or f"<@{case['target_id']}>"
     embed.add_field(name="User", value=f"{target}\n`{case['target_id']}`", inline=True)
@@ -558,10 +560,9 @@ class ModerationCog(commands.Cog):
             await interaction.followup.send(f"{member} has no cases here.", ephemeral=True)
             return
 
-        embed = discord.Embed(
+        embed = embeds.neutral(
+            f"{total} in total; showing the {len(page['entries'])} most recent.",
             title=f"Cases for {member}",
-            description=f"{total} in total; showing the {len(page['entries'])} most recent.",
-            color=discord.Color.greyple(),
         )
         for case in page["entries"]:
             embed.add_field(
