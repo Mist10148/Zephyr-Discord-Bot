@@ -39,7 +39,7 @@ running code, and every defect in Phase 13 was confirmed in the source rather th
 | **12** | **Public site layer** | **Shipped** |
 | **13** | **Bot correctness and observability** | **Shipped** |
 | **14** | **Bot functionality gaps** | **Shipped** |
-| **15** | **New bot features** | **15.2 shipped**, rest in progress |
+| **15** | **New bot features** | **15.1, 15.2 shipped**, rest in progress |
 | **16** | **Discord-side presentation** | **Not started** |
 | **17** | **Code quality and infrastructure** | **17.3 shipped**, rest not started |
 
@@ -637,7 +637,7 @@ reuse — the top three are mostly wiring.
 
 | # | Feature | What it reuses | Effort |
 |---|---|---|---|
-| 15.1 | **`/remindme` and a reminder list** | The scheduler and durable job loop in [`zephyr/cogs/weather_alerts.py`](../zephyr/cogs/weather_alerts.py), plus a table alongside [`weather_subs`](../zephyr/db/weather_subs.py) | M |
+| 15.1 ✅ | **`/remindme` and a reminder list** | The scheduler and durable job loop in [`zephyr/cogs/weather_alerts.py`](../zephyr/cogs/weather_alerts.py), plus a table alongside [`weather_subs`](../zephyr/db/weather_subs.py) | M |
 | 15.2 ✅ | **`/export-my-data`, `/delete-my-data`** | The AI memory purge already implements deletion for the largest data category; this is the self-service path 12.2 needs | M |
 | 15.3 | **Moderation commands + modlog** | [`zephyr/db/audit.py`](../zephyr/db/audit.py) and the dashboard audit screen, which would gain real content | L |
 | 15.4 | **Skip-vote, DJ-only lock, 24/7 mode** | DJ roles are already modelled (`dj_role_id`, `reload_dj_roles`) | M |
