@@ -142,7 +142,7 @@ project-root/
 - **Class suspension forecast:** predicts whether classes are likely to be suspended using feels-like/apparent temperature.
 - **Personal default city:** `/setlocation` stores a per-user default, which every slash weather command falls back to before falling back to Iloilo.
 - **Data sources:** Open-Meteo is the primary source; OpenWeatherMap is used as a transparent fallback if Open-Meteo fails.
-- **Command formats:** every weather command works as a slash command; many also work as prefix commands.
+- **Command formats:** every weather command works as a slash command; many also work as `z!` prefix commands.
 
 ### 6.1a Weather subscriptions
 

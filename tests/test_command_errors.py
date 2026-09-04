@@ -187,3 +187,48 @@ class TestItIsActuallyAttached:
         # a red embed with str(error) for any failure, with no logging and no
         # distinction between a cooldown and a crash.
         assert "cog_command_error" not in MusicCog.__dict__
+
+
+class TestBotConstruction:
+    """13.4. No existing test constructs ZephyrBot.__init__, so these changes
+    would otherwise be invisible to the suite by construction."""
+
+    @pytest.fixture
+    def bot(self, monkeypatch):
+        # __init__ builds no network client, but setup_hook does -- so
+        # constructing is safe while starting is not.
+        from zephyr.client import ZephyrBot
+
+        return ZephyrBot()
+
+    def test_the_prefix_no_longer_collides_with_slash_commands(self, bot):
+        """It was "/", so every message beginning with a slash was also parsed
+        as a prefix command: a mistyped "/pley" raised CommandNotFound on a code
+        path with no handler."""
+        assert bot.command_prefix != "/"
+        assert bot.command_prefix == "z!"
+
+    def test_a_mention_is_not_a_prefix(self, bot):
+        """A mention is already the AI's trigger in on_message. Accepting it
+        here too would make "@Zephyr weather" both ask the AI and run the
+        weather command."""
+        assert not callable(bot.command_prefix)
+
+    def test_there_is_one_help_implementation(self, bot):
+        # DefaultHelpCommand was registered alongside zephyr/cogs/help.py.
+        assert bot.help_command is None
+
+    def test_the_intents_are_enumerated_not_all(self, bot):
+        """Intents.all() requests every privileged intent, including presences
+        and typing, which this bot never reads -- and each has to be justified
+        to Discord for verification past 100 guilds."""
+        assert bot.intents != discord.Intents.all()
+        assert bot.intents.presences is False
+        assert bot.intents.typing is False
+
+    def test_but_it_keeps_the_ones_it_actually_uses(self, bot):
+        for name in ("guilds", "members", "message_content", "voice_states"):
+            assert getattr(bot.intents, name) is True, name
+        # on_message has to receive messages at all, in guilds and in DMs.
+        assert bot.intents.guild_messages is True
+        assert bot.intents.dm_messages is True

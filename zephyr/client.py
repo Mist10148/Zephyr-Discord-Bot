@@ -13,7 +13,7 @@ import time
 import discord
 from discord.ext import commands, tasks
 
-from zephyr.config import ENABLED_COGS, REDIS_URL
+from zephyr.config import COMMAND_PREFIX, ENABLED_COGS, REDIS_URL
 from zephyr.core.opus_loader import load_opus
 from zephyr.core.errors import report as report_command_error
 from zephyr.core.ffmpeg import FFMPEG_PATH
@@ -41,11 +41,34 @@ async def type_print(text, delay=0.03):
 
 class ZephyrBot(commands.Bot):
     def __init__(self):
-        intents = discord.Intents.all()
+        # Enumerated rather than Intents.all(). `all()` requests every
+        # privileged intent, including presences and typing, which this bot
+        # never reads -- and each one has to be justified to Discord for
+        # verification past 100 guilds. What is actually used:
+        #
+        #   guilds          -- guild/channel/role caches, the snapshot, pickers
+        #   members         -- resolving an audit actor and a DJ role holder
+        #   message_content -- the AI answers mentions and replies
+        #   voice_states    -- the empty-channel listener and the player
+        #   messages        -- on_message at all
+        intents = discord.Intents.none()
+        intents.guilds = True
+        intents.members = True
+        intents.message_content = True
+        intents.voice_states = True
+        intents.guild_messages = True
+        intents.dm_messages = True
+
         super().__init__(
-            command_prefix="/",
+            # Not when_mentioned_or: a mention is already the AI's trigger in
+            # on_message, so accepting it as a prefix too would make
+            # "@Zephyr weather" both ask the AI and run the weather command.
+            command_prefix=COMMAND_PREFIX,
             intents=intents,
-            help_command=commands.DefaultHelpCommand(no_category="General"),
+            # None, not DefaultHelpCommand: zephyr/cogs/help.py provides the
+            # real help surface, and registering both meant two implementations
+            # of /help with one of them unstyled.
+            help_command=None,
         )
         self._synced_count = 0
         self._started_at = time.time()

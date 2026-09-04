@@ -142,6 +142,15 @@ DISCORD_INVITE_PERMISSIONS = os.getenv("DISCORD_INVITE_PERMISSIONS", "3197952")
 # reports them as a guild's default enabled_cogs without importing the client.
 ENABLED_COGS = ("weather", "weather_alerts", "music", "voice_tts", "chat", "help")
 
+# The prefix for the 13 classic text commands.
+#
+# It was "/", which meant every message beginning with a slash was *also* parsed
+# as a prefix command: a mistyped "/pley" raised CommandNotFound on a code path
+# with no handler, and the 13 real prefix commands were indistinguishable from
+# the 75 slash commands in the client UI.  "z!" is unambiguous and unlikely to
+# collide with another bot in the same server.
+COMMAND_PREFIX = os.getenv("COMMAND_PREFIX") or "z!"
+
 # The dashboard needs an OAuth application *and* Redis (sessions are shared
 # across gunicorn workers).  Without all three, only the public weather site runs.
 AUTH_ENABLED = bool(DISCORD_CLIENT_ID and DISCORD_CLIENT_SECRET and REDIS_URL)
