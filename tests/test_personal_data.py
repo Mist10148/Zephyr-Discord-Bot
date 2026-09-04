@@ -13,6 +13,7 @@ from sqlalchemy import select
 
 from zephyr.db import ai as ai_db
 from zephyr.db import audit, personal_data, playlists
+from zephyr.db import activity as activity_repo
 from zephyr.db import mod_cases as mod_repo
 from zephyr.db import reminders as reminders_repo
 from zephyr.db.models import AIMessage, AuditLog, Playlist, PlaylistTrack
@@ -47,6 +48,7 @@ def seeded(db_url):
             },
             database_url=db_url,
         )
+    activity_repo.flush({("1", ME): 3, ("1", SOMEBODY_ELSE): 2}, database_url=db_url)
     mod_repo.record(
         guild_id="1", action="warn", target_id=ME, moderator_id=SOMEBODY_ELSE,
         reason="told off", database_url=db_url,
@@ -67,6 +69,7 @@ class TestExport:
         assert any("my question" in message["content"] for message in payload["ai_messages"])
         assert [row["message"] for row in payload["reminders"]] == ["my reminder"]
         assert [row["reason"] for row in payload["moderation_record"]] == ["told off"]
+        assert [row["messages"] for row in payload["activity"]] == [3]
 
     def test_it_contains_nobody_elses_data(self, seeded):
         payload = personal_data.export(ME, database_url=seeded)
@@ -118,6 +121,7 @@ class TestDelete:
         assert removed["playlists"] == 1
         assert removed["ai_messages"] >= 1
         assert removed["reminders"] == 1
+        assert removed["activity_totals"] == 1
         after = personal_data.export(ME, database_url=seeded)
         assert after["bot_preferences"] is None
         assert after["playlists"] == []
@@ -210,6 +214,7 @@ class TestTheRetentionTable:
             "AI conversations", "Server audit log", "AI usage counters", "Sessions",
             "Reminders",
             "Moderation record",
+            "Activity counts",
         }
 
     def test_the_session_caveat_is_honest_about_the_limitation(self):
