@@ -4,6 +4,7 @@ The hooks here are registered on the ``api`` blueprint, so every endpoint added 
 this and later phases inherits them without opting in.
 """
 
+import hashlib
 import hmac
 import time
 from functools import wraps
@@ -89,31 +90,91 @@ def guild_scoped(view):
     return wrapper
 
 
-def rate_limit(bucket: str, *, limit: int, window: int) -> bool:
-    """Fixed-window counter, per session, in Redis.  True when within budget.
+def _fixed_window(key: str, *, limit: int, window: int) -> bool:
+    """The Redis half, shared by the session and the per-IP limiter.
 
     Fixed window rather than a sliding log because it is two commands and no
-    stored history; the worst case is 2x the limit across a window boundary,
-    which for "don't hammer the bot with skips" is entirely acceptable.
+    stored history; the worst case is 2x the limit across a window boundary.
 
     Shared across gunicorn workers by construction -- a per-process counter
     would give each worker its own full budget and enforce nothing.  Fails open:
-    a Redis blip must not lock the player, and the session store already answers
-    503 for a genuine outage.
+    a Redis blip must not take the weather page down, and the session store
+    already answers 503 for a genuine outage.
     """
-    session = g.get("zephyr_session")
-    if session is None:
-        return True
-    key = f"zephyr:web:rl:{bucket}:{session.sid}:{int(time.time()) // window}"
     try:
         client = redis_client.get_client(current_app.config["REDIS_URL"])
         used = client.incr(key)
         if used == 1:
             client.expire(key, window + 1)
     except Exception as exc:
-        log.warning("Could not count rate-limit bucket %s, failing open: %s", bucket, exc)
+        log.warning("Could not count rate-limit bucket %s, failing open: %s", key, exc)
         return True
     return used <= limit
+
+
+def rate_limit(bucket: str, *, limit: int, window: int) -> bool:
+    """Per-session budget.  True when within it.
+
+    Returns True for an anonymous caller, which is why it **cannot** guard a
+    public endpoint -- there is no session to key on, so it would fail open for
+    exactly the traffic a public limiter exists to bound. Use
+    ``public_rate_limit`` there.
+    """
+    session = g.get("zephyr_session")
+    if session is None:
+        return True
+    return _fixed_window(
+        f"zephyr:web:rl:{bucket}:{session.sid}:{int(time.time()) // window}",
+        limit=limit, window=window,
+    )
+
+
+def client_ip() -> str:
+    """The caller's address, as far as it can be trusted.
+
+    ``request.remote_addr`` and never ``X-Forwarded-For`` directly: ProxyFix is
+    installed only when TRUST_PROXY is on (see website/__init__.py), so behind
+    Render this is already the real client, and *without* a proxy a client could
+    forge the header and mint itself an unlimited budget per request.
+    """
+    return request.remote_addr or "unknown"
+
+
+def rate_limit_ip(bucket: str, *, limit: int, window: int) -> bool:
+    """Per-IP budget, for endpoints with no session.
+
+    The address is hashed and truncated, so Redis never holds a raw IP -- which
+    is a claim the privacy policy can then make truthfully. A 16-hex-character
+    prefix of SHA-256 is not a reversal risk for a value that expires within the
+    window.
+    """
+    fingerprint = hashlib.sha256(client_ip().encode("utf-8")).hexdigest()[:16]
+    return _fixed_window(
+        f"zephyr:web:rl:{bucket}:ip:{fingerprint}:{int(time.time()) // window}",
+        limit=limit, window=window,
+    )
+
+
+def public_rate_limit(bucket: str, *, limit: int, window: int):
+    """Decorator form, for the public read endpoints.
+
+    A 429 carries Retry-After. The frontend needs no change for it:
+    ``lib/api.ts`` already throws ApiError(429) and ``lib/query.ts``'s retry
+    predicate treats sub-500 as non-retryable, so it surfaces immediately as an
+    error toast with the envelope's own message.
+    """
+    def decorate(view):
+        @wraps(view)
+        def wrapper(*args, **kwargs):
+            if not rate_limit_ip(bucket, limit=limit, window=window):
+                response, status = error(
+                    "rate_limited", "Too many requests — try again shortly.", 429
+                )
+                response.headers["Retry-After"] = str(window)
+                return response, status
+            return view(*args, **kwargs)
+        return wrapper
+    return decorate
 
 
 @api.before_request

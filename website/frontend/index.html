@@ -21,7 +21,44 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Zephyr" />
-    <title>Zephyr Weather</title>
+    <title>Zephyr — weather, music and AI for Discord</title>
+
+    <!-- Open Graph and Twitter cards. Static, and that is not a shortcut: no
+         unfurler runs JavaScript, so per-route social cards are impossible
+         without server-side injection. These values describe the site, which is
+         what a pasted link into Discord is about -- and a link to a Discord bot
+         pasted into Discord was previously a bare URL, which is the
+         highest-leverage missing markup on the whole site.
+
+         RouteMeta (src/components/RouteMeta.tsx) handles the half a client can
+         solve: the browser tab, history and bookmarks. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Zephyr" />
+    <meta property="og:title" content="Zephyr — weather, music and AI for Discord" />
+    <meta property="og:description" content="Forecasts and heat-index advisories, a full music player, and an AI companion — with a dashboard to configure it all." />
+    <meta property="og:image" content="/icons/og-card.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Zephyr — a weather-first Discord companion" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Zephyr — weather, music and AI for Discord" />
+    <meta name="twitter:description" content="Forecasts and heat-index advisories, a full music player, and an AI companion — with a dashboard to configure it all." />
+    <meta name="twitter:image" content="/icons/og-card.png" />
+    <link rel="canonical" href="/" />
   </head>
-  <body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body>
+  <body>
+    <div id="root"></div>
+    <noscript>
+      <h1>Zephyr</h1>
+      <p>A weather-first Discord companion — forecasts and heat-index advisories, a
+         music player, and an AI chat companion, with a dashboard to configure it.</p>
+      <p>Zephyr needs JavaScript. These pages are readable without it:</p>
+      <ul>
+        <li><a href="/commands">Command reference</a></li>
+        <li><a href="/privacy">Privacy</a></li>
+        <li><a href="/terms">Terms</a></li>
+      </ul>
+    </noscript>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>

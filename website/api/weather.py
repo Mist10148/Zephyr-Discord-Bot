@@ -6,6 +6,7 @@ from flask import jsonify, request
 
 from website.api import api, error
 from website.api.cache import TTLCache
+from website.api.guard import public_rate_limit
 from zephyr.utils.weather_utils import (
     WeatherProviderError, class_suspension_payload, european_aqi_band,
     geocode_search, get_openmeteo_air_quality, get_openmeteo_bundle,
@@ -29,6 +30,7 @@ def _time_payload(time_local: str | None, offset: int) -> dict:
 
 
 @api.get("/weather")
+@public_rate_limit("weather", limit=60, window=60)
 def weather():
     lat, lon = _number("lat"), _number("lon")
     units = request.args.get("units", "metric")
@@ -60,6 +62,7 @@ def weather():
 
 
 @api.get("/geocode")
+@public_rate_limit("geocode", limit=30, window=60)
 def geocode():
     query = (request.args.get("q") or "").strip()
     if len(query) < 2: return error("invalid_query", "q must contain at least two characters", 400)

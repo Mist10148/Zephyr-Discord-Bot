@@ -16,7 +16,7 @@ from flask import current_app, redirect, request
 
 from website import discord_api
 from website.api import api, error
-from website.api.guard import clear_auth_cookies, current_session, set_csrf_cookie, set_session_cookie
+from website.api.guard import clear_auth_cookies, current_session, rate_limit_ip, set_csrf_cookie, set_session_cookie
 from website.repo import upsert_web_user
 from website.session import SessionStoreError, consume_state, create_session, destroy, store_state
 from zephyr.core.logging import get_logger
@@ -56,6 +56,14 @@ def _state_cookie_name() -> str:
 def auth_login():
     if not current_app.config["AUTH_ENABLED"]:
         return _login_redirect("not_configured")
+
+    # The tightest limit on the public surface, and the reason is below: every
+    # call mints a Redis state key, so this is the cheapest way to fill the
+    # session store. Answered with a redirect rather than the JSON envelope,
+    # because this endpoint is reached by a browser *navigation* -- returning
+    # JSON here would put a raw error object on screen.
+    if not rate_limit_ip("auth_login", limit=10, window=300):
+        return _login_redirect("rate_limited")
 
     state = secrets.token_urlsafe(32)
     try:

@@ -14,6 +14,21 @@ import { VitePWA } from 'vite-plugin-pwa'
 // vite-plugin-pwa merges `workbox` shallowly over its defaults, so navigateFallback
 // and cleanupOutdatedCaches survive: offline SPA deep links keep working.
 //
+// navigateFallbackAllowlist is what makes 12.5's real 404 actually reach the
+// browser. Workbox answers every same-origin navigation from the precached
+// shell, which would serve /nonsense with a cached 200 and hide the 404 Flask
+// now returns -- so the allowlist enumerates the routes the SPA renders and
+// everything else falls through to the server. website/routes.py holds the same
+// list on the Python side and tests/test_spa.py compares them.
+//
+// The cost is that an unknown path *while offline* shows the browser's own
+// error page rather than the app's NotFound. That is acceptable: an unknown
+// path is a mistake or a stale link, and neither is worth caching a wrong 200
+// for every real 404 on the site.
+//
+// robots.txt and sitemap.xml join the denylist: they are Flask-served text, and
+// answering them with the HTML shell would make both useless.
+//
 // Do NOT add runtimeCaching for /api/v1. There is none today, which is why
 // authenticated responses never touch Cache Storage -- and Cache Storage is
 // readable by any script on the origin and outlives a sign-out.
@@ -24,7 +39,7 @@ import { VitePWA } from 'vite-plugin-pwa'
 // version everywhere else. The 192px entries are what Chrome checks for
 // installability, so dropping them silently disables the install prompt.
 export default defineConfig({
-  plugins: [react(), tailwindcss(), VitePWA({ registerType: 'prompt', workbox: { navigateFallbackDenylist: [/^\/api\//, /^\/health$/], globPatterns: ['**/*.{js,css,html}', '**/*-latin-*.woff2'] }, manifest: { name: 'Zephyr Weather', short_name: 'Zephyr', description: 'Weather forecasts and Zephyr bot controls.', display: 'standalone', scope: '/', start_url: '/', background_color: '#1A1917', theme_color: '#1A1917', icons: [{ src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' }, { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' }, { src: '/icons/maskable-192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' }, { src: '/icons/maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' }] } })],
+  plugins: [react(), tailwindcss(), VitePWA({ registerType: 'prompt', workbox: { navigateFallbackDenylist: [/^\/api\//, /^\/health$/, /^\/robots\.txt$/, /^\/sitemap\.xml$/], navigateFallbackAllowlist: [/^\/$/, /^\/weather$/, /^\/commands$/, /^\/privacy$/, /^\/terms$/, /^\/settings$/, /^\/kitchen-sink$/, /^\/login$/, /^\/g(?:\/\d+(?:\/[a-z-]+)?)?$/], globPatterns: ['**/*.{js,css,html}', '**/*-latin-*.woff2'] }, manifest: { name: 'Zephyr Weather', short_name: 'Zephyr', description: 'Weather forecasts and Zephyr bot controls.', display: 'standalone', scope: '/', start_url: '/', background_color: '#1A1917', theme_color: '#1A1917', icons: [{ src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' }, { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' }, { src: '/icons/maskable-192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' }, { src: '/icons/maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' }] } })],
   build: { outDir: '../static', emptyOutDir: true },
   server: { proxy: { '/api': 'http://127.0.0.1:5000' } },
 })

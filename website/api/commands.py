@@ -5,7 +5,9 @@ import json
 
 from flask import current_app, jsonify
 
+from website import discord_api
 from website.api import api
+from website.api.guard import public_rate_limit
 from zephyr.services import bridge
 from zephyr.utils.help_data import HELP_CATEGORIES
 from zephyr.core.logging import get_logger
@@ -27,6 +29,7 @@ def _parse(command: str) -> tuple[list[str], list[dict]]:
 
 
 @api.get("/commands")
+@public_rate_limit("commands", limit=60, window=60)
 def commands():
     entries, seen = [], set()
     for category in HELP_CATEGORIES:
@@ -42,7 +45,48 @@ def commands():
     return response
 
 
+@api.get("/site")
+@public_rate_limit("site", limit=60, window=60)
+def site():
+    """The links the footer offers.
+
+    Served rather than baked into the bundle so a fork can point them at its
+    own support server and repository without rebuilding the frontend -- and so
+    a deployment with neither renders no dead links.
+    """
+    return jsonify({
+        "support_url": current_app.config.get("SUPPORT_URL") or None,
+        "repository_url": current_app.config.get("REPOSITORY_URL") or None,
+    })
+
+
+@api.get("/legal")
+@public_rate_limit("legal", limit=60, window=60)
+def legal():
+    """The retention table /privacy renders, served from the code that
+    implements it.
+
+    Deliberately not duplicated into the frontend. Discord requires a privacy
+    policy for verification, and a policy that describes a deletion path has to
+    match the path that actually runs -- so the table lives beside
+    ``personal_data.delete`` and the page reads it, rather than the two being
+    edited independently and drifting.
+    """
+    from zephyr.db.personal_data import RETENTION, SESSION_CAVEAT
+
+    return jsonify({
+        "retention": [{"category": key, "detail": value} for key, value in RETENTION.items()],
+        "session_caveat": SESSION_CAVEAT,
+        "contact": current_app.config.get("SUPPORT_URL") or None,
+        "deletion": {
+            "self_service": ["/export-my-data", "/delete-my-data"],
+            "per_channel": ["/forget"],
+        },
+    })
+
+
 @api.get("/status")
+@public_rate_limit("status", limit=120, window=60)
 def status():
     """Public liveness, read from the bot's heartbeat.
 
@@ -60,8 +104,11 @@ def status():
             log.exception("Could not read presence")
 
     if not presence or not presence.get("online"):
-        return jsonify({"bot": {"online": False, "guild_count": None, "latency_ms": None,
-                                "uptime_s": None, "published_at": (presence or {}).get("published_at")}})
+        return jsonify({
+            "bot": {"online": False, "guild_count": None, "latency_ms": None,
+                    "uptime_s": None, "published_at": (presence or {}).get("published_at")},
+            "invite_url": _invite_url(),
+        })
     return jsonify(
         {
             "bot": {
@@ -70,6 +117,28 @@ def status():
                 "latency_ms": presence.get("latency_ms"),
                 "uptime_s": presence.get("uptime_s"),
                 "published_at": presence.get("published_at"),
-            }
+                "shard_count": presence.get("shard_count"),
+            },
+            # Unauthenticated on purpose: this is the primary conversion action
+            # for a bot's website, and it was only reachable from GET /me --
+            # behind a sign-in. Somebody landing on / was offered "check the
+            # weather" and no way to install the thing.
+            "invite_url": _invite_url(),
         }
+    )
+
+
+def _invite_url() -> str | None:
+    """Derived exactly as GET /me does, from the same two config values.
+
+    None when DISCORD_CLIENT_ID is unset, which is the weather-only deployment
+    -- the frontend then simply does not render the button rather than linking
+    to a broken authorize URL.
+    """
+    client_id = current_app.config.get("DISCORD_CLIENT_ID")
+    if not client_id:
+        return None
+    return discord_api.invite_url(
+        client_id=client_id,
+        permissions=current_app.config["DISCORD_INVITE_PERMISSIONS"],
     )
