@@ -27,6 +27,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from zephyr.core.logging import get_logger
+from zephyr.core.tracking import error_context
 
 log = get_logger(__name__)
 
@@ -114,19 +115,30 @@ async def report(interaction: discord.Interaction, error: Exception) -> None:
 
     if message is None:
         reference = new_reference()
+        command = interaction.command.qualified_name if interaction.command else "unknown"
+        guild_id = str(interaction.guild_id) if interaction.guild_id else None
+        user_id = str(interaction.user.id) if interaction.user else None
         # exc_info so the traceback is on the record rather than lost. `extra`
         # puts the ids in their own JSON fields, which is what makes "find the
         # stack for ZP-3F9A2C" a search rather than a grep.
-        log.error(
-            "Unhandled error in /%s",
-            interaction.command.qualified_name if interaction.command else "unknown",
-            exc_info=error,
-            extra={
-                "reference": reference,
-                "guild_id": str(interaction.guild_id) if interaction.guild_id else None,
-                "user_id": str(interaction.user.id) if interaction.user else None,
-            },
-        )
+        #
+        # `error_context` adds the same reference as a Sentry *tag*, which is
+        # the part that matters when the report arrives three days later:
+        # `extra` is displayed but not searchable, so finding the event meant
+        # opening candidates one at a time.
+        with error_context(
+            reference=reference, command=command, guild_id=guild_id, user_id=user_id
+        ):
+            log.error(
+                "Unhandled error in /%s",
+                command,
+                exc_info=error,
+                extra={
+                    "reference": reference,
+                    "guild_id": guild_id,
+                    "user_id": user_id,
+                },
+            )
         message = GENERIC.format(reference=reference)
     elif message == "":
         return

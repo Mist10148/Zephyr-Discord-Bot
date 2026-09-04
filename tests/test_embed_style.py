@@ -125,7 +125,7 @@ class TestErrorsAreEphemeral:
     # `_notify` posts to the sticky now-playing channel: there is no
     # interaction to be ephemeral on, and "the next track failed to load" is
     # information the channel needs, because the music just stopped.
-    ALLOWED = {("zephyr/cogs/music.py", "_notify")}
+    ALLOWED = {("zephyr/cogs/music/__init__.py", "_notify")}
 
     def _offenders(self, root: pathlib.Path):
         found = []

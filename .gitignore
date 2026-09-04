@@ -36,3 +36,6 @@ dist/
 node_modules/
 website/frontend/node_modules/
 website/static/
+website/frontend/e2e/.e2e/
+website/frontend/test-results/
+website/frontend/playwright-report/
