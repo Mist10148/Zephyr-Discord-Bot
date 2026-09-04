@@ -37,14 +37,13 @@ running code, and every defect in Phase 13 was confirmed in the source rather th
 | **10** | **Layout, density and loading states** | **Shipped** |
 | **11** | **Navigation and information architecture** | **Shipped** (with **F4**) |
 | **12** | **Public site layer** | **Not started** |
-| **13** | **Bot correctness and observability** | **Not started** |
+| **13** | **Bot correctness and observability** | **Shipped** |
 | **14** | **Bot functionality gaps** | **Not started** |
 | **15** | **New bot features** | **Not started** |
 | **16** | **Discord-side presentation** | **Not started** |
 | **17** | **Code quality and infrastructure** | **17.3 shipped**, rest not started |
 
-**Phases 8 to 11 are shipped.** Next is **13.1 and 13.2** — they are why every bot bug after
-them is hard to find.
+**Phases 8 to 11 and 13 are shipped.** Next is **Phase 14** (bot functionality gaps).
 
 One note carried out of Phase 8 for the phases that follow: the frontend suite now has a
 jsdom baseline and a route harness (`test/setup.ts`, `test/helpers.tsx`), so a route-level spec
@@ -441,7 +440,7 @@ defects a user or an operator hits, each with one correct answer. **13.1 and 13.
 two highest-value items in the whole backlog** — until they land, every other bot defect is
 diagnosed by guesswork.
 
-### 13.1 — Slash commands have no error handler at all · M
+### 13.1 — Slash commands have no error handler at all · M · **DONE**
 
 [`zephyr/client.py`](../zephyr/client.py) registers no `on_app_command_error` and no
 `tree.on_error`. The only handler in the package is `MusicCog.cog_command_error`
@@ -462,7 +461,7 @@ or the handler raises inside itself on any command that already deferred.
 **Done when:** a deliberately raised exception in any slash command produces a visible
 message to the user and a full traceback in the log, and no command can fail silently.
 
-### 13.2 — Nothing in the bot logs, and no traceback is ever kept · M
+### 13.2 — Nothing in the bot logs, and no traceback is ever kept · M · **DONE**
 
 `logging` is not imported anywhere in [`zephyr/`](../zephyr). There are **65 `print()`
 calls**, and the **68** `except Exception as e` blocks almost all print `str(e)` — so the
@@ -483,7 +482,7 @@ banner in `setup_hook` as prints; that is UI, not logging.
 **Done when:** no `print()` remains outside the startup banner, and an exception raised in a
 cog appears in the log with its full traceback.
 
-### 13.3 — `/language` changes TTS for every server at once · S
+### 13.3 — `/language` changes TTS for every server at once · S · **DONE**
 
 [`zephyr/cogs/voice_tts.py`](../zephyr/cogs/voice_tts.py) stores the language as
 `self.tts_language` on the cog instance (line 21), read at line 54 and written at line 71.
@@ -498,7 +497,7 @@ have the shape for this.
 **Done when:** two servers can hold two different TTS languages at once, and the choice
 survives a restart.
 
-### 13.4 — `command_prefix="/"` collides with the slash surface · S
+### 13.4 — `command_prefix="/"` collides with the slash surface · S · **DONE**
 
 [`zephyr/client.py`](../zephyr/client.py) line 42 sets `command_prefix="/"`, so **every
 message beginning with a slash is also parsed as a prefix command**. A user who mistypes
@@ -519,7 +518,7 @@ an explicit `Intents` set naming only what is used — `guilds`, `members`, `mes
 **Done when:** a mistyped slash command is handled by Discord rather than the prefix parser,
 `/help` has one implementation, and the intent set is enumerated rather than `.all()`.
 
-### 13.5 — AI quota accounting is per-process and lost on restart · M
+### 13.5 — AI quota accounting is per-process and lost on restart · M · **DONE**
 
 The Gemini rate-limit state — `model_request_windows`, `model_token_windows`,
 `model_daily_requests`, `model_cooldowns`, `model_usage_totals` — is five module-level dicts
@@ -543,7 +542,7 @@ unset. Key daily counts on the UTC date so they expire themselves.
 **Done when:** restarting the bot does not reset the daily count, and `/token` and the
 dashboard agree.
 
-### 13.6 — The bot does not react to an emptying voice channel · S
+### 13.6 — The bot does not react to an emptying voice channel · S · **DONE**
 
 There is no `on_voice_state_update` listener in
 [`zephyr/cogs/music.py`](../zephyr/cogs/music.py). When the last human leaves, playback
