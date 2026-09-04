@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { airQualityLabel, heatAdvisory, weatherGlyph } from '../lib/weather-icons'
 import type { WeatherGlyph } from '../lib/weather-icons'
-import { BackLink, CapsuleToast, GlassSurface, LargeTitleHeader, ListGroup, ListRow, PressableButton, Skeleton } from '../components/ios'
+import { CapsuleToast, GlassSurface, LargeTitleHeader, ListGroup, ListRow, PressableButton, Skeleton } from '../components/ios'
 import { CloudIcon, RainIcon, SunCloudIcon, SunIcon } from '../components/icons'
 import { ErrorNote } from '../components/ErrorNote'
 import { useTheme } from '../lib/theme-context'
@@ -187,6 +187,6 @@ export function Weather() {
       </div>
     </>}
 
-    <BackLink to="/">Back home</BackLink>
+    
   </main>
 }

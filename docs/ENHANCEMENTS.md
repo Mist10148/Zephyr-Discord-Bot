@@ -31,11 +31,11 @@ running code, and every defect in Phase 13 was confirmed in the source rather th
 
 | Phase | Theme | Status |
 |---|---|---|
-| A–F | Surface unused API data, code-splitting, PWA, a11y basics | Shipped; **A3** done with 9.3, **F4** and **E5** open |
+| A–F | Surface unused API data, code-splitting, PWA, a11y basics | Shipped; **A3** with 9.3, **F4** with Phase 11; only **E5** open |
 | **8** | **UX correctness — dead and misbehaving controls** | **Shipped** |
 | **9** | **Feedback layer and display vocabulary** | **Shipped** (with **A3**) |
 | **10** | **Layout, density and loading states** | **Shipped** |
-| **11** | **Navigation and information architecture** | **Not started** |
+| **11** | **Navigation and information architecture** | **Shipped** (with **F4**) |
 | **12** | **Public site layer** | **Not started** |
 | **13** | **Bot correctness and observability** | **Not started** |
 | **14** | **Bot functionality gaps** | **Not started** |
@@ -43,7 +43,7 @@ running code, and every defect in Phase 13 was confirmed in the source rather th
 | **16** | **Discord-side presentation** | **Not started** |
 | **17** | **Code quality and infrastructure** | **17.3 shipped**, rest not started |
 
-**Phases 8, 9 and 10 are shipped.** Next is **13.1 and 13.2** — they are why every bot bug after
+**Phases 8 to 11 are shipped.** Next is **13.1 and 13.2** — they are why every bot bug after
 them is hard to find.
 
 One note carried out of Phase 8 for the phases that follow: the frontend suite now has a
@@ -306,7 +306,7 @@ arrives.
 
 Four S-sized fixes and one M.
 
-### 11.1 — `/commands` is unreachable · S · ✅
+### 11.1 — `/commands` is unreachable · S · ✅ · **DONE**
 
 The command reference — 73 commands, shipped as **C10** — has **no entry point in the UI**.
 It is absent from `TABS` in [`components/TabBar.tsx`](../website/frontend/src/components/TabBar.tsx),
@@ -318,26 +318,26 @@ palette can reach it.
 **Fix:** add it to the top-bar nav and the home feature grid. Taking the `/kitchen-sink`
 slot is the natural swap — see 11.4.
 
-### 11.2 — One destination, two names · S · ✅
+### 11.2 — One destination, two names · S · ✅ · **DONE**
 
 `/settings` is labelled **"Appearance"** in the top bar and **"System"** in the tab bar.
 Pick one. "Appearance" describes the contents; "System" does not.
 
-### 11.3 — Back links on top-level destinations · S · ✅
+### 11.3 — Back links on top-level destinations · S · ✅ · **DONE**
 
 `/weather` and `/commands` are primary tab destinations, and both end with
 `<BackLink to="/">Back home</BackLink>` while the tab bar is showing Home. A back
 affordance on a root destination reads as a bug. Keep `BackLink` on guild sub-pages, where
 it is correct.
 
-### 11.4 — The design-system page is a public headline feature · S · ✅
+### 11.4 — The design-system page is a public headline feature · S · ✅ · **DONE**
 
 [`routes/Home.tsx`](../website/frontend/src/routes/Home.tsx) gives `/kitchen-sink` one of
 three cards on the landing page, selling an internal review surface to prospective users.
 The route stays — it is the design contract — but not as a third of the hero grid. Replace
 that card with Commands or Music and demote `/kitchen-sink` to a footer or `/settings` link.
 
-### 11.5 — `/commands` needs in-page navigation · M · ✅
+### 11.5 — `/commands` needs in-page navigation · M · ✅ · **DONE**
 
 [`routes/Commands.tsx`](../website/frontend/src/routes/Commands.tsx) renders 73 rows across
 every category as one long scroll with no category jump list and no result count. Aliases
@@ -768,7 +768,7 @@ reverse — so this is one list rather than two, ordered by value per hour.
 12. **10.2, 10.3, 11.5, 12.5–12.7, 14.1, 14.3–14.5, 16.2, 17.3, 17.4** — by appetite.
 13. **Phase 15** — new features, once the corrections above are done. Each needs a product
     decision first.
-14. **F4** — the last open original backend item. **A3** shipped with 9.3.
+14. ~~**F4**~~ — shipped with Phase 11. **A3** shipped with 9.3.
 
 **E5 (the SSE player stream) is deliberately deferred to its own branch**, and the
 blocker is deployment rather than code. `Procfile` runs gunicorn with **default sync

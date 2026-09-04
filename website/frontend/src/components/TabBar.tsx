@@ -11,7 +11,9 @@ const TABS = [
   { to: '/', label: 'Home', Icon: TabHomeIcon, end: true },
   { to: '/weather', label: 'Weather', Icon: TabWeatherIcon },
   { to: '/g', label: 'Servers', Icon: TabServersIcon },
-  { to: '/settings', label: 'System', Icon: TabSystemIcon },
+  // "Appearance" describes what the page contains; "System" did not, and the
+  // top bar was already calling it that. One destination, one name.
+  { to: '/settings', label: 'Appearance', Icon: TabSystemIcon },
 ]
 
 export function TabBar() {

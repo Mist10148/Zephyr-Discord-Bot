@@ -16,6 +16,10 @@ from zephyr.services import bridge
 
 # Applied when a guild has no row yet, which is the normal state until somebody
 # saves settings.  Reported with defaults_applied so the UI can say so.
+# The writers only ever set these two, so an unknown value is a client bug
+# rather than something to pass through to a LIKE.
+AUDIT_SOURCES = {"web", "discord"}
+
 DEFAULT_SETTINGS = {
     "prefix": "/",
     "locale": "en",
@@ -214,7 +218,24 @@ def guild_audit(guild_id: str):
     except ValueError as exc:
         return error("invalid_query", f"{exc.args[0]} must be a positive integer.", 400)
 
-    kwargs = {"database_url": current_app.config["DATABASE_URL"], "before_id": before}
+    # Allow-listed rather than free text. `action` reaches a LIKE prefix, and
+    # `source` and `actor_id` reach equality; bounding the length and shape keeps
+    # a caller from turning the endpoint into a table scan with a 4KB pattern.
+    action = (request.args.get("action") or "").strip()[:64] or None
+    actor = (request.args.get("actor_id") or "").strip()[:32] or None
+    source = (request.args.get("source") or "").strip()[:16] or None
+    if actor is not None and not actor.isdigit():
+        return error("invalid_query", "actor_id must be a Discord id.", 400)
+    if source is not None and source not in AUDIT_SOURCES:
+        return error("invalid_query", f"source must be one of {', '.join(sorted(AUDIT_SOURCES))}.", 400)
+
+    kwargs = {
+        "database_url": current_app.config["DATABASE_URL"],
+        "before_id": before,
+        "action": action,
+        "actor_id": actor,
+        "source": source,
+    }
     if limit is not None:
         kwargs["limit"] = limit
     try:

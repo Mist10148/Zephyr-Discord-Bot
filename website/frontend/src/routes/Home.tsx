@@ -7,7 +7,7 @@ import { FeatureDashboardIcon, FeatureSystemIcon, FeatureWeatherIcon } from '../
 const FEATURES = [
   { to: '/weather', title: 'Weather', body: 'Live conditions, a daily forecast, and heat-index advisories for any city.', Icon: FeatureWeatherIcon },
   { to: '/g', title: 'Dashboard', body: 'Sign in with Discord to manage music, alerts, AI and settings per server.', Icon: FeatureDashboardIcon },
-  { to: '/kitchen-sink', title: 'Design system', body: 'The glass primitives this whole interface is built from.', Icon: FeatureSystemIcon },
+  { to: '/commands', title: 'Commands', body: 'Every slash and prefix command Zephyr answers, searchable by name or alias.', Icon: FeatureSystemIcon },
 ]
 
 export function Home() {

@@ -31,6 +31,7 @@ export function AppShell({ children, onOpenPalette }: { children: ReactNode; onO
           <div className="appbar-spacer" />
           <nav className="appbar-nav">
             {inDashboard && <Link to="/g" className="nav-link">Servers</Link>}
+            {pathname !== '/login' && <Link to="/commands" className="nav-link">Commands</Link>}
             {pathname !== '/login' && <Link to="/settings" className="nav-link">Appearance</Link>}
             {/* ⌘K on its own is a secret. The pill makes the shortcut discoverable
                 and gives pointer users a way into the palette at all. */}

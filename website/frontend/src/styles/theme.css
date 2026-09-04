@@ -483,6 +483,30 @@ a.list-row:hover, button.list-row:hover { background: var(--surface-2); text-dec
 }
 .chip.warn { background: color-mix(in oklab, var(--danger) 14%, transparent); color: var(--danger); font-weight: 600; }
 .chip-strip { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 20px; }
+/* The category jump list. Sticky under the top bar so it stays reachable
+   however far down 73 rows you are, and a horizontal scroll rather than a wrap
+   so its height never changes as the filter narrows the set. */
+.category-chips {
+  position: sticky; top: 62px; z-index: 11;
+  display: flex; gap: 8px; overflow-x: auto;
+  margin: 0 0 12px; padding: 8px 0;
+  background: linear-gradient(var(--bg) 70%, transparent);
+  scrollbar-width: none;
+}
+.category-chips::-webkit-scrollbar { display: none; }
+.category-chip { flex: none; text-decoration: none; transition: background var(--dur) var(--ease), color var(--dur) var(--ease); }
+.category-chip:hover { background: var(--accent-soft); color: var(--accent-strong); }
+/* The chips are anchors, so the browser scrolls the section under the sticky
+   row unless the section reserves that space itself. */
+.command-section { scroll-margin-top: 116px; }
+.command-aliases { color: var(--text-faint); }
+
+/* The audit filters. A row rather than a form: nothing is submitted, each
+   change is its own query. Capped to the row measure so it lines up with the
+   list it filters. `.field` already supplies the stacked label and its type, so
+   only the row itself and the control width are new here. */
+.audit-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; max-width: var(--measure-rows); margin-bottom: 16px; }
+.audit-filters select { min-width: 150px; }
 
 /* ---- Toggle ----------------------------------------------------------------- */
 .toggle {
@@ -1145,7 +1169,8 @@ select.text-input { appearance: auto; }
   .text-input, .search-input, .slider, [cmdk-item],
   .theme-toggle, .nav-link, .palette-trigger, .back-link,
   .guild-nav .pill, .tab-bar a, .brand,
-  .place-chip-name, .place-chip-remove, .toast-dismiss, .toast-action
+  .place-chip-name, .place-chip-remove, .toast-dismiss, .toast-action,
+  .category-chip
 ):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
