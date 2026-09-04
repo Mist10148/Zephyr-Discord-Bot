@@ -85,7 +85,7 @@ HELP_CATEGORIES = [
         title="Music — Effects & Audio",
         commands=[
             HelpEntry("/volume <0-1000>", "Set the player volume"),
-            HelpEntry("/bassboost <dB>", "Boost or cut bass (use 'reset' to disable)"),
+            HelpEntry("/bass_boost  /  /bassboost <dB>", "Boost or cut bass (use 'reset' to disable)"),
             HelpEntry("/pitch <0.5-2.0>", "Adjust pitch (use 'reset' to reset)"),
             HelpEntry("/nightcore", "Toggle nightcore mode"),
             HelpEntry("/vaporwave", "Toggle vaporwave mode"),
@@ -137,6 +137,8 @@ HELP_CATEGORIES = [
             HelpEntry("/weather-subs", "List this server's weather subscriptions"),
             HelpEntry("/weather-unsubscribe <id>", "Remove a subscription"),
             HelpEntry("/weather-preview <id>", "Show what a subscription would post right now"),
+            HelpEntry("/weather-run <id>", "Send a subscription's next post right now"),
+            HelpEntry("/weather-snooze <id> <duration>", "Mute a subscription for a while without deleting it"),
         ],
     ),
     HelpCategory(
@@ -161,6 +163,8 @@ HELP_CATEGORIES = [
             HelpEntry("/token", "Show Gemini usage stats"),
             HelpEntry("/image-gen <prompt>", "Generate an image with Gemini"),
             HelpEntry("/generate <prompt>", "Generate an image (legacy)"),
+            HelpEntry("/summarize", "Privately summarize recent messages in this channel"),
+            HelpEntry("/translate <text> <language>", "Translate text into another language"),
         ],
     ),
     HelpCategory(
