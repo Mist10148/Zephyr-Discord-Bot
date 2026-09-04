@@ -39,7 +39,7 @@ running code, and every defect in Phase 13 was confirmed in the source rather th
 | **12** | **Public site layer** | **Shipped** |
 | **13** | **Bot correctness and observability** | **Shipped** |
 | **14** | **Bot functionality gaps** | **Shipped** |
-| **15** | **New bot features** | **15.1–15.5 shipped**, rest in progress |
+| **15** | **New bot features** | **15.1–15.6 shipped**, 15.7–15.8 remaining |
 | **16** | **Discord-side presentation** | **Not started** |
 | **17** | **Code quality and infrastructure** | **17.3 shipped**, rest not started |
 
@@ -642,7 +642,7 @@ reuse — the top three are mostly wiring.
 | 15.3 ✅ | **Moderation commands + modlog** | [`zephyr/db/audit.py`](../zephyr/db/audit.py) and the dashboard audit screen, which would gain real content | L |
 | 15.4 ✅ | **Skip-vote, DJ-only lock, 24/7 mode** | DJ roles are already modelled (`dj_role_id`, `reload_dj_roles`) | M |
 | 15.5 ✅ | **Welcome / farewell messages** | `on_guild_join` exists; needs per-guild config the dashboard can edit | M |
-| 15.6 | **Starboard / highlights** | `guild_settings` plus one reaction listener | M |
+| 15.6 ✅ | **Starboard / highlights** | `guild_settings` plus one reaction listener | M |
 | 15.7 | **Activity stats or leveling** | Feeds 12.7's analytics and the still-empty dashboard activity feed (F5) | L |
 | 15.8 | **Tags / custom responses** | Natural pairing with the existing persona editor (C6) | M |
 

@@ -191,6 +191,15 @@ HELP_CATEGORIES = [
         ],
     ),
     HelpCategory(
+        key="starboard",
+        emoji="⭐",
+        title="Starboard",
+        commands=[
+            HelpEntry("/starboard [channel] [threshold] [emoji]", "Set up the starboard (Manage Server)"),
+            HelpEntry("/starboard-ignore <channel>", "Stop the starboard reading a channel"),
+        ],
+    ),
+    HelpCategory(
         key="moderation",
         emoji="🛡️",
         title="Moderation",
