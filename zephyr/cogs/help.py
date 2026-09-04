@@ -40,6 +40,7 @@ class HelpCog(commands.Cog):
                 "music_playlists",
                 "music_effects",
                 "music_voice",
+                "music_dj",
             ),
             title="Music Help",
             color=discord.Color.blurple(),
