@@ -162,7 +162,7 @@ DISCORD_INVITE_PERMISSIONS = os.getenv("DISCORD_INVITE_PERMISSIONS", "3197952")
 
 # Single source of truth for the cog list: the bot loads these, and the web tier
 # reports them as a guild's default enabled_cogs without importing the client.
-ENABLED_COGS = ("weather", "weather_alerts", "music", "voice_tts", "chat", "help")
+ENABLED_COGS = ("weather", "weather_alerts", "music", "voice_tts", "chat", "help", "privacy")
 
 # The prefix for the 13 classic text commands.
 #
