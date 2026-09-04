@@ -152,6 +152,36 @@ export function WidgetGrid({ children, className = '' }: { children: ReactNode; 
 
 // The shimmer needs no prefers-reduced-motion branch: theme.css already forces
 // animation-duration to .01ms on everything under that query.
-export function Skeleton({ lines = 3 }: { lines?: number }) {
-  return <div className="skeleton" aria-busy="true">{Array.from({ length: lines }, (_, index) => <i key={index} />)}</div>
+/** A placeholder shaped like the thing that is loading.
+ *
+ * D7 was marked shipped while this rendered `lines` identical bars for every
+ * screen, and the two heaviest pages plus the route-level Suspense fallback all
+ * asked for `lines={6}` -- so the layout still jumped the moment data arrived.
+ * A placeholder whose shape does not match what replaces it is a slower
+ * reflow, not a faster one.
+ *
+ *  * `lines`       -- prose and detail rows. The original behaviour.
+ *  * `rows`        -- a ListGroup: a bordered card with hairline-separated rows.
+ *  * `cards`       -- a WidgetGrid of stat cards.
+ *  * `now-playing` -- the art tile beside two lines of metadata.
+ */
+export function Skeleton({ lines = 3, variant = 'lines', count }: { lines?: number; variant?: 'lines' | 'rows' | 'cards' | 'now-playing'; count?: number }) {
+  const items = count ?? lines
+  if (variant === 'rows') {
+    return <div className="skeleton-rows" aria-busy="true">{Array.from({ length: items }, (_, index) => (
+      <div className="skeleton-row" key={index}><i className="sk-label" /><i className="sk-value" /></div>
+    ))}</div>
+  }
+  if (variant === 'cards') {
+    return <div className="skeleton-cards" aria-busy="true">{Array.from({ length: count ?? 2 }, (_, index) => (
+      <div className="skeleton-card" key={index}><i className="sk-cap" /><i className="sk-stat" /><i className="sk-sub" /></div>
+    ))}</div>
+  }
+  if (variant === 'now-playing') {
+    return <div className="skeleton-np" aria-busy="true">
+      <i className="sk-art" />
+      <div className="sk-meta"><i className="sk-title" /><i className="sk-sub" /><i className="sk-bar" /></div>
+    </div>
+  }
+  return <div className="skeleton" aria-busy="true">{Array.from({ length: items }, (_, index) => <i key={index} />)}</div>
 }

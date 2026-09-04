@@ -31,6 +31,16 @@
   --radius-card: 22px;
   --radius-sheet: 34px;
   --radius-pill: 999px;
+  /* The measure for row-based content. `.app` is 1600px wide and every screen
+     is a single column, so on a wide monitor a `.row-label` sat at the far left
+     and its `.row-value` at the far right with ~1400px of nothing between them
+     -- the eye cannot associate the pair. Widening the shell widened the gaps
+     *inside* rows, which is the opposite of the intent.
+
+     Set once, here, because the defect hit the overview facts, settings, audit
+     rows and every ListGroup in the app. Grids are deliberately not capped:
+     width goes to gutters and grids, never to rows. */
+  --measure-rows: 760px;
 
   /* Motion — springy but restrained; the `motion` lib carries the tactile springs,
      these ease CSS state changes (hover, theme, expand). */
@@ -411,6 +421,7 @@ a.ios-button.secondary { color: var(--text); }
    Opaque on purpose. These are the densest text in the product and glass behind
    a 12px label is where legibility goes to die. */
 .list-group {
+  max-width: var(--measure-rows);
   overflow: hidden;
   border: 1px solid var(--hairline); border-radius: var(--radius-card);
   background: var(--surface-1); box-shadow: var(--shadow-card);
@@ -615,6 +626,41 @@ a.list-row:hover, button.list-row:hover { background: var(--surface-2); text-dec
 }
 .skeleton i:nth-child(3n+2) { width: 82%; }
 .skeleton i:nth-child(3n)   { width: 64%; }
+
+/* Shaped variants. Each mirrors the real layout closely enough that the swap to
+   data does not move anything: same measure, same borders, same row height. */
+.skeleton-rows {
+  max-width: var(--measure-rows); overflow: hidden;
+  border: 1px solid var(--hairline); border-radius: var(--radius-card);
+  background: var(--surface-1); box-shadow: var(--shadow-card);
+}
+.skeleton-row { display: flex; align-items: center; gap: 13px; padding: 18px 16px; border-bottom: 1px solid var(--hairline); }
+.skeleton-row:last-child { border-bottom: 0; }
+.skeleton-rows .sk-label { flex: 1 1 auto; max-width: 180px; }
+.skeleton-rows .sk-value { flex: 0 0 auto; width: 76px; }
+.skeleton-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
+.skeleton-card {
+  display: grid; gap: 10px; padding: 20px;
+  border: 1px solid var(--surface-glass-border); border-radius: var(--radius-card);
+  background: var(--surface-glass);
+}
+.skeleton-card .sk-cap { width: 84px; height: 10px; }
+.skeleton-card .sk-stat { width: 120px; height: 30px; }
+.skeleton-card .sk-sub { width: 100px; }
+.skeleton-np { display: flex; align-items: center; gap: 16px; max-width: var(--measure-rows); }
+.skeleton-np .sk-art { flex: none; width: 74px; height: 74px; border-radius: 16px; }
+.skeleton-np .sk-meta { flex: 1; min-width: 0; display: grid; gap: 9px; }
+.skeleton-np .sk-title { width: 62%; height: 20px; }
+.skeleton-np .sk-sub { width: 40%; }
+.skeleton-np .sk-bar { width: 100%; height: 6px; }
+/* Same shimmer as .skeleton i, so the variants read as one family rather than
+   three separate loading treatments. */
+:where(.skeleton-rows, .skeleton-cards, .skeleton-np) i {
+  display: block; height: 14px; border-radius: var(--radius-pill);
+  background: linear-gradient(90deg, var(--surface-2), var(--surface-3), var(--surface-2));
+  background-size: 600px 100%;
+  animation: shimmer 1.5s linear infinite;
+}
 @keyframes shimmer { 0% { background-position: -260px 0; } 100% { background-position: 340px 0; } }
 
 /* ---- Inputs ----------------------------------------------------------------- */
@@ -987,6 +1033,36 @@ select.text-input { appearance: auto; }
 /* A plain --surface-2 tile with an icon. The diagonal hatch and the 8px mono
    type were there to make the words "track art" fit, which is not a thing a
    placeholder should be doing. */
+/* The music page's third arrangement. It stacked nine control groups in one
+   column at every width, so on a desktop the queue sat permanently below the
+   fold while half the viewport was empty.
+
+   `display: contents` at narrow widths is what makes this additive: the wrapper
+   disappears, the children flow in DOM order exactly as before, and the 860px
+   arrangement is untouched. The wide layout then *places* the three groups
+   rather than reordering them, so the search field stays at the top of the
+   phone layout while sitting in the right column on a desktop.
+
+   1200px is a genuinely new breakpoint -- the existing min-width:1200px rule is
+   padding-only -- so the 860px one keeps its meaning. */
+.music-columns { display: contents; }
+.music-col-player > *:first-child, .music-col-queue > *:first-child { margin-top: 0; }
+
+@media (min-width: 1200px) {
+  .music-columns {
+    display: grid; align-items: start;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    column-gap: 30px;
+  }
+  .music-columns > .music-search { grid-column: 2; grid-row: 1; }
+  .music-columns > .music-col-player { grid-column: 1; grid-row: 1 / span 2; }
+  .music-columns > .music-col-queue { grid-column: 2; grid-row: 2; }
+  /* The cap exists so label/value pairs read as pairs. Inside a half-width
+     column the column *is* the measure, and keeping 760px there would leave a
+     second gap for no reason. */
+  .music-columns .list-group, .music-columns .skeleton-rows { max-width: none; }
+}
+
 .art-placeholder {
   display: grid; place-items: center; flex: none;
   width: 74px; height: 74px; border-radius: 16px;
