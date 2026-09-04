@@ -79,6 +79,15 @@ class _LazyClient:
         object.__setattr__(self, "_resolve", resolve)
 
     def __getattr__(self, name):
+        # A dunder probe must never build a client. A forwarding proxy answers
+        # *any* attribute, so `hasattr(obj, "__cog_app_commands__")` -- which
+        # `copy`, `pickle`, pytest's assertion rewriting and every duck-typing
+        # check in the ecosystem do constantly -- would open a network client
+        # and, with no API key configured, raise from inside an unrelated
+        # `getattr`. That is exactly what happened: a test scanning a module's
+        # names for cogs constructed a Gemini client.
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
         return getattr(object.__getattribute__(self, "_resolve")(), name)
 
 

@@ -33,16 +33,22 @@ def _every_cog_command():
     """
     import importlib
 
+    from discord.ext import commands as ext_commands
+
     found = []
     for name in ENABLED_COGS:
         module = importlib.import_module(f"zephyr.cogs.{name}")
         for value in vars(module).values():
-            commands = getattr(value, "__cog_app_commands__", None)
-            if commands is None:
+            # Classes only. Probing every module-level name with `getattr` is
+            # what it looks like it should be, and it is not: `gemini`'s lazy
+            # client is a forwarding proxy that answers any attribute, so
+            # asking it for `__cog_app_commands__` built a real Gemini client
+            # and raised in CI, where there is no API key.
+            if not isinstance(value, type) or not issubclass(value, ext_commands.Cog):
                 continue
-            if getattr(value, "__module__", "") != module.__name__:
+            if value.__module__ != module.__name__:
                 continue
-            found.extend(commands)
+            found.extend(getattr(value, "__cog_app_commands__", ()))
     return found
 
 
@@ -123,6 +129,34 @@ class TestTheDocumentedCounts:
 # ---------------------------------------------------------------------------
 # Derivation
 # ---------------------------------------------------------------------------
+
+
+class TestTheLazyClientIsNotProbeable:
+    """A regression guard for what this file's own fixture tripped.
+
+    `gemini`'s lazy client is a forwarding proxy, so before this it answered
+    *any* attribute by constructing a real Gemini client. A test scanning a
+    module's names for cogs therefore opened a network client and raised in CI,
+    where there is no API key -- and so would `copy`, `pickle`, or any
+    duck-typing `hasattr` in the ecosystem.
+    """
+
+    def test_a_dunder_probe_does_not_build_a_client(self):
+        from zephyr.services import gemini
+
+        assert not hasattr(gemini.gemini_async_client, "__cog_app_commands__")
+        assert gemini._client is None
+
+    def test_a_real_attribute_still_forwards(self, monkeypatch):
+        """The guard must not break the proxy it is protecting."""
+        from types import SimpleNamespace
+
+        from zephyr.services import gemini
+
+        monkeypatch.setattr(gemini, "get_gemini_client", lambda: SimpleNamespace(models="M"))
+        proxy = gemini._LazyClient(gemini.get_gemini_client)
+
+        assert proxy.models == "M"
 
 
 class TestTreeNames:
