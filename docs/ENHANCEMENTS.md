@@ -1,15 +1,17 @@
-# Zephyr Web — Enhancement Backlog
+# Zephyr — Enhancement Backlog
 
-A prioritised, phased list of UX/UI work for the dashboard and the public site, written
-to be picked up and implemented directly.
+A prioritised, phased list of the outstanding work across the whole project — the dashboard
+and public site (Phases 8–12) and the Discord bot itself (Phases 13–17) — written to be
+picked up and implemented directly.
 
 Read [DESIGN.md](DESIGN.md) for the design-system rules and [SCREENS.md](SCREENS.md) for
-what each screen currently contains. **Every item here must respect the rules in
+what each screen currently contains. **Every web item here must respect the rules in
 DESIGN.md** — tokens not literals, `data-glass` on frosted surfaces, hooks in `.ts`
 files, specs in `test/` not `src/`, and any new primitive added to `/kitchen-sink`.
 
 **Effort key:** S = under an hour · M = half a day · L = a day or more
-**Backend:** ✅ = the API already returns everything needed · ⚠️ = needs Flask/bot work
+**Backend:** ✅ = the API already returns everything needed · ⚠️ = needs Flask/bot work.
+The marker applies to the web phases only; Phases 13–17 are bot-side by definition.
 
 Phase numbering continues [WEB_DASHBOARD_PLAN.md](WEB_DASHBOARD_PLAN.md) §6, which ends at
 Phase 7 (hardening).
@@ -23,6 +25,10 @@ from three backend items. That work was about rendering data the API already ret
 What remains is a different class of problem: controls that do not work, actions that give
 no feedback, machine values shown raw, and a layout that only really works at phone width.
 
+**Phases 13–17 are new**, and cover the half of the project this document has never
+described: the bot. They were written after an audit of [`zephyr/`](../zephyr) against the
+running code, and every defect in Phase 13 was confirmed in the source rather than inferred.
+
 | Phase | Theme | Status |
 |---|---|---|
 | A–F | Surface unused API data, code-splitting, PWA, a11y basics | Shipped, except **A3**, **F4**, **E5** |
@@ -31,8 +37,23 @@ no feedback, machine values shown raw, and a layout that only really works at ph
 | **10** | **Layout, density and loading states** | **Not started** |
 | **11** | **Navigation and information architecture** | **Not started** |
 | **12** | **Public site layer** | **Not started** |
+| **13** | **Bot correctness and observability** | **Not started** |
+| **14** | **Bot functionality gaps** | **Not started** |
+| **15** | **New bot features** | **Not started** |
+| **16** | **Discord-side presentation** | **Not started** |
+| **17** | **Code quality and infrastructure** | **Not started** |
 
-**Do Phase 8 first.** Those are bugs a user hits on the two most-used screens.
+**Do Phase 8 first**, then **13.1 and 13.2**. Phase 8 is bugs a user hits on the two
+most-used screens; 13.1 and 13.2 are why every bot bug after them is hard to find.
+
+### Baseline, as audited
+
+What already works, so nothing here is spent re-checking it: **553 Python tests pass**, and
+CI covers the backend suite, frontend lint / typecheck / test / build, and a Docker build.
+The security posture of [`website/`](../website) — CSP, session handling, CSRF, cache
+headers — is in good shape and no item below touches it, apart from the two unguarded
+surfaces already recorded as **12.5** (soft 404s) and **12.6** (rate limiting on `/player`
+only). Both were re-confirmed during the bot audit.
 
 ---
 
@@ -406,17 +427,334 @@ widened deliberately.
 
 ---
 
+# Phase 13 — Bot correctness and observability
+
+The bot side has never been in this document. These six are the equivalent of Phase 8:
+defects a user or an operator hits, each with one correct answer. **13.1 and 13.2 are the
+two highest-value items in the whole backlog** — until they land, every other bot defect is
+diagnosed by guesswork.
+
+### 13.1 — Slash commands have no error handler at all · M
+
+[`zephyr/client.py`](../zephyr/client.py) registers no `on_app_command_error` and no
+`tree.on_error`. The only handler in the package is `MusicCog.cog_command_error`
+([`zephyr/cogs/music.py`](../zephyr/cogs/music.py) line 1510) — which is the
+**prefix-command** hook taking a `commands.Context`, not the app-command one, so it never
+fires for any of the 75 slash commands.
+
+An unhandled exception inside a slash command therefore produces "The application did not
+respond" or a silent failure, with nothing written anywhere. Every cog is affected.
+
+**Fix:** one `tree.error` handler on `ZephyrBot`, plus `on_command_error` for the prefix
+surface. Branch on the cases that are the user's fault and answer them plainly —
+`CommandOnCooldown` (say how long), `MissingPermissions`, `CheckFailure`, `TransformerError`
+— and treat everything else as a bug: log the traceback via 13.2 and reply with a short
+apology carrying a correlation id. Check `interaction.response.is_done()` before replying,
+or the handler raises inside itself on any command that already deferred.
+
+**Done when:** a deliberately raised exception in any slash command produces a visible
+message to the user and a full traceback in the log, and no command can fail silently.
+
+### 13.2 — Nothing in the bot logs, and no traceback is ever kept · M
+
+`logging` is not imported anywhere in [`zephyr/`](../zephyr). There are **65 `print()`
+calls**, and the **68** `except Exception as e` blocks almost all print `str(e)` — so the
+stack is discarded at the point of failure. What reaches the operator is a bare sentence
+with no timestamp, no level, no module and no line number.
+
+This is the root cause of the project's debuggability problem: 13.1 has nowhere to send a
+traceback, 12.7 has nothing to ship to error tracking, and a Render log stream cannot be
+filtered or levelled.
+
+**Fix:** a `zephyr/core/logging.py` configuring the root logger once (level from `LOG_LEVEL`,
+plain format locally and JSON in the cloud), called from [`run_bot.py`](../run_bot.py) and
+[`run_web.py`](../run_web.py). Replace `print()` with a module-level
+`log = logging.getLogger(__name__)`, and every `print(f"...{e}")` with `log.exception(...)`,
+which captures the stack automatically inside an `except`. Keep the deliberate startup
+banner in `setup_hook` as prints; that is UI, not logging.
+
+**Done when:** no `print()` remains outside the startup banner, and an exception raised in a
+cog appears in the log with its full traceback.
+
+### 13.3 — `/language` changes TTS for every server at once · S
+
+[`zephyr/cogs/voice_tts.py`](../zephyr/cogs/voice_tts.py) stores the language as
+`self.tts_language` on the cog instance (line 21), read at line 54 and written at line 71.
+The cog is a singleton, so one user running `/language fr` switches the voice for **every
+guild the bot is in**, silently, until the next restart.
+
+**Fix:** move it into guild settings alongside the other per-guild values in
+[`zephyr/db/guild_settings.py`](../zephyr/db/guild_settings.py), keyed by guild id with a
+DM fallback keyed by user. The settings loader and the dashboard settings screen already
+have the shape for this.
+
+**Done when:** two servers can hold two different TTS languages at once, and the choice
+survives a restart.
+
+### 13.4 — `command_prefix="/"` collides with the slash surface · S
+
+[`zephyr/client.py`](../zephyr/client.py) line 42 sets `command_prefix="/"`, so **every
+message beginning with a slash is also parsed as a prefix command**. A user who mistypes
+`/pley` raises `CommandNotFound` on a code path with no handler (13.1), and the 13 real
+prefix commands are indistinguishable from the 75 slash commands in the client UI.
+
+Two smaller things in the same constructor:
+
+- Line 44 registers `commands.DefaultHelpCommand` while [`zephyr/cogs/help.py`](../zephyr/cogs/help.py)
+  provides the real help surface — two help implementations, one of them unstyled.
+- Line 40 requests `discord.Intents.all()`, which includes privileged intents the cogs never
+  read and which must each be justified for verification past 100 guilds.
+
+**Fix:** a distinct prefix (`z!`, or the per-guild value from 14.1), `help_command=None`, and
+an explicit `Intents` set naming only what is used — `guilds`, `members`, `message_content`,
+`voice_states`.
+
+**Done when:** a mistyped slash command is handled by Discord rather than the prefix parser,
+`/help` has one implementation, and the intent set is enumerated rather than `.all()`.
+
+### 13.5 — AI quota accounting is per-process and lost on restart · M
+
+The Gemini rate-limit state — `model_request_windows`, `model_token_windows`,
+`model_daily_requests`, `model_cooldowns`, `model_usage_totals` — is five module-level dicts
+in [`zephyr/services/gemini.py`](../zephyr/services/gemini.py) (lines 110–117). The
+image-generation cooldowns and cache are four more in
+[`zephyr/cogs/chat.py`](../zephyr/cogs/chat.py) (lines 51–54).
+
+Consequences, all real on the free-tier key this project runs on:
+
+- A restart hands out a **fresh daily allowance the key does not have**, so the next burst
+  hits Google's 429 rather than the local limiter that exists to prevent exactly that.
+- The bot process and the web process each keep their own copy, so `/token` in Discord and
+  the AI panel in the dashboard report different numbers for the same key.
+- B4's `cooldown_until` banner is therefore advisory at best.
+
+**Fix:** move the windows and daily counters into Redis — already wired through
+[`zephyr/services/redis_client.py`](../zephyr/services/redis_client.py) and already the
+transport for the bridge — keeping the in-memory dicts as the fallback when `REDIS_URL` is
+unset. Key daily counts on the UTC date so they expire themselves.
+
+**Done when:** restarting the bot does not reset the daily count, and `/token` and the
+dashboard agree.
+
+### 13.6 — The bot does not react to an emptying voice channel · S
+
+There is no `on_voice_state_update` listener in
+[`zephyr/cogs/music.py`](../zephyr/cogs/music.py). When the last human leaves, playback
+continues to an empty channel until the idle timer eventually fires, burning bandwidth and
+an FFmpeg process for as long as the queue lasts.
+
+**Fix:** listen for the event; when the bot is alone, pause and start a short grace timer
+(~60s) before disconnecting, cancelling it if someone rejoins. Announce the disconnect in the
+notify channel the way the idle timeout already does. Handle the inverse too — being
+force-moved or disconnected by a moderator should tear the `VoiceState` down rather than
+leave a stale entry in `self.voice_states`.
+
+**Done when:** the bot leaves an empty channel within a minute, resumes cleanly if someone
+returns first, and a server-side disconnect leaves no orphaned voice state.
+
+---
+
+# Phase 14 — Bot functionality gaps
+
+Capability the bot is missing relative to what its own dashboard already does.
+
+### 14.1 — The prefix is hardcoded · M
+
+Follows 13.4. Once the prefix is no longer `/`, it should be per-guild and editable from
+[`routes/GuildSettings.tsx`](../website/frontend/src/routes/GuildSettings.tsx), which already
+edits every other guild-scoped value. `command_prefix` accepts a callable, so this is a
+settings lookup rather than a restructure.
+
+### 14.2 — No autocomplete on any command · M
+
+`/play` takes a free-text string; `/setlocation` and the weather commands take raw city
+names. `app_commands.autocomplete` would surface live search results, the user's saved
+playlists ([`zephyr/db/playlists.py`](../zephyr/db/playlists.py)) and their recent locations
+directly in the Discord client. This is the largest single ergonomics gain available on the
+Discord side and every data source for it already exists.
+
+Autocomplete callbacks must answer within 3 seconds, so cache the geocode and search lookups
+rather than calling upstream per keystroke — the same mistake 8.3 fixes on the web.
+
+### 14.3 — The queue is richer on the web than in Discord · M
+
+The dashboard can drag-reorder, clear, jump and remove (C1–C5); the bot has bridge handlers
+for all of it — `_bridge_move`, `_bridge_jump`, `_bridge_remove`, `_bridge_clear` in
+[`zephyr/cogs/music.py`](../zephyr/cogs/music.py) — but no paginated queue view exposing
+them to Discord users. [`zephyr/utils/pagination.py`](../zephyr/utils/pagination.py) already
+exists.
+
+**Done when:** the queue can be reordered and trimmed from Discord without opening the site.
+
+### 14.4 — AI chat gaps · M
+
+Four separate items across [`zephyr/services/gemini.py`](../zephyr/services/gemini.py) and
+[`zephyr/cogs/chat.py`](../zephyr/cogs/chat.py):
+
+- **No per-channel opt-out.** The mention/reply handler in
+  [`zephyr/client.py`](../zephyr/client.py) responds anywhere the bot can read. An allow or
+  deny list of channels belongs in guild settings.
+- **No per-user token budget.** Limits are per model, not per user, so one person can consume
+  a guild's whole daily allowance.
+- **Responses arrive as one block.** Gemini streams; editing a message progressively would
+  remove the dead air on long answers.
+- **Attachments are ignored.** The models in use accept images; a replied-to image should be
+  passed as context.
+
+Treat these as four independent paths rather than one tool-using agent: on the free-tier key
+the 2.5 models cannot combine most tools in a single request.
+
+### 14.5 — Weather subscriptions cannot be paused or tested · S
+
+[`zephyr/db/weather_subs.py`](../zephyr/db/weather_subs.py) models enable/disable but there
+is no snooze (mute until a date) and no "run this one now", so a user setting up a digest
+cannot see what it will look like without waiting for the schedule. Both are small additions
+to [`zephyr/cogs/weather_alerts.py`](../zephyr/cogs/weather_alerts.py) and
+[`website/api/weather_subs.py`](../website/api/weather_subs.py).
+
+### 14.6 — Single process, no sharding · L
+
+`ZephyrBot` is a plain `commands.Bot`. Discord requires sharding past ~2500 guilds and
+`AutoShardedBot` is close to a drop-in — but the module-level state in 13.5 and
+`self.voice_states` both assume one process, so 13.5 is a prerequisite. Not urgent; recorded
+so the constraint is visible before it becomes urgent.
+
+---
+
+# Phase 15 — New bot features
+
+Unlike Phases 8–14, these are additions rather than corrections, so each needs a product
+decision before it needs an implementation. Ordered by how much existing machinery they
+reuse — the top three are mostly wiring.
+
+| # | Feature | What it reuses | Effort |
+|---|---|---|---|
+| 15.1 | **`/remindme` and a reminder list** | The scheduler and durable job loop in [`zephyr/cogs/weather_alerts.py`](../zephyr/cogs/weather_alerts.py), plus a table alongside [`weather_subs`](../zephyr/db/weather_subs.py) | M |
+| 15.2 | **`/export-my-data`, `/delete-my-data`** | The AI memory purge already implements deletion for the largest data category; this is the self-service path 12.2 needs | M |
+| 15.3 | **Moderation commands + modlog** | [`zephyr/db/audit.py`](../zephyr/db/audit.py) and the dashboard audit screen, which would gain real content | L |
+| 15.4 | **Skip-vote, DJ-only lock, 24/7 mode** | DJ roles are already modelled (`dj_role_id`, `reload_dj_roles`) | M |
+| 15.5 | **Welcome / farewell messages** | `on_guild_join` exists; needs per-guild config the dashboard can edit | M |
+| 15.6 | **Starboard / highlights** | `guild_settings` plus one reaction listener | M |
+| 15.7 | **Activity stats or leveling** | Feeds 12.7's analytics and the still-empty dashboard activity feed (F5) | L |
+| 15.8 | **Tags / custom responses** | Natural pairing with the existing persona editor (C6) | M |
+
+**15.2 is the only item here that unblocks something else** — schedule it with 12.2, since
+Discord verification wants a stated deletion path and this is the self-service version of it.
+
+---
+
+# Phase 16 — Discord-side presentation
+
+The web has [DESIGN.md](DESIGN.md). The bot's output has no equivalent, and it shows.
+
+### 16.1 — Every cog builds embeds its own way · M
+
+Weather, music and AI each pick their own colours, footer text and timestamp conventions, so
+the bot reads as three bots sharing an avatar.
+
+**Fix:** one embed factory in [`zephyr/utils/`](../zephyr/utils) carrying the accent palette,
+a consistent footer and the bot icon; route every `discord.Embed(...)` construction through
+it. This is also the natural home for the error embed 13.1 needs.
+
+**Done when:** no cog constructs `discord.Embed` directly.
+
+### 16.2 — Ephemeral responses are inconsistent · S
+
+Errors and settings confirmations are ephemeral in some cogs and public in others, with no
+stated rule. Pick one — *errors and personal settings ephemeral, shared state public* — and
+apply it throughout. Today a failed `/play` can spam a busy channel while a successful
+settings change disappears from view.
+
+### 16.3 — The command list exists twice · M
+
+[`zephyr/utils/help_data.py`](../zephyr/utils/help_data.py) (257 lines) and the web command
+reference behind `GET /commands` are two hand-maintained descriptions of the same 75 slash
+and 13 prefix commands. They will drift, and the README's counts are a third copy.
+
+**Fix:** derive one from the other — walk `bot.tree` at startup and publish the result over
+the bridge, leaving `help_data.py` as the source only for prose that cannot be derived
+(categories, examples). Add a test asserting the counts match.
+
+**Done when:** adding a command updates `/help`, `/commands` and the README count without a
+second edit.
+
+---
+
+# Phase 17 — Code quality and infrastructure
+
+### 17.1 — Two files hold a third of the codebase · L
+
+[`zephyr/cogs/music.py`](../zephyr/cogs/music.py) is **2,589 lines** and holds `Track`,
+`YTDLSource`, `SongQueue`, `VoiceState`, `NowPlayingView`, twenty `_bridge_*` handlers and
+the entire command surface. [`zephyr/cogs/weather.py`](../zephyr/cogs/weather.py) is
+**1,003**. Together they are a third of the 11.4k-line Python codebase, and they are the two
+files most often edited.
+
+**Fix:** extract music into `zephyr/music/{sources,queue,state,views,bridge}.py` with the cog
+reduced to command definitions, then weather along the same lines. Do it **after** Phase 13 —
+the error-handler and logging changes touch these files, and rebasing a 2,600-line move over
+them is avoidable pain.
+
+**Done when:** no module in `zephyr/` exceeds ~600 lines and the test suite is unchanged.
+
+### 17.2 — Error tracking and uptime, bot side · M
+
+The bot half of 12.7. Once 13.2 exists, attaching Sentry (or equivalent) to the logging
+config covers both processes at once, and 13.1's handler is the natural capture point. A
+production exception in a cog is currently invisible unless someone happens to be reading the
+Render log stream at the moment it happens.
+
+### 17.3 — Two schema paths are active at once · S
+
+[`alembic.ini`](../alembic.ini) with four migrations in
+[`zephyr/db/migrations/versions/`](../zephyr/db/migrations/versions), **and** `DB_AUTO_CREATE`
+defaulting to `1` in [`zephyr/config.py`](../zephyr/config.py), which create-alls the
+metadata. Locally that is convenient; in a deployed environment it means a schema can appear
+without a migration and then diverge from one.
+
+**Fix:** keep auto-create for SQLite development only and make migrations the sole path
+whenever `DATABASE_URL` is set. State which is which in [DEPLOYMENT.md](DEPLOYMENT.md).
+
+### 17.4 — No end-to-end test on the frontend · M
+
+The frontend suite covers `lib/` helpers and the `ios/` primitives. Every defect in Phase 8
+is a *wiring* defect — a button with no `onClick`, a query keyed on the wrong value, an error
+branch never read — which unit tests on primitives cannot see. One Playwright pass over login
+→ guild → music → queue a track, plus the public weather search, would catch that entire
+class.
+
+**Fix:** add Playwright to [`website/frontend`](../website/frontend) and a fourth CI job in
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml), run against the Flask app with a
+stubbed bridge so no live bot is needed.
+
+**Done when:** a button rendered without a handler fails CI.
+
+---
+
 ## Suggested order
 
-1. **Phase 8** — the six correctness bugs. All S, all unambiguous.
-2. **9.1** — the toast host. Everything after it gets to use it, and 8.4 wants it.
-3. **9.2–9.6** — units and vocabulary; the cheapest visible quality gain in the app.
-4. **10.1** — the list measure cap. One rule, fixes every screen on desktop.
-5. **11.1–11.4** — four S-sized IA fixes.
-6. **12.1–12.4** — the public layer. 12.2 blocks Discord verification, so start it before
-   you need it.
-7. **10.2, 10.3, 11.5, 12.5–12.7** — by appetite.
-8. **A3, F4, E5** — the three original backend items, still open.
+The two tracks are independent — nothing in Phases 13–17 blocks Phases 8–12 or the
+reverse — so this is one list rather than two, ordered by value per hour.
+
+1. **Phase 8** — the six web correctness bugs. All S, all unambiguous.
+2. **13.2 then 13.1** — logging, then the slash-command error handler. In that order: the
+   handler needs somewhere to put a traceback. Everything else on the bot side is easier to
+   diagnose once these exist, and 17.2 becomes a small wiring job rather than a project.
+3. **9.1** — the toast host. Everything after it gets to use it, and 8.4 wants it.
+4. **13.3, 13.4, 13.6** — three S-sized bot fixes; 13.3 is a live cross-guild bug.
+5. **9.2–9.6** — units and vocabulary; the cheapest visible quality gain in the app.
+6. **10.1** — the list measure cap. One rule, fixes every screen on desktop.
+7. **11.1–11.4** — four S-sized IA fixes.
+8. **12.1–12.4 with 15.2** — the public layer. 12.2 blocks Discord verification and 15.2 is
+   the deletion path it has to describe, so do them together.
+9. **13.5** — durable AI quota state. Do it before 14.6 ever becomes relevant.
+10. **17.1** — split `music.py` and `weather.py`, once Phase 13 has stopped editing them.
+11. **14.2, 16.1, 16.3** — autocomplete and the presentation cleanups; the visible half of
+    the bot's polish.
+12. **10.2, 10.3, 11.5, 12.5–12.7, 14.1, 14.3–14.5, 16.2, 17.3, 17.4** — by appetite.
+13. **Phase 15** — new features, once the corrections above are done. Each needs a product
+    decision first.
+14. **A3, F4, E5** — the three original backend items, still open.
 
 ---
 
