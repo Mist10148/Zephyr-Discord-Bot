@@ -85,6 +85,23 @@ export function KitchenSink() {
       <span className="badge">Discord</span>
     </div>
 
+    {/* Removable chips, used for saved weather places. Two controls per chip:
+        the name selects, the × forgets. The active one takes the accent as well
+        as aria-current, because a screen-reader-only cue would leave a sighted
+        user with no way to tell which item is showing. Deliberately not
+        .ios-button -- an action and a saved value reading identically is the
+        defect this replaced. */}
+    <ul className="place-chips" aria-label="Removable chips">
+      <li className="place-chip" data-active>
+        <button type="button" className="place-chip-name" aria-current="true">Iloilo City</button>
+        <button type="button" className="place-chip-remove" aria-label="Remove Iloilo City">×</button>
+      </li>
+      <li className="place-chip">
+        <button type="button" className="place-chip-name">Cebu</button>
+        <button type="button" className="place-chip-remove" aria-label="Remove Cebu">×</button>
+      </li>
+    </ul>
+
     <SectionLabel>Status dots</SectionLabel>
     <div className="chip-strip">
       <span className="chip"><i className="dot ok" aria-hidden />Present</span>
