@@ -17,6 +17,7 @@ from zephyr.config import COMMAND_PREFIX, ENABLED_COGS, REDIS_URL
 from zephyr.core.opus_loader import load_opus
 from zephyr.core.errors import report as report_command_error
 from zephyr.core.ffmpeg import FFMPEG_PATH
+from zephyr.core.streaming import StreamingReply
 from zephyr.db.guild_settings import read_ai_channel_policies, read_prefixes
 from zephyr.services import bridge
 from zephyr.services.bridge import write_guild_snapshot
@@ -541,7 +542,16 @@ class ZephyrBot(commands.Bot):
                     await message.channel.send("Please provide a message when mentioning or replying to me.")
                 await self.process_commands(message)
                 return
-            response = await generate_gemini_response(server_id, user_id, final_message, image_url, channel_id=message.channel.id)
+            # The reply is shown as it arrives, then replaced by the real
+            # message. send_response still owns the final formatting -- the
+            # three output formats, the chunking and the file fallback all stay
+            # in one place, and this only replaces the waiting.
+            async with StreamingReply(message.channel) as preview:
+                response = await generate_gemini_response(
+                    server_id, user_id, final_message, image_url,
+                    channel_id=message.channel.id,
+                    on_progress=preview.update,
+                )
             await send_response(message.channel, response, message)
 
         await self.process_commands(message)

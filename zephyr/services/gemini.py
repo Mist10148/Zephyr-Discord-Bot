@@ -721,12 +721,71 @@ async def request_gemini_content(model_name, contents, system_personality):
     return await gemini_async_client.models.generate_content(model=model_name, contents=contents, config=config)
 
 
-async def try_generate_with_model(model_name, contents, input_tokens, system_personality, *, user_id=None):
+async def request_gemini_stream(model_name, contents, system_personality, on_progress):
+    """Stream a reply, reporting progress, and return a response-shaped object.
+
+    The caller wants the same three things a non-streamed response gives it --
+    the full text, the usage metadata and a place to look for a quota error --
+    so this accumulates and hands back a small stand-in rather than making
+    every downstream caller aware that streaming happened. That is what keeps
+    the model fallback chain, the quota accounting and the history writing on
+    one code path instead of two.
+
+    ``on_progress`` receives the text *so far*, and is called per chunk. It is
+    the caller's job to throttle its own side effects -- editing a Discord
+    message per chunk would be rate-limited within a second.
+    """
+    config = get_generate_config(system_personality)
+    stream = await gemini_async_client.models.generate_content_stream(
+        model=model_name, contents=contents, config=config
+    )
+
+    pieces: list[str] = []
+    usage = None
+    async for chunk in stream:
+        # The last chunk carries the usage metadata in google-genai; earlier
+        # ones may carry a partial version, so the newest non-None wins.
+        chunk_usage = getattr(chunk, "usage_metadata", None)
+        if chunk_usage is not None:
+            usage = chunk_usage
+        text = extract_response_text(chunk)
+        if not text:
+            continue
+        pieces.append(text)
+        try:
+            await on_progress("".join(pieces))
+        except Exception:
+            # A failed progress update must not lose the reply. The final send
+            # still happens; the user sees the answer arrive at once instead of
+            # progressively, which is what they got before this existed.
+            log.warning("A streaming progress update failed", exc_info=True)
+
+    return _StreamedResponse("".join(pieces), usage)
+
+
+class _StreamedResponse:
+    """Just enough of a Gemini response for the accumulated stream.
+
+    ``extract_response_text`` reads ``.text`` first, so this satisfies it
+    without pretending to be the full object.
+    """
+
+    __slots__ = ("text", "usage_metadata")
+
+    def __init__(self, text, usage_metadata):
+        self.text = text
+        self.usage_metadata = usage_metadata
+
+
+async def try_generate_with_model(model_name, contents, input_tokens, system_personality, *, user_id=None, on_progress=None):
     allowed, limit_message = await reserve_local_quota(model_name, input_tokens)
     if not allowed:
         return {"ok": False, "message": limit_message, "quota_handled": True}
     try:
-        response = await request_gemini_content(model_name, contents, system_personality)
+        if on_progress is not None:
+            response = await request_gemini_stream(model_name, contents, system_personality, on_progress)
+        else:
+            response = await request_gemini_content(model_name, contents, system_personality)
         response_text = extract_response_text(response) or "I could not generate a response."
         usage = getattr(response, "usage_metadata", None)
         await record_successful_usage(model_name, usage)
@@ -743,7 +802,7 @@ async def try_generate_with_model(model_name, contents, input_tokens, system_per
         raise
 
 
-async def generate_gemini_response(server_id, user_id, user_input, image_url=None, *, channel_id=None):
+async def generate_gemini_response(server_id, user_id, user_input, image_url=None, *, channel_id=None, on_progress=None):
     # Checked before doing any work: the point of a budget is not to spend the
     # tokens, and this also gives the person a message that says whose
     # allowance ran out rather than a bare model rate-limit notice.
@@ -802,7 +861,7 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
 
         for index, model_name in enumerate(attempt_models):
             model_history, model_contents, model_tokens = await trim_history_for_token_budget(model_name, history, pending_content)
-            result = await try_generate_with_model(model_name, model_contents, model_tokens, system_personality, user_id=user_id)
+            result = await try_generate_with_model(model_name, model_contents, model_tokens, system_personality, user_id=user_id, on_progress=on_progress)
             last_result = result
             retry_after = result.get("retry_after_seconds")
             if retry_after and (best_retry_after is None or retry_after > best_retry_after):
