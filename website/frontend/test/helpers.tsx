@@ -8,7 +8,7 @@
 
 import type { ReactElement, ReactNode } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { render } from '@testing-library/react'
 import { vi } from 'vitest'
 
@@ -24,13 +24,24 @@ export function testQueryClient() {
   })
 }
 
+/** Render `ui` under a QueryClient and a router.
+ *
+ * Pass `path` for any component that reads useParams. A bare MemoryRouter
+ * populates no params, so a route component gets `{}` and its `enabled: !!id`
+ * queries never fire -- which looks exactly like a spec asserting the loading
+ * state and passing for the wrong reason. `path` mounts the component behind a
+ * matching Route so the params are real.
+ */
 export function renderWithQuery(
   ui: ReactElement,
-  { route = '/', client = testQueryClient() }: { route?: string; client?: QueryClient } = {},
+  { route = '/', path, client = testQueryClient() }:
+    { route?: string; path?: string; client?: QueryClient } = {},
 ) {
   const Wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[route]}>{children}</MemoryRouter>
+      <MemoryRouter initialEntries={[route]}>
+        {path ? <Routes><Route path={path} element={children} /></Routes> : children}
+      </MemoryRouter>
     </QueryClientProvider>
   )
   return { client, ...render(ui, { wrapper: Wrapper }) }

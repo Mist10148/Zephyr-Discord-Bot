@@ -22,10 +22,15 @@ export function GlassSurface({ children, className = '', interactive = false, ti
 // (the OAuth sign-in) is a plain <a className="ios-button">, which keeps middle-click
 // and copy-link working and performs a genuine navigation to Flask that react-router
 // <Link> could never do.
-export function PressableButton({ children, onClick, className = '', disabled = false, type = 'button', variant = 'primary', title }: { children: ReactNode; onClick?: () => void; className?: string; disabled?: boolean; type?: 'button' | 'submit'; variant?: 'primary' | 'secondary' | 'danger'; title?: string }) {
+// `label` overrides the accessible name, the way IconButton's does. Needed
+// wherever several buttons share visible text -- a queue of "Play next" rows is
+// a list of identically named controls otherwise, which is unusable by voice or
+// screen reader. The sibling Remove button has always done this.
+export function PressableButton({ children, onClick, className = '', disabled = false, type = 'button', variant = 'primary', title, label }: { children: ReactNode; onClick?: () => void; className?: string; disabled?: boolean; type?: 'button' | 'submit'; variant?: 'primary' | 'secondary' | 'danger'; title?: string; label?: string }) {
   return <motion.button
     type={type}
     title={title}
+    aria-label={label}
     whileTap={disabled ? undefined : { scale: .96 }}
     whileHover={disabled ? undefined : { y: -1 }}
     transition={{ type: 'spring', stiffness: 400, damping: 30 }}
