@@ -8,9 +8,6 @@ from dataclasses import dataclass, field
 
 import discord
 
-# Aliased: the rendering helpers below use `embeds` as a local list name, and
-# an unaliased import would be shadowed inside them.
-from zephyr.utils import embeds as embed_factory
 from zephyr.utils.pagination import _send_paginated_embeds
 
 
@@ -85,7 +82,7 @@ HELP_CATEGORIES = [
         title="Music — Effects & Audio",
         commands=[
             HelpEntry("/volume <0-1000>", "Set the player volume"),
-            HelpEntry("/bass_boost  /  /bassboost <dB>", "Boost or cut bass (use 'reset' to disable)"),
+            HelpEntry("/bassboost <dB>", "Boost or cut bass (use 'reset' to disable)"),
             HelpEntry("/pitch <0.5-2.0>", "Adjust pitch (use 'reset' to reset)"),
             HelpEntry("/nightcore", "Toggle nightcore mode"),
             HelpEntry("/vaporwave", "Toggle vaporwave mode"),
@@ -105,6 +102,7 @@ HELP_CATEGORIES = [
             HelpEntry("/summon [channel]", "Summon the bot to a channel"),
             HelpEntry("/leave", "Leave the voice channel and clear the queue"),
             HelpEntry("/disconnect", "Disconnect the bot from voice"),
+            HelpEntry("/247", "Toggle 24/7 mode (no auto-disconnect)"),
         ],
     ),
     HelpCategory(
@@ -137,18 +135,6 @@ HELP_CATEGORIES = [
             HelpEntry("/weather-subs", "List this server's weather subscriptions"),
             HelpEntry("/weather-unsubscribe <id>", "Remove a subscription"),
             HelpEntry("/weather-preview <id>", "Show what a subscription would post right now"),
-            HelpEntry("/weather-run <id>", "Send a subscription's next post right now"),
-            HelpEntry("/weather-snooze <id> <duration>", "Mute a subscription for a while without deleting it"),
-        ],
-    ),
-    HelpCategory(
-        key="music_dj",
-        emoji="🎚️",
-        title="Music — DJ controls",
-        commands=[
-            HelpEntry("/dj-only <on|off>", "Restrict the player to DJs (Manage Server)"),
-            HelpEntry("/vote-skip-ratio <percent>", "What fraction of listeners must agree to skip"),
-            HelpEntry("/247", "Toggle 24/7 mode — persists across restarts"),
         ],
     ),
     HelpCategory(
@@ -163,8 +149,6 @@ HELP_CATEGORIES = [
             HelpEntry("/token", "Show Gemini usage stats"),
             HelpEntry("/image-gen <prompt>", "Generate an image with Gemini"),
             HelpEntry("/generate <prompt>", "Generate an image (legacy)"),
-            HelpEntry("/summarize", "Privately summarize recent messages in this channel"),
-            HelpEntry("/translate <text> <language>", "Translate text into another language"),
         ],
     ),
     HelpCategory(
@@ -178,86 +162,12 @@ HELP_CATEGORIES = [
         ],
     ),
     HelpCategory(
-        key="reminders",
-        emoji="⏰",
-        title="Reminders",
-        commands=[
-            HelpEntry("/remindme <when> <message>", "Remind you later — e.g. 20m, 2h, 1h30m, 3 days"),
-            HelpEntry("/reminders", "List your pending reminders"),
-            HelpEntry("/reminder-cancel <id>", "Cancel one of your reminders"),
-        ],
-    ),
-    HelpCategory(
-        key="greetings",
-        emoji="👋",
-        title="Welcome & Farewell",
-        commands=[
-            HelpEntry("/welcome [channel] [message]", "Set the welcome message (Manage Server)"),
-            HelpEntry("/farewell [channel] [message]", "Set the farewell message (Manage Server)"),
-            HelpEntry("/greeting-preview", "See how your greetings will look"),
-        ],
-    ),
-    HelpCategory(
-        key="tags",
-        emoji="🏷️",
-        title="Tags",
-        commands=[
-            HelpEntry("/tag <name>", "Show a tag"),
-            HelpEntry("/tag-create <name> <content>", "Create a tag"),
-            HelpEntry("/tag-edit <name> <content>", "Change what a tag says"),
-            HelpEntry("/tag-delete <name>", "Delete a tag"),
-            HelpEntry("/tag-list", "Every tag in this server"),
-            HelpEntry("/tag-info <name>", "Who made a tag, and how often it is used"),
-        ],
-    ),
-    HelpCategory(
-        key="activity",
-        emoji="📈",
-        title="Activity & Levels",
-        commands=[
-            HelpEntry("/rank [member]", "Your level, XP and message count here"),
-            HelpEntry("/leaderboard", "The most active members"),
-            HelpEntry("/activity-today", "How busy this server is today"),
-            HelpEntry("/activity <on|off>", "Turn tracking on or off (Manage Server)"),
-            HelpEntry("/activity-ignore <channel>", "Stop counting a channel"),
-        ],
-    ),
-    HelpCategory(
-        key="starboard",
-        emoji="⭐",
-        title="Starboard",
-        commands=[
-            HelpEntry("/starboard [channel] [threshold] [emoji]", "Set up the starboard (Manage Server)"),
-            HelpEntry("/starboard-ignore <channel>", "Stop the starboard reading a channel"),
-        ],
-    ),
-    HelpCategory(
-        key="moderation",
-        emoji="🛡️",
-        title="Moderation",
-        commands=[
-            HelpEntry("/warn <member> <reason>", "Warn a member and record a case"),
-            HelpEntry("/timeout <member> <duration>", "Time a member out — e.g. 10m, 2h, 1d"),
-            HelpEntry("/untimeout <member>", "Lift a member's timeout"),
-            HelpEntry("/kick <member>", "Kick a member"),
-            HelpEntry("/ban <user>", "Ban a user, whether or not they are here"),
-            HelpEntry("/unban <user id>", "Lift a ban"),
-            HelpEntry("/purge <amount> [member]", "Bulk-delete recent messages"),
-            HelpEntry("/cases <member>", "A member's moderation history"),
-            HelpEntry("/case <number>", "Look up one case"),
-            HelpEntry("/reason <number> <reason>", "Add or replace a case's reason"),
-            HelpEntry("/modlog [channel]", "Choose where cases are posted"),
-        ],
-    ),
-    HelpCategory(
         key="utility",
         emoji="ℹ️",
         title="Utility & Info",
         commands=[
             HelpEntry("/ping", "Show the bot's latency"),
             HelpEntry("/use", "Link to the web app"),
-            HelpEntry("/export-my-data", "Send you everything Zephyr holds about you"),
-            HelpEntry("/delete-my-data", "Erase everything erasable"),
         ],
     ),
     HelpCategory(
@@ -280,6 +190,7 @@ HELP_CATEGORIES = [
 def _category_embeds(
     categories: list[HelpCategory],
     title: str,
+    color: discord.Color,
     *,
     include_toc: bool = False,
     seen: set[str] | None = None,
@@ -306,16 +217,17 @@ def _category_embeds(
     embeds: list[discord.Embed] = []
 
     if include_toc:
-        toc = embed_factory.brand(
-            "Browse commands by category using the buttons below.",
+        toc = discord.Embed(
             title=f"📖 {title}",
+            description="Browse commands by category using the buttons below.",
+            color=color,
         )
         for cat, _ in filtered:
             toc.add_field(name=f"{cat.emoji} {cat.title}", value="\u200b", inline=False)
         embeds.append(toc)
 
     for cat, commands in filtered:
-        embed = embed_factory.brand(title=f"{cat.emoji} {title} — {cat.title}")
+        embed = discord.Embed(title=f"{cat.emoji} {title} — {cat.title}", color=color)
         for cmd in commands:
             embed.add_field(name=cmd.name, value=cmd.value, inline=False)
         embeds.append(embed)
@@ -327,18 +239,13 @@ async def _send_categorized_help(
     interaction: discord.Interaction,
     categories: list[HelpCategory],
     title: str,
+    color: discord.Color,
     *,
     include_toc: bool = False,
     seen: set[str] | None = None,
 ) -> None:
-    """Send categorized help pages with pagination.
-
-    The ``color`` parameter is gone.  The four help commands passed four
-    different colours -- green, blurple, gold and blue -- for four views of the
-    *same* command list, which is the inconsistency 16.1 exists to remove.  All
-    of it is the bot describing itself, so all of it is the brand accent.
-    """
-    embeds = _category_embeds(categories, title, include_toc=include_toc, seen=seen)
+    """Send categorized help pages with pagination."""
+    embeds = _category_embeds(categories, title, color, include_toc=include_toc, seen=seen)
     if not embeds:
         await interaction.response.send_message("No commands to display.", ephemeral=True)
         return

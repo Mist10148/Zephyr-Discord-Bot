@@ -2,8 +2,6 @@ import { Link, useLocation } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { ThemeToggle } from './ThemeToggle'
-import { RouteMeta } from './RouteMeta'
-import { ToastHost } from './ToastHost'
 
 // A single sticky top bar above every page. It is the app-wide navigation: the
 // wordmark returns home, a contextual link jumps to the server list once the user
@@ -32,7 +30,6 @@ export function AppShell({ children, onOpenPalette }: { children: ReactNode; onO
           <div className="appbar-spacer" />
           <nav className="appbar-nav">
             {inDashboard && <Link to="/g" className="nav-link">Servers</Link>}
-            {pathname !== '/login' && <Link to="/commands" className="nav-link">Commands</Link>}
             {pathname !== '/login' && <Link to="/settings" className="nav-link">Appearance</Link>}
             {/* ⌘K on its own is a secret. The pill makes the shortcut discoverable
                 and gives pointer users a way into the palette at all. */}
@@ -46,8 +43,6 @@ export function AppShell({ children, onOpenPalette }: { children: ReactNode; onO
           </nav>
         </div>
       </header>
-      <RouteMeta />
-      <ToastHost />
       {!online && <div className="offline-banner" role="status">You’re offline. Saved public results remain available until you reconnect.</div>}
       <div id="main-content" tabIndex={-1}>{children}</div>
     </>

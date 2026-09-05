@@ -22,15 +22,10 @@ export function GlassSurface({ children, className = '', interactive = false, ti
 // (the OAuth sign-in) is a plain <a className="ios-button">, which keeps middle-click
 // and copy-link working and performs a genuine navigation to Flask that react-router
 // <Link> could never do.
-// `label` overrides the accessible name, the way IconButton's does. Needed
-// wherever several buttons share visible text -- a queue of "Play next" rows is
-// a list of identically named controls otherwise, which is unusable by voice or
-// screen reader. The sibling Remove button has always done this.
-export function PressableButton({ children, onClick, className = '', disabled = false, type = 'button', variant = 'primary', title, label }: { children: ReactNode; onClick?: () => void; className?: string; disabled?: boolean; type?: 'button' | 'submit'; variant?: 'primary' | 'secondary' | 'danger'; title?: string; label?: string }) {
+export function PressableButton({ children, onClick, className = '', disabled = false, type = 'button', variant = 'primary', title }: { children: ReactNode; onClick?: () => void; className?: string; disabled?: boolean; type?: 'button' | 'submit'; variant?: 'primary' | 'secondary' | 'danger'; title?: string }) {
   return <motion.button
     type={type}
     title={title}
-    aria-label={label}
     whileTap={disabled ? undefined : { scale: .96 }}
     whileHover={disabled ? undefined : { y: -1 }}
     transition={{ type: 'spring', stiffness: 400, damping: 30 }}
@@ -134,15 +129,10 @@ export function BackLink({ to, children }: { to: string; children: ReactNode }) 
   return <p className="back-link-row"><Link className="back-link" to={to}><span aria-hidden>‹</span>{children}</Link></p>
 }
 
-/** The visual for a transient message. Rendered inline for an advisory line, or
- *  by ToastHost for a notification -- `onDismiss` adds the close affordance the
- *  host needs, and its absence is what keeps an inline advisory undismissable. */
-export function CapsuleToast({ children, tone = 'neutral', action, onDismiss }: { children: ReactNode; tone?: 'neutral' | 'error' | 'success'; action?: { label: string; onClick(): void }; onDismiss?: () => void }) {
+export function CapsuleToast({ children, tone = 'neutral' }: { children: ReactNode; tone?: 'neutral' | 'error' | 'success' }) {
   return <div className={`toast ${tone}`} role={tone === 'error' ? 'alert' : 'status'}>
     {tone === 'neutral' ? <i className="toast-dot" aria-hidden /> : <i className="toast-badge" aria-hidden>{tone === 'error' ? '!' : '✓'}</i>}
     <span>{children}</span>
-    {action && <button type="button" className="toast-action" onClick={action.onClick}>{action.label}</button>}
-    {onDismiss && <button type="button" className="toast-dismiss" aria-label="Dismiss" onClick={onDismiss}>×</button>}
   </div>
 }
 
@@ -152,36 +142,6 @@ export function WidgetGrid({ children, className = '' }: { children: ReactNode; 
 
 // The shimmer needs no prefers-reduced-motion branch: theme.css already forces
 // animation-duration to .01ms on everything under that query.
-/** A placeholder shaped like the thing that is loading.
- *
- * D7 was marked shipped while this rendered `lines` identical bars for every
- * screen, and the two heaviest pages plus the route-level Suspense fallback all
- * asked for `lines={6}` -- so the layout still jumped the moment data arrived.
- * A placeholder whose shape does not match what replaces it is a slower
- * reflow, not a faster one.
- *
- *  * `lines`       -- prose and detail rows. The original behaviour.
- *  * `rows`        -- a ListGroup: a bordered card with hairline-separated rows.
- *  * `cards`       -- a WidgetGrid of stat cards.
- *  * `now-playing` -- the art tile beside two lines of metadata.
- */
-export function Skeleton({ lines = 3, variant = 'lines', count }: { lines?: number; variant?: 'lines' | 'rows' | 'cards' | 'now-playing'; count?: number }) {
-  const items = count ?? lines
-  if (variant === 'rows') {
-    return <div className="skeleton-rows" aria-busy="true">{Array.from({ length: items }, (_, index) => (
-      <div className="skeleton-row" key={index}><i className="sk-label" /><i className="sk-value" /></div>
-    ))}</div>
-  }
-  if (variant === 'cards') {
-    return <div className="skeleton-cards" aria-busy="true">{Array.from({ length: count ?? 2 }, (_, index) => (
-      <div className="skeleton-card" key={index}><i className="sk-cap" /><i className="sk-stat" /><i className="sk-sub" /></div>
-    ))}</div>
-  }
-  if (variant === 'now-playing') {
-    return <div className="skeleton-np" aria-busy="true">
-      <i className="sk-art" />
-      <div className="sk-meta"><i className="sk-title" /><i className="sk-sub" /><i className="sk-bar" /></div>
-    </div>
-  }
-  return <div className="skeleton" aria-busy="true">{Array.from({ length: items }, (_, index) => <i key={index} />)}</div>
+export function Skeleton({ lines = 3 }: { lines?: number }) {
+  return <div className="skeleton" aria-busy="true">{Array.from({ length: lines }, (_, index) => <i key={index} />)}</div>
 }

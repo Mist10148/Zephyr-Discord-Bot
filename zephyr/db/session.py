@@ -14,12 +14,9 @@ import threading
 from sqlalchemy import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
-from zephyr.config import DATABASE_URL, DEFAULT_DATABASE_URL
-from zephyr.db.engine import build_engine, create_schema, should_auto_create
-from zephyr.core.logging import get_logger
+from zephyr.config import DATABASE_URL, DB_AUTO_CREATE, DEFAULT_DATABASE_URL
+from zephyr.db.engine import build_engine, create_schema
 
-
-log = get_logger(__name__)
 _lock = threading.Lock()
 _engines: dict[str, Engine] = {}
 
@@ -33,9 +30,6 @@ def get_engine(url: str | None = None) -> Engine:
     has a narrow window where two concurrent ``CREATE TABLE``s collide, so a
     failure is logged and swallowed -- the query that follows will surface any
     genuine problem.
-
-    Whether it runs at all is ``should_auto_create``'s decision: SQLite builds
-    itself, a configured server database belongs to Alembic.
     """
     target = url or DATABASE_URL or DEFAULT_DATABASE_URL
     with _lock:
@@ -43,11 +37,11 @@ def get_engine(url: str | None = None) -> Engine:
         if engine is not None:
             return engine
         engine = build_engine(target)
-        if should_auto_create(target):
+        if DB_AUTO_CREATE:
             try:
                 create_schema(engine)
             except SQLAlchemyError as exc:
-                log.warning("create_schema skipped: %s", exc)
+                print(f"[DB] create_schema skipped: {exc}")
         _engines[target] = engine
         return engine
 

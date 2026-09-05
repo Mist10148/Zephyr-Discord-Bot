@@ -24,14 +24,6 @@ WRITABLE_COLUMNS = (
     "default_volume",
     "dj_role_id",
     "music_channel_ids",
-    "tts_language",
-    "ai_channel_mode",
-    "ai_channel_ids",
-    "modlog_channel_id",
-    "dj_only",
-    "vote_skip_ratio",
-    "always_on",
-    "always_on_channel_id",
 )
 
 _COLUMNS = (
@@ -43,14 +35,6 @@ _COLUMNS = (
     Guild.dj_role_id,
     Guild.music_channel_ids,
     Guild.enabled_cogs,
-    Guild.tts_language,
-    Guild.ai_channel_mode,
-    Guild.ai_channel_ids,
-    Guild.modlog_channel_id,
-    Guild.dj_only,
-    Guild.vote_skip_ratio,
-    Guild.always_on,
-    Guild.always_on_channel_id,
 )
 
 
@@ -103,103 +87,6 @@ def read_dj_role_id(guild_id: str, *, database_url: str | None = None) -> str | 
         return connection.execute(
             select(Guild.dj_role_id).where(Guild.id == str(guild_id))
         ).scalar_one_or_none()
-
-
-def read_tts_languages(*, database_url: str | None = None) -> dict[str, str]:
-    """Every guild's TTS language, keyed by guild id.
-
-    Same shape and the same reason as ``read_dj_roles``: /say reads this on
-    every invocation, and a query per invocation would put the database on the
-    critical path of speaking a sentence.  Guilds with no override are absent
-    rather than present-and-null, so a caller's ``.get(id, default)`` is the
-    whole fallback.
-    """
-    engine = get_engine(database_url)
-    with engine.connect() as connection:
-        rows = connection.execute(
-            select(Guild.id, Guild.tts_language).where(Guild.tts_language.is_not(None))
-        ).mappings().all()
-    return {str(row["id"]): str(row["tts_language"]) for row in rows}
-
-
-def read_ai_channel_policies(*, database_url: str | None = None) -> dict[str, tuple[str, set[str]]]:
-    """Where the AI may answer, per guild: ``{guild_id: (mode, channel_ids)}``.
-
-    ``mode`` is ``"allow"`` or ``"deny"``; anything else -- including NULL --
-    means everywhere the bot can read, and such guilds are absent from the map
-    entirely so the caller's ``.get`` is the whole "no policy" case.
-
-    Cached and bulk-read for the same reason as ``read_prefixes``: this is
-    consulted on every message that mentions the bot.
-    """
-    engine = get_engine(database_url)
-    with engine.connect() as connection:
-        rows = connection.execute(
-            select(Guild.id, Guild.ai_channel_mode, Guild.ai_channel_ids)
-            .where(Guild.ai_channel_mode.in_(("allow", "deny")))
-        ).all()
-    policies = {}
-    for row in rows:
-        ids = {str(value) for value in (row.ai_channel_ids or [])}
-        # An allowlist with nothing in it would silence the AI everywhere, which
-        # is never what somebody meant to configure -- it is what a
-        # half-finished edit looks like. Treated as no policy.
-        if row.ai_channel_mode == "allow" and not ids:
-            continue
-        policies[str(row.id)] = (str(row.ai_channel_mode), ids)
-    return policies
-
-
-def read_prefixes(*, database_url: str | None = None) -> dict[str, str]:
-    """Every configured command prefix, keyed by guild id.
-
-    Same shape and the same reason as ``read_dj_roles``: ``command_prefix`` is
-    consulted for **every message the bot can see**, so it has to be answered
-    from a cache. Guilds using the default are absent rather than
-    present-and-default, so a caller's ``.get(id, default)`` is the fallback.
-    """
-    engine = get_engine(database_url)
-    with engine.connect() as connection:
-        rows = connection.execute(
-            select(Guild.id, Guild.prefix).where(Guild.prefix.is_not(None))
-        ).all()
-    return {str(row.id): str(row.prefix) for row in rows}
-
-
-def read_music_policies(*, database_url: str | None = None) -> dict[str, dict]:
-    """Every guild's player policy, keyed by guild id.
-
-    One query for the same reason ``read_dj_roles`` is one query: the DJ lock is
-    consulted on every music command and every button press, and a round trip
-    there would be paid constantly to answer a question that changes roughly
-    never. Guilds that have configured none of these are absent, so the caller's
-    defaults apply.
-    """
-    engine = get_engine(database_url)
-    with engine.connect() as connection:
-        rows = connection.execute(
-            select(
-                Guild.id, Guild.dj_only, Guild.vote_skip_ratio,
-                Guild.always_on, Guild.always_on_channel_id,
-            ).where(
-                # Anything set at all. A guild row exists as soon as any setting
-                # is saved, so filtering on the row's existence would load every
-                # configured guild to learn that none of them changed this.
-                Guild.dj_only.is_not(None)
-                | Guild.vote_skip_ratio.is_not(None)
-                | Guild.always_on.is_not(None)
-                | Guild.always_on_channel_id.is_not(None)
-            )
-        ).mappings().all()
-    return {
-        str(row["id"]): {
-            "dj_only": bool(row["dj_only"]),
-            "vote_skip_ratio": row["vote_skip_ratio"],
-            "always_on": bool(row["always_on"]),
-            "always_on_channel_id": row["always_on_channel_id"],
-        }
-        for row in rows
-    }
 
 
 def read_dj_roles(*, database_url: str | None = None) -> dict[str, str]:

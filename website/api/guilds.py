@@ -10,46 +10,19 @@ from flask import current_app, g, jsonify, request
 from website import discord_api
 from website.api import api, error
 from website.api.guard import guild_scoped
-from zephyr.config import COMMAND_PREFIX
 from zephyr.db import audit
 from zephyr.db.guild_settings import read_guild_settings, write_guild_settings
 from zephyr.services import bridge
-from zephyr.core.logging import get_logger
-
-
-log = get_logger(__name__)
-# The audit writers only ever set these two, so an unknown value is a client bug
-# rather than something to pass through to a WHERE.
-AUDIT_SOURCES = {"web", "discord"}
 
 # Applied when a guild has no row yet, which is the normal state until somebody
 # saves settings.  Reported with defaults_applied so the UI can say so.
 DEFAULT_SETTINGS = {
-    # Was "/", which is the value the bot stopped using precisely because every
-    # message beginning with a slash was then also parsed as a prefix command.
-    # Read from config so the dashboard and the bot cannot disagree about what
-    # "unconfigured" means.
-    "prefix": COMMAND_PREFIX,
+    "prefix": "/",
     "locale": "en",
     "timezone": "UTC",
     "default_volume": 50,
     "dj_role_id": None,
     "music_channel_ids": [],
-    # gTTS language code for /say. "en" matches what the cog used to hardcode.
-    "tts_language": "en",
-    # Where the AI answers a mention. None means everywhere it can read, which
-    # is the historical behaviour and stays the default.
-    "ai_channel_mode": None,
-    "ai_channel_ids": [],
-    # Where moderation cases are posted. None means the modlog is off; cases
-    # are still recorded and readable with /case.
-    "modlog_channel_id": None,
-    # The DJ lock is off by default: turning it on for existing servers would
-    # silently take the player away from everybody who could use it yesterday.
-    "dj_only": False,
-    "vote_skip_ratio": 0.5,
-    "always_on": False,
-    "always_on_channel_id": None,
 }
 
 
@@ -71,7 +44,7 @@ def guild_overview(guild_id: str):
     try:
         snapshot, snapshot_at = bridge.read_guild_snapshot(url=current_app.config["REDIS_URL"])
     except Exception as exc:
-        log.exception("Could not read the guild snapshot")
+        print(f"[Guilds] Could not read the guild snapshot: {exc}")
         snapshot, snapshot_at = None, None
     bot_present = None if snapshot is None else guild_id in snapshot
 
@@ -138,68 +111,12 @@ def _clean_volume(value):
     return volume
 
 
-def _clean_flag(value):
-    """A strict boolean.
-
-    `bool("false")` is True, so accepting a string here would turn a JSON
-    payload of "false" from a hand-rolled client into an enabled DJ lock.
-    """
-    if isinstance(value, bool):
-        return value
-    raise ValueError("That setting is either true or false.")
-
-
-def _clean_skip_ratio(value):
-    """A fraction, stored as a fraction.
-
-    The command takes a percent because that is how people say it; the column
-    is a ratio because that is what `_skip_threshold` multiplies by. Converting
-    at the edge means only one of the two representations reaches the database.
-    """
-    if value in (None, ""):
-        return None
-    try:
-        ratio = float(value)
-    except (TypeError, ValueError):
-        raise ValueError("The skip ratio must be a number between 0.05 and 1.") from None
-    if not 0.05 <= ratio <= 1:
-        raise ValueError("The skip ratio must be between 0.05 and 1.")
-    return ratio
-
-
 def _clean_snowflake(value):
     if value in (None, ""):
         return None
     text = str(value)
     if not text.isdigit():
         raise ValueError("That is not a Discord id.")
-    return text
-
-
-def _clean_tts_language(value):
-    """A gTTS language code, checked against the list gTTS actually supports.
-
-    Validated here as well as in the command, because the dashboard is the
-    other way in and a bad code fails at speech time with "TTS failed: ...",
-    which points at the wrong thing entirely.
-    """
-    text = str(value).strip().lower()
-    if not text:
-        raise ValueError("A language code is required.")
-    from zephyr.cogs.voice_tts import supported_languages
-
-    if text not in supported_languages():
-        raise ValueError(f"{text!r} is not a language gTTS can speak.")
-    return text
-
-
-def _clean_ai_channel_mode(value):
-    """None, "allow" or "deny". None means everywhere the bot can read."""
-    if value in (None, "", "all"):
-        return None
-    text = str(value).strip().lower()
-    if text not in {"allow", "deny"}:
-        raise ValueError('ai_channel_mode must be "allow", "deny" or null.')
     return text
 
 
@@ -218,16 +135,8 @@ CLEANERS = {
     "locale": _clean_locale,
     "timezone": _clean_timezone,
     "default_volume": _clean_volume,
-    "tts_language": _clean_tts_language,
-    "ai_channel_mode": _clean_ai_channel_mode,
-    "ai_channel_ids": _clean_snowflake_list,
     "dj_role_id": _clean_snowflake,
     "music_channel_ids": _clean_snowflake_list,
-    "modlog_channel_id": _clean_snowflake,
-    "dj_only": _clean_flag,
-    "vote_skip_ratio": _clean_skip_ratio,
-    "always_on": _clean_flag,
-    "always_on_channel_id": _clean_snowflake,
 }
 
 
@@ -263,15 +172,14 @@ def patch_guild_settings(guild_id: str):
         database_url=current_app.config["DATABASE_URL"],
     )
 
-    # The bot caches the DJ role and the player policy for its permission check
-    # and its skip threshold, so a save that did not reach it would leave both
-    # wrong until the next slow refresh.  Best effort: the setting is saved
-    # either way, and the cache self-corrects within ten minutes.
-    if values.keys() & {"dj_role_id", "dj_only", "vote_skip_ratio", "always_on"}:
+    # The bot caches dj_role_id for its permission check, so a save that did not
+    # reach it would leave the DJ role wrong until the next slow refresh.  Best
+    # effort: the setting is saved either way, and the cache self-corrects.
+    if "dj_role_id" in values:
         try:
             bridge.send_command("settings.reload", url=current_app.config["REDIS_URL"], timeout=2.0)
         except Exception as exc:
-            log.warning("Could not tell the bot to reload settings: %s", exc)
+            print(f"[Guilds] Could not tell the bot to reload settings: {exc}")
 
     settings = dict(DEFAULT_SETTINGS)
     settings["enabled_cogs"] = list(current_app.config["ENABLED_COGS"])
@@ -306,61 +214,15 @@ def guild_audit(guild_id: str):
     except ValueError as exc:
         return error("invalid_query", f"{exc.args[0]} must be a positive integer.", 400)
 
-    # Allow-listed rather than free text. `action` reaches a LIKE prefix, and
-    # `source` and `actor_id` reach equality; bounding the length and shape keeps
-    # a caller from turning the endpoint into a table scan with a 4KB pattern.
-    action = (request.args.get("action") or "").strip()[:64] or None
-    actor = (request.args.get("actor_id") or "").strip()[:32] or None
-    source = (request.args.get("source") or "").strip()[:16] or None
-    if actor is not None and not actor.isdigit():
-        return error("invalid_query", "actor_id must be a Discord id.", 400)
-    if source is not None and source not in AUDIT_SOURCES:
-        return error("invalid_query", f"source must be one of {', '.join(sorted(AUDIT_SOURCES))}.", 400)
-
-    kwargs = {
-        "database_url": current_app.config["DATABASE_URL"],
-        "before_id": before,
-        "action": action,
-        "actor_id": actor,
-        "source": source,
-    }
+    kwargs = {"database_url": current_app.config["DATABASE_URL"], "before_id": before}
     if limit is not None:
         kwargs["limit"] = limit
     try:
         page = audit.read(guild_id, **kwargs)
     except Exception as exc:
-        log.exception("Could not read the audit log for %s", guild_id)
+        print(f"[Guilds] Could not read the audit log for {guild_id}: {exc}")
         return error("audit_unavailable", "Could not read the audit log.", 503)
-    return jsonify({"id": guild_id, **page, "actors": _actor_names(guild_id, page.get("entries") or [])})
-
-
-def _actor_names(guild_id: str, entries: list[dict]) -> dict:
-    """Display names for the actors on this page, keyed by id.
-
-    The log stores an ``actor_id`` and nothing else, so every row read "Changed
-    by 403285930202595340". The web tier has no gateway connection and stores no
-    Discord token, so the bot is the only thing that can put a name to an id.
-
-    Asked once per page for the distinct set rather than per row: a page of
-    fifty entries is usually two or three people. Failure is not an error --
-    an unreachable bot returns ``{}`` and the client falls back to the raw id,
-    exactly as the settings pickers already degrade. An audit log that 503s
-    because a name lookup failed would be a strictly worse page.
-    """
-    ids = sorted({str(entry["actor_id"]) for entry in entries if entry.get("actor_id")})
-    if not ids:
-        return {}
-    redis_url = current_app.config["REDIS_URL"]
-    if not redis_url:
-        return {}
-    try:
-        answer = bridge.send_command(
-            "meta.members", guild_id=guild_id, args={"ids": ids}, url=redis_url
-        )
-    except Exception as exc:
-        log.warning("Could not resolve audit actors for %s: %s", guild_id, exc)
-        return {}
-    return {member["id"]: member for member in answer.get("members") or [] if member.get("id")}
+    return jsonify({"id": guild_id, **page})
 
 
 @api.get("/guilds/<guild_id>/meta")

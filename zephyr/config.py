@@ -62,58 +62,7 @@ DATABASE_URL = os.getenv("DATABASE_URL") or None
 DEFAULT_DATABASE_URL = f"sqlite:///{(PROJECT_ROOT / 'data' / 'zephyr.db').as_posix()}"
 STORAGE_BACKEND = (os.getenv("STORAGE_BACKEND") or "auto").lower()
 DB_ECHO = os.getenv("DB_ECHO", "0").lower() in {"1", "true", "yes"}
-# Tri-state on purpose.  None means "decide from the URL" -- see
-# zephyr.db.engine.should_auto_create, which lets SQLite build itself and leaves
-# a configured server database to Alembic.  Setting it explicitly overrides that
-# in either direction.
-_DB_AUTO_CREATE_RAW = os.getenv("DB_AUTO_CREATE")
-DB_AUTO_CREATE: bool | None = (
-    None if _DB_AUTO_CREATE_RAW is None
-    else _DB_AUTO_CREATE_RAW.lower() in {"1", "true", "yes"}
-)
-
-# Links the site's footer and privacy page offer. All optional: a deployment
-# with no support server should show no support link rather than a dead one.
-SUPPORT_URL = os.getenv("SUPPORT_URL") or None
-REPOSITORY_URL = os.getenv("REPOSITORY_URL") or "https://github.com/Mist10148/Zephyr-Discord-Bot"
-
-# Number of gateway shards, or None to let Discord decide.
-#
-# Discord requires sharding past roughly 2,500 guilds. AutoShardedBot is close
-# to a drop-in *because* the quota counters now live in Redis (13.5): with the
-# previous per-process dicts, N shard processes would each have believed they
-# had the whole daily allowance and the key would have 429'd immediately.
-#
-# All shards still run in **one process** here, which is what keeps the rest of
-# the design intact -- MusicCog.voice_states, the bridge listener and the
-# in-memory conversation buffer are all per-process, and multiple processes
-# would need each of them redesigned. One process with N shards is many
-# gateway connections sharing one interpreter, which is the version of
-# sharding this codebase is actually ready for.
-SHARD_COUNT = int(os.getenv("SHARD_COUNT") or "0") or None
-
-# Per-person daily Gemini ceiling, in tokens. 0 disables the cap entirely.
-#
-# Exists because the model limits are per *model*: one person could consume a
-# guild's whole daily allowance and everybody else would see a rate-limit
-# message with no explanation. A per-user row overrides this.
-AI_USER_DAILY_TOKENS = int(os.getenv("AI_USER_DAILY_TOKENS") or "0")
-
-# Error tracking. Without a DSN there is none, which is the default -- a
-# production 500 is then invisible, which is exactly what 12.7/17.2 records.
-SENTRY_DSN = os.getenv("SENTRY_DSN") or None
-SENTRY_ENVIRONMENT = os.getenv("SENTRY_ENVIRONMENT") or ("production" if os.getenv("RENDER") else "development")
-
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
-# Read here rather than in zephyr/core/logging.py so every environment-driven
-# value lives in one file, matching the rest of this module.
-LOG_LEVEL = (os.getenv("LOG_LEVEL") or "INFO").upper()
-# Plain lines locally, JSON in the cloud, because a log platform can index a
-# level and a logger name but not prose. RENDER is the same signal TRUST_PROXY
-# already keys off.
-LOG_FORMAT = (os.getenv("LOG_FORMAT") or ("json" if os.getenv("RENDER") else "plain")).lower()
+DB_AUTO_CREATE = os.getenv("DB_AUTO_CREATE", "1").lower() in {"1", "true", "yes"}
 
 # Optional custom path for the local settings file (useful for mounted volumes).
 SETTINGS_PATH = os.getenv("SETTINGS_PATH") or str(PROJECT_ROOT / "settings.json")
@@ -172,19 +121,7 @@ DISCORD_INVITE_PERMISSIONS = os.getenv("DISCORD_INVITE_PERMISSIONS", "3197952")
 
 # Single source of truth for the cog list: the bot loads these, and the web tier
 # reports them as a guild's default enabled_cogs without importing the client.
-ENABLED_COGS = (
-    "weather", "weather_alerts", "music", "voice_tts", "chat", "help", "privacy",
-    "reminders", "moderation", "greetings", "starboard", "activity", "tags",
-)
-
-# The prefix for the 13 classic text commands.
-#
-# It was "/", which meant every message beginning with a slash was *also* parsed
-# as a prefix command: a mistyped "/pley" raised CommandNotFound on a code path
-# with no handler, and the 13 real prefix commands were indistinguishable from
-# the 75 slash commands in the client UI.  "z!" is unambiguous and unlikely to
-# collide with another bot in the same server.
-COMMAND_PREFIX = os.getenv("COMMAND_PREFIX") or "z!"
+ENABLED_COGS = ("weather", "weather_alerts", "music", "voice_tts", "chat", "help")
 
 # The dashboard needs an OAuth application *and* Redis (sessions are shared
 # across gunicorn workers).  Without all three, only the public weather site runs.

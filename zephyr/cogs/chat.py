@@ -35,7 +35,6 @@ from zephyr.services.gemini import (
     DEFAULT_CHAT_MODEL,
 )
 from zephyr.db import audit
-from zephyr.utils import embeds
 
 
 # Persistence runs in a worker thread; serialize the state mutation and write.
@@ -181,9 +180,10 @@ class ChatCog(commands.Cog):
                 settings={"ai_model": ai_model.value, "response_format": response_format.value},
             )
             await asyncio.to_thread(save_user_settings)
-        embed = embeds.success(
-            "Your preferences have been saved for this context (Server or DM).",
+        embed = discord.Embed(
             title="✅ Settings Updated!",
+            description="Your preferences have been saved for this context (Server or DM).",
+            color=discord.Color.green()
         )
         embed.add_field(name="AI Model", value=ai_model.name)
         embed.add_field(name="Response Format", value=response_format.name)
@@ -207,18 +207,16 @@ class ChatCog(commands.Cog):
             set_context_settings(server_id=server_id, user_id=interaction.user.id, settings=current)
             await asyncio.to_thread(save_user_settings)
         await interaction.followup.send(
-            embed=embeds.success(
-                f"Responses will now be sent as **{format.name}**.",
+            embed=discord.Embed(
                 title="✅ Output Format Updated",
+                description=f"Responses will now be sent as **{format.name}**.",
+                color=discord.Color.green()
             ),
             ephemeral=True
         )
 
     @app_commands.command(name="token", description="Show the current Gemini token and request usage for this session.")
     async def token(self, interaction: discord.Interaction):
-        # Deferred: the snapshot may now be a Redis round trip, and the
-        # interaction window is three seconds.
-        await interaction.response.defer(ephemeral=True)
         server_id = interaction.guild.id if interaction.guild else None
         settings = get_context_settings(server_id, interaction.user.id)
         effective_model = settings["ai_model"]
@@ -226,20 +224,13 @@ class ChatCog(commands.Cog):
         fallback_label = ", ".join(fallback_models) if fallback_models else "None"
         limits = MODEL_LIMITS.get(effective_model)
         if not limits:
-            await interaction.followup.send(f"No local quota tracker is configured for `{effective_model}`.", ephemeral=True)
+            await interaction.response.send_message(f"No local quota tracker is configured for `{effective_model}`.", ephemeral=True)
             return
         snapshot = await get_model_usage_snapshot(effective_model)
-        # The description used to read "local to this bot process and resets when
-        # the bot restarts", which was true and is the defect 13.5 fixed. It
-        # only still applies on a deployment with no Redis.
-        from zephyr.services.gemini import _durable_quota_url
-
-        durable = bool(_durable_quota_url())
-        embed = embeds.info(
-            "Counters are shared across every Zephyr process and survive a restart."
-            if durable else
-            "No Redis is configured, so these counters are local to this process and reset on restart.",
-            title="📊 Gemini Usage",
+        embed = discord.Embed(
+            title="📊 Gemini Session Usage",
+            description="This tracker is local to this bot process and resets when the bot restarts.",
+            color=discord.Color.blurple(),
         )
         embed.add_field(name="Effective Model", value=effective_model, inline=False)
         embed.add_field(name="Fallback Chain", value=fallback_label, inline=False)
@@ -261,7 +252,7 @@ class ChatCog(commands.Cog):
         if snapshot["cooldown_until"]:
             cooldown_value = format_datetime_for_user(snapshot["cooldown_until"])
         embed.add_field(name="Cooldown Status", value=cooldown_value, inline=False)
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="prompt", description="Ask Gemini a question (supports text and images).")
     @app_commands.describe(message="Your question for the AI.", attachment="Attach an image or .txt file.")

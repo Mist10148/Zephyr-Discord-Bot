@@ -20,7 +20,7 @@ import argparse
 import math
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 OUTPUT_DIR = PROJECT_ROOT / "website" / "frontend" / "public" / "icons"
@@ -109,68 +109,6 @@ def _render(size: int, *, scale: float, source: Image.Image | None = None) -> Im
     return image
 
 
-def _font(size: int):
-    """A scalable font, or None if this Pillow cannot provide one.
-
-    ``load_default(size=...)`` returns a FreeType-backed DejaVu on Pillow 10.1+
-    and Pillow bundles it, so no font file has to exist on the machine -- the
-    same constraint that makes the mark a polygon rather than a typeset glyph.
-    Older Pillow raises TypeError, and the caller falls back to scaling the
-    11px bitmap.
-    """
-    try:
-        return ImageFont.load_default(size=size)
-    except TypeError:
-        return None
-
-
-def _og_card(source: Image.Image | None = None) -> Image.Image:
-    """The 1200x630 link-preview card.
-
-    Generated from the same tokens as the icons, for the same reason: a pasted
-    link into Discord is often the first thing anybody sees of this project, and
-    a card that does not look like the app is worse than none.
-    """
-    width, height = 1200, 630
-    # The backdrop is square by construction, so render it oversized and resize
-    # to the card's aspect rather than stretching the gradient's centres.
-    card = _backdrop(height * 2).resize((width, height), Image.LANCZOS)
-
-    mark = _render(300, scale=STANDARD_SCALE, source=source)
-    card.paste(mark, (96, (height - 300) // 2))
-
-    draw = ImageDraw.Draw(card, "RGBA")
-    text_left = 96 + 300 + 72
-    title_font = _font(96)
-    subtitle_font = _font(34)
-
-    if title_font is not None:
-        draw.text((text_left, 240), "Zephyr", font=title_font, fill=(*MARK, 255))
-        draw.text((text_left, 352), "weather, music and AI for Discord",
-                  font=subtitle_font, fill=(168, 184, 214, 255))
-    else:
-        # Upscaled bitmap. Legible but visibly blocky, which is why it is the
-        # fallback rather than the default.
-        _draw_scaled(draw, (text_left, 236), "ZEPHYR", scale=9, fill=(*MARK, 255))
-        _draw_scaled(draw, (text_left, 330), "weather, music and AI for Discord",
-                     scale=3, fill=(168, 184, 214, 255))
-    return card
-
-
-def _draw_scaled(draw, position, text, *, scale, fill):
-    """Draw ``text`` at ``scale``x the default bitmap font size.
-
-    Rendered to its own image and enlarged with NEAREST, which keeps the pixel
-    edges crisp instead of the blur a smooth upscale of a bitmap produces.
-    """
-    measure = ImageDraw.Draw(Image.new("RGB", (1, 1)))
-    box = measure.textbbox((0, 0), text)
-    tile = Image.new("RGBA", (box[2] - box[0] + 2, box[3] - box[1] + 2), (0, 0, 0, 0))
-    ImageDraw.Draw(tile).text((-box[0], -box[1]), text, fill=fill)
-    enlarged = tile.resize((tile.width * scale, tile.height * scale), Image.NEAREST)
-    draw._image.paste(enlarged, position, enlarged)
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", help="optional image to use instead of the generated mark")
@@ -195,12 +133,6 @@ def main() -> int:
     apple = OUTPUT_DIR / "apple-touch-icon.png"
     _render(180, scale=STANDARD_SCALE, source=source).save(apple, optimize=True)
     written.append(apple)
-
-    # 1200x630 is what every unfurler expects, and index.html declares those
-    # dimensions so a client can reserve the space before the image loads.
-    og_card = OUTPUT_DIR / "og-card.png"
-    _og_card(source).save(og_card, optimize=True)
-    written.append(og_card)
 
     favicon = OUTPUT_DIR / "favicon.ico"
     _render(256, scale=STANDARD_SCALE, source=source).save(

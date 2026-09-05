@@ -245,40 +245,12 @@ class TestGuildSettings:
             {"default_volume": "loud"},
             {"dj_role_id": "not-an-id"},
             {"music_channel_ids": "5"},
-            # bool("false") is True, so a string here would enable the DJ lock
-            # for a client that meant to disable it.
-            {"dj_only": "false"},
-            {"dj_only": 1},
-            {"always_on": "true"},
-            {"vote_skip_ratio": 2},
-            {"vote_skip_ratio": 0},
-            {"vote_skip_ratio": "half"},
         ],
     )
     def test_invalid_values_are_refused(self, client, logged_in, fake_redis, body):
         response = client.patch("/api/v1/guilds/1/settings", json=body, headers=_headers(logged_in))
         assert response.status_code == 400
         assert response.get_json()["error"]["code"] == "invalid_value"
-
-    def test_the_player_policy_round_trips(self, client, logged_in, fake_redis):
-        response = client.patch(
-            "/api/v1/guilds/1/settings",
-            json={"dj_only": True, "vote_skip_ratio": 0.75},
-            headers=_headers(logged_in),
-        )
-
-        assert response.status_code == 200
-        settings = client.get("/api/v1/guilds/1/settings").get_json()
-        assert settings["dj_only"] is True
-        assert settings["vote_skip_ratio"] == 0.75
-
-    def test_the_dj_lock_defaults_to_off(self, client, logged_in, fake_redis):
-        """On by default would silently take the player away from everybody who
-        could use it yesterday."""
-        settings = client.get("/api/v1/guilds/1/settings").get_json()
-
-        assert settings["dj_only"] is False
-        assert settings["vote_skip_ratio"] == 0.5
 
     def test_enabled_cogs_is_not_writable_even_though_it_is_returned(self, client, logged_in, fake_redis):
         """It comes from deployment configuration, not from the dashboard."""

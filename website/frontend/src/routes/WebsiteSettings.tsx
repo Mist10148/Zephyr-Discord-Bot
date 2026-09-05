@@ -23,13 +23,6 @@ export function WebsiteSettings() {
       <Choice label="Server sort" setting="guildSort" value={preferences.guildSort} values={['pinned', 'recent', 'name-asc', 'name-desc', 'status']} />
     </ListGroup>
     <GlassSurface tier="thin" className="notice"><p>These preferences stay in this browser. Discord account data and private dashboard results are never saved here.</p></GlassSurface>
-    {/* The design-system page used to be one of three cards on the landing page,
-        selling an internal review surface to prospective users. The route stays
-        -- it is the design contract -- but as a link from here. */}
-    <SectionLabel>About</SectionLabel><ListGroup>
-      <ListRow to="/kitchen-sink" label="Design system" detail="Every glass primitive on one screen, in the active theme" />
-      <ListRow to="/commands" label="Command reference" detail="Every slash and prefix command Zephyr answers" />
-    </ListGroup>
     <BackLink to="/">Back home</BackLink>
   </main>
 }

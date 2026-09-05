@@ -181,19 +181,11 @@ class TestPlayNextSong:
         state.bot.loop.call_soon_threadsafe.side_effect = RuntimeError("loop is closed")
         state.play_next_song()
 
-    def test_an_ffmpeg_error_is_logged_but_still_advances(self, caplog):
-        """caplog, not capsys: this stopped being a print.
-
-        The level is explicit because the suite configures no logging at all --
-        there is no pytest.ini and configure_logging is only called from the
-        entry points, so caplog's own handler is the only thing listening.
-        """
+    def test_an_ffmpeg_error_is_logged_but_still_advances(self, capsys):
         state = _make_state()
         state.bot.loop = MagicMock()
-        with caplog.at_level("ERROR", logger="zephyr.cogs.music"):
-            state.play_next_song(error=Exception("boom"))
-        assert "FFmpeg failed during playback" in caplog.text
-        assert "boom" in caplog.text
+        state.play_next_song(error=Exception("boom"))
+        assert "FFmpeg Error" in capsys.readouterr().out
         state.bot.loop.call_soon_threadsafe.assert_called_once()
 
     @pytest.mark.asyncio

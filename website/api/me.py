@@ -8,11 +8,8 @@ from website import discord_api
 from website.api import api
 from website.api.guard import current_session, require_session
 from zephyr.services import bridge
-from zephyr.core.logging import get_logger
 
 
-
-log = get_logger(__name__)
 def annotate_bot_presence(guilds: list[dict]) -> tuple[list[dict], int | None]:
     """Add bot_present to each guild, without ever removing one.
 
@@ -29,7 +26,7 @@ def annotate_bot_presence(guilds: list[dict]) -> tuple[list[dict], int | None]:
         snapshot, updated_at = bridge.read_guild_snapshot(url=current_app.config["REDIS_URL"])
     except Exception as exc:
         # A snapshot outage degrades the annotation; it must not fail the request.
-        log.exception("Could not read the guild snapshot")
+        print(f"[Me] Could not read the guild snapshot: {exc}")
         snapshot, updated_at = None, None
 
     annotated = []

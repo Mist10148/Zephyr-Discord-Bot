@@ -8,10 +8,6 @@ From the original bot.py: ``_send_paginated_help`` (2270-2292),
 import discord
 from discord.ui import Button, View
 
-# Aliased: `_send_paginated_embeds` takes a parameter called `embeds`, and an
-# unaliased import would be shadowed inside it.
-from zephyr.utils import embeds as embed_factory
-
 
 async def _send_paginated_help(interaction: discord.Interaction, title: str, pages: list):
     current_page = 0
@@ -20,7 +16,7 @@ async def _send_paginated_help(interaction: discord.Interaction, title: str, pag
     view = View(timeout=60)
     view.add_item(prev)
     view.add_item(next_b)
-    embed = embed_factory.info(pages[current_page], title=title)
+    embed = discord.Embed(title=title, description=pages[current_page], color=0x00FF00)
     await interaction.response.send_message(embed=embed, view=view)
 
     async def cb(interaction: discord.Interaction):
@@ -42,19 +38,6 @@ async def _send_paginated_help(interaction: discord.Interaction, title: str, pag
 _paginate = _send_paginated_help
 
 
-def _stamp(embed: discord.Embed, index: int, total: int) -> None:
-    """Put "Page 2/5" on an embed without losing the bot's identity.
-
-    A bare `set_footer` here replaced whatever the factory put there, so every
-    paginated reply in the bot silently lost the shared footer and icon -- which
-    is the one place a per-page stamp and a global footer collide.
-    """
-    embed.set_footer(
-        text=embed_factory.footer_text(f"Page {index + 1}/{total}"),
-        icon_url=embed_factory.icon_url(),
-    )
-
-
 async def _send_paginated_embeds(interaction: discord.Interaction, embeds: list):
     if not embeds:
         return
@@ -64,7 +47,7 @@ async def _send_paginated_embeds(interaction: discord.Interaction, embeds: list)
     view = View(timeout=120)
     view.add_item(prev)
     view.add_item(next_b)
-    _stamp(embeds[current_page], current_page, len(embeds))
+    embeds[current_page].set_footer(text=f"Page {current_page + 1}/{len(embeds)}")
     if interaction.response.is_done():
         await interaction.followup.send(embed=embeds[current_page], view=view)
     else:
@@ -76,7 +59,7 @@ async def _send_paginated_embeds(interaction: discord.Interaction, embeds: list)
             current_page -= 1
         else:
             current_page += 1
-        _stamp(embeds[current_page], current_page, len(embeds))
+        embeds[current_page].set_footer(text=f"Page {current_page + 1}/{len(embeds)}")
         prev.disabled = current_page == 0
         next_b.disabled = current_page == len(embeds) - 1
         await interaction.response.edit_message(embed=embeds[current_page], view=view)

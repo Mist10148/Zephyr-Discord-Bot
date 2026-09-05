@@ -15,7 +15,7 @@ Leaving app.secret_key unset is therefore a feature: any future accidental use o
 flask.session raises loudly instead of quietly signing with a weak key.
 
 Failure behaviour is the deliberate opposite of RedisStorage's
-``except Exception: log.exception(...)``. That soft-fail is right for settings and
+``except Exception: print(...)``. That soft-fail is right for settings and
 catastrophic for sessions -- a Redis blip would look like a silent logout, and a
 failed write would look like a successful login. Everything here raises
 SessionStoreError instead, and callers map it to a 503 or to an error redirect.

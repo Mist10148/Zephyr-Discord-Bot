@@ -1,17 +1,11 @@
 """Shared fixtures for the web tier's tests.
 
 No network, no Redis and no Postgres: Redis is a hand-rolled in-memory double and
-the database is a temporary SQLite file.  CI's `backend` job runs no service
-containers, so this is a hard requirement rather than a convenience.
+the database is a temporary SQLite file.  CI runs no service containers, so this
+is a hard requirement rather than a convenience.
 
 ``fakeredis`` is deliberately not a dependency -- the surface used here is a dozen
 methods, which is not worth a package with its own version drift.
-
-**One job breaks this rule, deliberately.** CI's `e2e` job (17.4) runs a real
-Redis, because the dashboard exists only when ``REDIS_URL`` is set and half of
-what Playwright covers is behind auth -- there is no version of that suite
-without it.  The exception is confined to that job, and nothing in ``tests/``
-depends on a service being up.
 """
 
 import time

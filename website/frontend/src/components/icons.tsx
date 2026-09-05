@@ -146,13 +146,3 @@ export function SunSmallIcon({ size = 17, className }: IconProps) {
     <line x1="3.8" y1="14.2" x2="5" y2="13" /><line x1="13" y1="5" x2="14.2" y2="3.8" />
   </svg>
 }
-
-// The now-playing art fallback. The placeholder used to render the literal
-// words "track art" in 8px mono where the thumbnail should be.
-export function DiscIcon({ size = 28, className }: IconProps) {
-  return <svg {...base(size)} className={className} viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5" fill="none">
-    <circle cx="12" cy="12" r="9" />
-    <circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none" />
-    <path d="M12 5.6a6.4 6.4 0 0 1 6.4 6.4" strokeLinecap="round" />
-  </svg>
-}

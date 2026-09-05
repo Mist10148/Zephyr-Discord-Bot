@@ -14,7 +14,8 @@ approximation of it.
 """
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+import traceback
+from datetime import datetime, timezone
 
 import discord
 from discord import app_commands
@@ -27,84 +28,40 @@ from zephyr.db.weather_subs import (
     create,
     delete_sub,
     get,
-    snooze,
     list_for_guild,
     list_watched,
     mark_fired,
     normalise_zone,
     parse_local_time,
 )
-from zephyr.utils import embeds
 from zephyr.utils.weather_alerts import DEFAULT_THRESHOLDS, evaluate
 from zephyr.utils.weather_utils import (
     WeatherProviderError,
     geocode_search,
     get_openmeteo_bundle,
 )
-from zephyr.core.logging import get_logger
 
-
-log = get_logger(__name__)
 KIND_LABELS = {
     "daily": "Daily digest",
     "severe": "Severe weather watch",
     "class_suspension": "Class suspension watch",
 }
-# Severity, expressed in the factory's roles rather than in three of
-# discord.Color's constants. A daily digest is information, a severe-weather
-# watch is a warning, and a class suspension is the one people act on.
-KIND_ACCENTS = {
-    "daily": "info",
-    "severe": "warning",
-    "class_suspension": "error",
+KIND_COLORS = {
+    "daily": discord.Color.blue(),
+    "severe": discord.Color.orange(),
+    "class_suspension": discord.Color.red(),
 }
 
 
 def alert_embed(alert: dict) -> discord.Embed:
-    embed = embeds.build(
+    embed = discord.Embed(
         title=alert["title"],
         description=alert.get("summary"),
-        accent=KIND_ACCENTS.get(alert["kind"], "info"),
+        color=KIND_COLORS.get(alert["kind"], discord.Color.blue()),
     )
     for field in alert.get("fields") or []:
         embed.add_field(name=field["name"], value=field["value"], inline=True)
     return embed
-
-
-_DURATION_UNITS = {"m": 60, "h": 3600, "d": 86400, "w": 604800}
-# Two years. A snooze longer than that is a delete somebody has not admitted to,
-# and an unbounded value would let one typo mute a subscription until the heat
-# death of the guild.
-MAX_SNOOZE_SECONDS = 63_072_000
-
-
-def _parse_duration(value: str) -> int | None:
-    """"2h" -> 7200. Returns None when it cannot be read, 0 to unmute.
-
-    A shorthand rather than a date, because the question is "how long" and
-    nobody wants to compute a timestamp to skip a weekend. Bare digits are read
-    as hours, which is the unit people mean when they omit one.
-    """
-    text = str(value).strip().lower().replace(" ", "")
-    if not text:
-        return None
-    if text in {"0", "off", "none", "clear"}:
-        return 0
-    if text.isdigit():
-        return min(int(text) * 3600, MAX_SNOOZE_SECONDS)
-    unit = text[-1]
-    if unit not in _DURATION_UNITS or not text[:-1].isdigit():
-        return None
-    return min(int(text[:-1]) * _DURATION_UNITS[unit], MAX_SNOOZE_SECONDS)
-
-
-def format_timestamp(when: datetime) -> str:
-    """A Discord relative timestamp, so everyone reads it in their own zone.
-
-    The alternative is formatting in the guild's configured timezone, which is
-    wrong for everybody who is not in it.
-    """
-    return f"<t:{int(when.timestamp())}:f> (<t:{int(when.timestamp())}:R>)"
 
 
 class WeatherAlertsCog(commands.Cog):
@@ -134,7 +91,7 @@ class WeatherAlertsCog(commands.Cog):
         try:
             due = await asyncio.to_thread(claim_due, datetime.now(timezone.utc))
         except Exception as exc:
-            log.exception("Could not claim due subscriptions")
+            print(f"[WeatherAlerts] Could not claim due subscriptions: {exc}")
             return
         for subscription in due:
             await self._deliver(subscription)
@@ -149,7 +106,7 @@ class WeatherAlertsCog(commands.Cog):
         try:
             watched = await asyncio.to_thread(list_watched)
         except Exception as exc:
-            log.exception("Could not read watched subscriptions")
+            print(f"[WeatherAlerts] Could not read watched subscriptions: {exc}")
             return
         for subscription in watched:
             await self._deliver(subscription, dedupe=True)
@@ -159,11 +116,8 @@ class WeatherAlertsCog(commands.Cog):
     async def _before_loops(self):
         await self.bot.wait_until_ready()
 
-    async def _deliver(self, subscription: dict, *, dedupe: bool = False, mark: bool = True) -> bool:
+    async def _deliver(self, subscription: dict, *, dedupe: bool = False) -> None:
         """Evaluate one subscription and post it if there is anything to say.
-
-        Returns whether anything was actually posted, so /weather-run can say
-        so. ``mark=False`` skips the fingerprint write for a manual send.
 
         Failures are contained per subscription: one unreachable channel or one
         provider hiccup must not stop the rest of the batch, which is why this
@@ -177,11 +131,11 @@ class WeatherAlertsCog(commands.Cog):
                 units=subscription.get("units") or "metric",
             )
         except WeatherProviderError as exc:
-            log.warning("Weather provider failed for subscription %s: %s", subscription["id"], exc)
-            return False
+            print(f"[WeatherAlerts] Provider failed for subscription {subscription['id']}: {exc}")
+            return
         except Exception:
-            log.exception("Could not evaluate subscription %s", subscription["id"])
-            return False
+            traceback.print_exc()
+            return
 
         alert = evaluate(
             subscription["kind"],
@@ -191,31 +145,30 @@ class WeatherAlertsCog(commands.Cog):
             thresholds=subscription.get("thresholds"),
         )
         if alert is None:
-            return False
+            return
         if dedupe and alert["fingerprint"] == subscription.get("last_fingerprint"):
-            return False
+            return
 
         channel = self.bot.get_channel(int(subscription["channel_id"]))
         if channel is None:
-            log.warning("Channel %s is not reachable", subscription["channel_id"])
-            return False
+            print(f"[WeatherAlerts] Channel {subscription['channel_id']} is not reachable.")
+            return
         try:
             await channel.send(embed=alert_embed(alert))
         except discord.Forbidden:
             # Posting is not permitted any more. Left enabled deliberately: a
             # permission change is usually temporary, and silently disabling the
             # subscription would be discovered much later than a missing message.
-            log.warning("Cannot post in channel %s", subscription["channel_id"])
-            return False
+            print(f"[WeatherAlerts] Cannot post in {subscription['channel_id']}.")
+            return
         except Exception:
-            log.exception("Could not deliver subscription %s", subscription["id"])
-            return False
+            traceback.print_exc()
+            return
 
-        if dedupe and mark:
+        if dedupe:
             # Only recorded once something was actually posted, so a quiet tick
             # never masks the next real warning.
             await asyncio.to_thread(mark_fired, subscription["id"], fingerprint=alert["fingerprint"])
-        return True
 
     # ------------------------------------------------------------------
     # Commands
@@ -288,15 +241,16 @@ class WeatherAlertsCog(commands.Cog):
             await interaction.followup.send(f"❌ {exc}")
             return
         except Exception as exc:
-            log.exception("Could not create a weather subscription")
+            traceback.print_exc()
             await interaction.followup.send(f"❌ Could not save that subscription: {exc}")
             return
 
         when = f" at {schedule} ({zone_name})" if schedule else ""
         note = "" if zone_accepted else f"\n⚠️ `{tz}` is not an IANA timezone name, so UTC was used instead."
-        await interaction.followup.send(embed=embeds.success(
-            f"✅ **{KIND_LABELS[kind.value]}** for **{created['location']}** will post in "
-            f"{destination.mention}{when}. (#{created['id']}){note}"))
+        await interaction.followup.send(embed=discord.Embed(
+            description=f"✅ **{KIND_LABELS[kind.value]}** for **{created['location']}** will post in "
+                        f"{destination.mention}{when}. (#{created['id']}){note}",
+            color=discord.Color.green()))
 
     @app_commands.command(name="weather-subs", description="List this server's weather subscriptions.")
     async def list_subs(self, interaction: discord.Interaction):
@@ -308,7 +262,7 @@ class WeatherAlertsCog(commands.Cog):
         if not rows:
             await interaction.followup.send("No weather subscriptions here yet. Add one with `/weather-subscribe`.", ephemeral=True)
             return
-        embed = embeds.info(title="🌦️ Weather subscriptions")
+        embed = discord.Embed(title="🌦️ Weather subscriptions", color=discord.Color.blue())
         for row in rows[:25]:
             when = f" at {row['schedule_local_time']} ({row['tz']})" if row["schedule_local_time"] else ""
             state = "" if row["enabled"] else " • disabled"
@@ -334,89 +288,6 @@ class WeatherAlertsCog(commands.Cog):
             return
         await asyncio.to_thread(delete_sub, subscription_id)
         await interaction.followup.send(f"🗑️ Removed subscription #{subscription_id}.", ephemeral=True)
-
-    @app_commands.command(name="weather-snooze", description="Mute a subscription for a while without deleting it.")
-    @app_commands.describe(
-        subscription_id="The number shown by /weather-subs",
-        duration="How long — e.g. 2h, 3d, 1w. Use 0 to unmute.",
-    )
-    @app_commands.checks.has_permissions(manage_guild=True)
-    async def snooze_command(self, interaction: discord.Interaction, subscription_id: int, duration: str):
-        """Snoozing is not disabling.
-
-        `enabled=False` was the only way to stop a subscription, and it is a
-        decision to stop -- somebody going away for a week wants the settings
-        and the schedule kept and only wants quiet meanwhile. A snoozed row
-        also resumes on its *normal* schedule rather than firing once
-        immediately, because it is skipped without being claimed.
-        """
-        if interaction.guild is None:
-            await interaction.response.send_message("❌ This command can only be used in a server.", ephemeral=True)
-            return
-        await interaction.response.defer(ephemeral=True)
-
-        seconds = _parse_duration(duration)
-        if seconds is None:
-            await interaction.followup.send(
-                "❌ I could not read that duration. Try `2h`, `3d` or `1w` — or `0` to unmute.",
-                ephemeral=True,
-            )
-            return
-
-        existing = await asyncio.to_thread(get, subscription_id)
-        # Guild-scoped, like /weather-unsubscribe: ids are sequential across the
-        # whole database, so without this a guess would mute another server's row.
-        if existing is None or existing["guild_id"] != str(interaction.guild.id):
-            await interaction.followup.send(f"❌ There is no subscription #{subscription_id} here.", ephemeral=True)
-            return
-
-        until = None if seconds == 0 else datetime.now(timezone.utc) + timedelta(seconds=seconds)
-        await asyncio.to_thread(snooze, subscription_id, until)
-
-        if until is None:
-            await interaction.followup.send(f"🔔 Subscription #{subscription_id} is active again.", ephemeral=True)
-        else:
-            await interaction.followup.send(
-                f"🔇 Subscription #{subscription_id} is muted until {format_timestamp(until)}.",
-                ephemeral=True,
-            )
-
-    @app_commands.command(name="weather-run", description="Send a subscription's next post right now.")
-    @app_commands.describe(subscription_id="The number shown by /weather-subs")
-    @app_commands.checks.has_permissions(manage_guild=True)
-    async def run_now(self, interaction: discord.Interaction, subscription_id: int):
-        """Actually post, unlike /weather-preview.
-
-        /weather-preview shows the caller privately what a subscription *would*
-        say, which answers "is this configured correctly" but not "can the bot
-        post in that channel". This delivers through the same `_deliver` path
-        the scheduler uses, so a permissions problem or an unreachable channel
-        surfaces now rather than at 8am.
-
-        Deliberately does not mark the row fired: this is a manual send, and
-        advancing `last_run_at` would silently cancel today's real digest.
-        """
-        if interaction.guild is None:
-            await interaction.response.send_message("❌ This command can only be used in a server.", ephemeral=True)
-            return
-        await interaction.response.defer(ephemeral=True)
-
-        existing = await asyncio.to_thread(get, subscription_id)
-        if existing is None or existing["guild_id"] != str(interaction.guild.id):
-            await interaction.followup.send(f"❌ There is no subscription #{subscription_id} here.", ephemeral=True)
-            return
-
-        delivered = await self._deliver(existing, mark=False)
-        if delivered:
-            await interaction.followup.send(
-                f"📤 Sent subscription #{subscription_id} to <#{existing['channel_id']}>.", ephemeral=True
-            )
-        else:
-            await interaction.followup.send(
-                f"Subscription #{subscription_id} had nothing to report right now, "
-                "or I could not post in its channel — check the log if this is unexpected.",
-                ephemeral=True,
-            )
 
     @app_commands.command(name="weather-preview", description="Show what a subscription would post right now.")
     @app_commands.describe(subscription_id="The number shown by /weather-subs")

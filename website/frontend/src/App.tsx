@@ -7,7 +7,6 @@ import { RouteErrorBoundary } from './components/RouteErrorBoundary'
 import { TabBar } from './components/TabBar'
 import { PwaUpdate } from './components/PwaUpdate'
 import { MiniPlayer } from './components/MiniPlayer'
-import { SiteFooter } from './components/SiteFooter'
 import { Skeleton } from './components/ios'
 
 const Home = lazy(() => import('./routes/Home').then(m => ({ default: m.Home })))
@@ -23,18 +22,13 @@ const GuildSettings = lazy(() => import('./routes/GuildSettings').then(m => ({ d
 const GuildAudit = lazy(() => import('./routes/GuildAudit').then(m => ({ default: m.GuildAudit })))
 const WebsiteSettings = lazy(() => import('./routes/WebsiteSettings').then(m => ({ default: m.WebsiteSettings })))
 const Commands = lazy(() => import('./routes/Commands').then(m => ({ default: m.Commands })))
-const Privacy = lazy(() => import('./routes/Legal').then(m => ({ default: m.Privacy })))
-const Terms = lazy(() => import('./routes/Legal').then(m => ({ default: m.Terms })))
 const NotFound = lazy(() => import('./routes/NotFound').then(m => ({ default: m.NotFound })))
-// Deliberately still the generic shape: this covers every lazy route, so
-// committing to one page's layout would be wrong on all the others. Each
-// route's own isPending branch renders the shape that page is about to show.
 const loading = <main className="app"><Skeleton lines={6} /></main>
 
 export default function App() {
   const { pathname } = useLocation(); const [paletteOpen, setPaletteOpen] = useState(false); const showPalette = pathname !== '/login'
   return <AppShell onOpenPalette={() => setPaletteOpen(true)}><a className="skip-link" href="#main-content">Skip to content</a><RouteErrorBoundary><Suspense fallback={loading}><Routes>
-    <Route path="/" element={<Home />} /><Route path="/weather" element={<Weather />} /><Route path="/commands" element={<Commands />} /><Route path="/privacy" element={<Privacy />} /><Route path="/terms" element={<Terms />} /><Route path="/settings" element={<WebsiteSettings />} /><Route path="/kitchen-sink" element={<KitchenSink />} /><Route path="/login" element={<Login />} />
+    <Route path="/" element={<Home />} /><Route path="/weather" element={<Weather />} /><Route path="/commands" element={<Commands />} /><Route path="/settings" element={<WebsiteSettings />} /><Route path="/kitchen-sink" element={<KitchenSink />} /><Route path="/login" element={<Login />} />
     <Route path="/g" element={<RequireAuth><Guilds /></RequireAuth>} /><Route path="/g/:guildId" element={<RequireAuth><GuildOverview /></RequireAuth>} /><Route path="/g/:guildId/music" element={<RequireAuth><GuildMusic /></RequireAuth>} /><Route path="/g/:guildId/weather-alerts" element={<RequireAuth><GuildWeatherAlerts /></RequireAuth>} /><Route path="/g/:guildId/ai" element={<RequireAuth><GuildAI /></RequireAuth>} /><Route path="/g/:guildId/settings" element={<RequireAuth><GuildSettings /></RequireAuth>} /><Route path="/g/:guildId/audit" element={<RequireAuth><GuildAudit /></RequireAuth>} /><Route path="*" element={<NotFound />} />
-  </Routes></Suspense></RouteErrorBoundary><SiteFooter /><MiniPlayer />{showPalette && <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />}<PwaUpdate /><TabBar /></AppShell>
+  </Routes></Suspense></RouteErrorBoundary><MiniPlayer />{showPalette && <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />}<PwaUpdate /><TabBar /></AppShell>
 }

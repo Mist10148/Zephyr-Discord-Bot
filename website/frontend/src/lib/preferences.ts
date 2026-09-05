@@ -17,10 +17,6 @@ export const PREFERENCES_KEY = 'zephyr-preferences-v2'
 export const PINS_KEY = 'zephyr-pinned-guilds'
 export const RECENTS_KEY = 'zephyr-recent-guilds'
 export const LEGACY_THEME_KEY = 'zephyr-theme'
-export const WEATHER_PLACES_KEY = 'zephyr-weather-places'
-/** Saved weather places kept per browser. Six because the row wraps past that
- *  on a phone, and a list nobody can prune is worse than a short one. */
-export const MAX_WEATHER_PLACES = 6
 export const DEFAULT_PREFERENCES: Preferences = {
   version: 2, theme: 'system', palette: 'warm', density: 'comfortable', textScale: '100',
   motion: 'system', units: 'metric', dashboardView: 'cards', guildCategory: 'all', guildSort: 'pinned',

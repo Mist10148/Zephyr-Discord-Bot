@@ -114,15 +114,11 @@ def test_tracks_with_neither_title_nor_url_are_dropped(db_url):
     assert saved["track_count"] == 1
 
 
-def test_an_audit_write_failure_never_raises(db_url, caplog):
+def test_an_audit_write_failure_never_raises(db_url, capsys):
     audit.record("settings.update", actor_id="42", guild_id="7", payload={"prefix": "!"}, database_url=db_url)
     # An unusable URL is the closest stand-in for the database being down.
-    with caplog.at_level("ERROR", logger="zephyr.db.audit"):
-        audit.record("settings.update", actor_id="42", database_url="not-a-database-url")
-    # caplog rather than capsys: this is a log record now, and it carries the
-    # traceback that the old print discarded.
-    assert "Could not record audit action" in caplog.text
-    assert "Traceback" in caplog.text
+    audit.record("settings.update", actor_id="42", database_url="not-a-database-url")
+    assert "[Audit]" in capsys.readouterr().out
 
 
 def test_an_oversized_audit_payload_is_truncated(db_url):

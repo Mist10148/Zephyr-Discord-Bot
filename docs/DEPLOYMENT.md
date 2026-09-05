@@ -199,54 +199,16 @@ alembic upgrade head
 
 Revisions so far:
 
-| Revision | Tables and columns |
+| Revision | Tables |
 |---|---|
 | `0001` | `ai_settings`, `app_state`, `web_users`, `guilds` |
 | `0002` | `playlists`, `playlist_tracks`, `audit_log` |
 | `0003` | `weather_subs`, `bot_users` |
-| `0004` | `ai_conversations`, `ai_messages`, `personas` |
-| `0005` | additive columns on `guilds`, `bot_users`, `weather_subs`, `ai_messages` |
 
 `alembic downgrade base` is meaningful at every step. Because `create_all()` and Alembic can drift,
 `tests/test_web_schema.py` asserts the two agree — `test_migrations_and_create_all_agree` builds a
 database each way and compares tables and columns in both directions, so a model change that skips a
-migration fails CI rather than production. Two further gates protect the chain itself:
-`test_the_chain_has_exactly_one_head` fails the moment two branches claim the same revision number,
-and `test_every_revision_downgrades_one_step` walks down one revision at a time so a broken
-`downgrade()` names the revision that broke rather than the last step attempted.
-
-**Never resolve two heads with an Alembic merge revision.** The chain is linear by convention — bare
-zero-padded revision ids, no `branch_labels`, no `depends_on` — and a merge revision would satisfy
-the head count while making the per-step downgrade test meaningless. Renumber instead: a revision id
-appears in exactly three places (the filename, `revision:`, and the next file's `down_revision:`).
-
-### Which path builds the schema
-
-Two paths exist and they are now split deliberately, because both used to run on every deploy:
-
-| Database | Built by |
-|---|---|
-| SQLite (development, tests) | `create_all()`, from `get_engine()` on first use |
-| Anything else (`DATABASE_URL` set) | **Alembic only** |
-
-`zephyr/db/engine.py`'s `should_auto_create(url)` makes the call. `DB_AUTO_CREATE` is an explicit
-override in either direction when the heuristic is wrong — a throwaway Postgres in CI, say.
-
-**If you have a Docker, compose or Procfile deployment created before this split**, its tables came
-from `create_all()` while `alembic_version` stayed behind, so the next `alembic upgrade head` will
-fail on "table already exists" (`op.create_table` has no `checkfirst`). Recover once, per database:
-
-```bash
-# Confirm what Alembic thinks it has applied
-alembic current
-
-# Adopt the schema that create_all() already built, then continue normally
-alembic stamp head
-```
-
-Stamp only after checking that the tables really do match the models — `alembic stamp head` asserts
-they do without verifying it. If they do not, the honest options are a hand-written migration or, on
-a database you can afford to lose, recreating it from `alembic upgrade head` on an empty schema.
+migration fails CI rather than production.
 
 ### The bot ↔ web bridge
 

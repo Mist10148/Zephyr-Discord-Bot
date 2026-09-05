@@ -13,10 +13,7 @@ actually played.
 """
 
 import re
-from zephyr.core.logging import get_logger
 
-
-log = get_logger(__name__)
 # Matches the plan's cap on playlist size, which yt-dlp's max_entries also uses.
 MAX_IMPORT_TRACKS = 200
 
@@ -51,7 +48,7 @@ def resolve_short_link(url: str) -> str:
         if "spotify.com" in resolved or resolved.startswith("spotify:"):
             return resolved
     except Exception as exc:
-        log.exception("Could not resolve a Spotify reference")
+        print(f"[Spotify Resolve Error] {exc}")
     return url
 
 

@@ -7,10 +7,7 @@ from website.api.player import bridge_call
 from zephyr.db import ai as ai_db
 from zephyr.db import audit
 from zephyr.services import bridge
-from zephyr.core.logging import get_logger
 
-
-log = get_logger(__name__)
 # The purge has already committed by the time this is sent, so it waits only
 # briefly: the bot's answer is needed for promptness, never for correctness.
 MEMORY_CACHE_TIMEOUT = 2.0
@@ -96,7 +93,7 @@ def _clear_bot_memory_cache(guild_id, channel_id):
     try:
         bridge.send_command("ai.memory.purge", guild_id=guild_id, actor_id=g.zephyr_session.user_id, args={"channel_id": str(channel_id)}, timeout=MEMORY_CACHE_TIMEOUT, url=redis_url)
     except Exception as exc:
-        log.exception("Could not clear the bot's memory buffer for channel %s", channel_id)
+        print(f"[AI] Could not clear the bot's memory buffer for channel {channel_id}: {exc}")
 
 @api.delete("/guilds/<guild_id>/ai/memory/<channel_id>")
 @guild_scoped

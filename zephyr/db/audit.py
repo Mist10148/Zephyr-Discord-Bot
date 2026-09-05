@@ -18,10 +18,7 @@ from sqlalchemy import desc, insert, select
 
 from zephyr.db.models import AuditLog
 from zephyr.db.session import get_engine
-from zephyr.core.logging import get_logger
 
-
-log = get_logger(__name__)
 # Keeps one oversized payload from becoming an unbounded row.  JSON columns have
 # no length limit, and a queue snapshot or an error blob can be large.
 MAX_PAYLOAD_CHARS = 4000
@@ -56,7 +53,7 @@ def record(
                 )
             )
     except Exception as exc:
-        log.exception("Could not record audit action %r", action)
+        print(f"[Audit] Could not record {action!r}: {exc}")
 
 
 def read(
@@ -64,9 +61,6 @@ def read(
     *,
     limit: int = DEFAULT_LIMIT,
     before_id: int | None = None,
-    action: str | None = None,
-    actor_id: str | None = None,
-    source: str | None = None,
     database_url: str | None = None,
 ) -> dict:
     """Return one page of a guild's audit log, newest first.
@@ -75,14 +69,6 @@ def read(
     empty page on a database error would look like "nothing ever happened", which
     is a worse lie than an error the caller can surface.  One extra row is fetched
     to decide ``next_before`` without a second count query.
-
-    Filtering happens here rather than in the client, and that is the whole point
-    of it: the page is keyset-paginated, so a client-side filter can only narrow
-    the fifty rows it already has.  Asking "every volume change this month" of a
-    filter that runs after pagination means paging through the entire log by
-    hand.  ``action`` matches a prefix -- ``player`` selects every ``player.*``
-    action -- because the actions are namespaced and the useful question is
-    almost always about a family rather than one verb.
     """
     page = max(1, min(int(limit or DEFAULT_LIMIT), MAX_LIMIT))
     # Explicit columns and .mappings(): a Core connection over ``select(AuditLog)``
@@ -100,14 +86,6 @@ def read(
     )
     if before_id is not None:
         statement = statement.where(AuditLog.id < int(before_id))
-    if action:
-        # Prefix, not equality: "player" has to mean every player.* action, or
-        # the filter is only usable by someone who already knows the verb names.
-        statement = statement.where(AuditLog.action.startswith(str(action)))
-    if actor_id:
-        statement = statement.where(AuditLog.actor_id == str(actor_id))
-    if source:
-        statement = statement.where(AuditLog.source == str(source))
 
     engine = get_engine(database_url)
     with engine.connect() as connection:

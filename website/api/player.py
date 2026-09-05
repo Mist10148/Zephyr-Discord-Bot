@@ -13,10 +13,7 @@ from website.api import api, error
 from website.api.guard import guild_scoped, rate_limit
 from zephyr.db import audit
 from zephyr.services import bridge
-from zephyr.core.logging import get_logger
 
-
-log = get_logger(__name__)
 # Actions the browser may send, and whether they take arguments.  A whitelist,
 # not a passthrough: the bridge is a general command channel, and a session
 # should not be able to reach an action the UI never offers.
@@ -65,7 +62,7 @@ def bridge_call(action: str, *, guild_id=None, actor_id=None, args=None, timeout
     except bridge.BridgeError as exc:
         return error("bot_refused", str(exc), 409)
     except Exception as exc:
-        log.exception("Bridge call %s failed", action)
+        print(f"[Player] Bridge call {action} failed: {exc}")
         return error("bridge_unavailable", "Could not reach Zephyr.", 503)
 
 
@@ -85,7 +82,7 @@ def get_player(guild_id: str):
     try:
         snapshot = bridge.read_player_snapshot(guild_id, url=redis_url)
     except Exception as exc:
-        log.exception("Could not read the player snapshot for %s", guild_id)
+        print(f"[Player] Could not read the snapshot for {guild_id}: {exc}")
         return error("bridge_unavailable", "Could not reach Zephyr.", 503)
 
     if snapshot is None:

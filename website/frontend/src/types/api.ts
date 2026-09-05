@@ -59,7 +59,4 @@ export type AIUsage = { model: string; rpm: number; tpm: number; rpd: number; co
 // is unknown rather than a fixed shape. `next_before` is the keyset cursor: pass it
 // back as ?before= for the next page, or null when there are no older entries.
 export type AuditEntry = { id: number; guild_id: string | null; actor_id: string; action: string; payload: unknown; source: string; created_at: string | null }
-export type AuditActor = { id: string; name: string; avatar_url: string | null }
-// `actors` is best-effort: an unreachable bot answers {} and the row falls back
-// to the raw id, the same way the settings pickers degrade.
-export type AuditPage = { id: string; entries: AuditEntry[]; next_before: number | null; actors?: Record<string, AuditActor> }
+export type AuditPage = { id: string; entries: AuditEntry[]; next_before: number | null }

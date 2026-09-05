@@ -49,7 +49,6 @@ export function GuildSettings() {
   useEffect(() => { setDraft(settings.data ? draftOf(settings.data) : null) }, [settings.data])
 
   const save = useMutation({
-    meta: { success: 'Settings saved' },
     mutationFn: (patch: Partial<Draft>) => api<Settings>(`/guilds/${guildId}/settings`, { method: 'PATCH', body: patch }),
     onSuccess: data => {
       client.setQueryData(['guild-settings', guildId], data)
@@ -58,7 +57,7 @@ export function GuildSettings() {
     },
   })
 
-  if (settings.isPending || !draft) return <main className="app"><Skeleton variant="rows" count={6} /></main>
+  if (settings.isPending || !draft) return <main className="app"><Skeleton lines={6} /></main>
   if (settings.error) return <main className="app"><LargeTitleHeader title="Settings" /><ErrorNote error={settings.error} onRetry={() => settings.refetch()} /><BackLink to={`/g/${guildId}`}>Back to the server</BackLink></main>
 
   const original = draftOf(settings.data!)
@@ -131,7 +130,7 @@ export function GuildSettings() {
       </ListGroup>
       : <GlassSurface tier="thin"><p className="muted">Zephyr is not reachable, so its channels cannot be listed. Music commands are allowed in every channel while this is unset.</p></GlassSurface>}
 
-    
+    {save.error && !invalidField && <ErrorNote error={save.error} onRetry={() => save.reset()} />}
 
     {/* Sticky: on a form this long the actions used to scroll out of reach, so a
         change made at the bottom meant hunting for the button that saves it. */}

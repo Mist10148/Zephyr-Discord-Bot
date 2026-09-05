@@ -27,8 +27,6 @@ def _defaults() -> dict:
         "DISCORD_REDIRECT_URI": config.DISCORD_REDIRECT_URI,
         "DISCORD_OAUTH_SCOPES": config.DISCORD_OAUTH_SCOPES,
         "DISCORD_INVITE_PERMISSIONS": config.DISCORD_INVITE_PERMISSIONS,
-        "SUPPORT_URL": config.SUPPORT_URL,
-        "REPOSITORY_URL": config.REPOSITORY_URL,
         "WEB_PUBLIC_URL": config.WEB_PUBLIC_URL,
         "REDIS_URL": config.REDIS_URL,
         "DATABASE_URL": config.DATABASE_URL,

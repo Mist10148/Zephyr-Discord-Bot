@@ -15,7 +15,6 @@ from zephyr.db import audit
 from zephyr.db import weather_subs as repo
 from zephyr.utils import weather_alerts
 from zephyr.utils.weather_utils import WeatherProviderError, geocode_search, get_openmeteo_bundle
-from datetime import datetime, timezone
 
 # Shared with the public weather endpoint's reasoning: a forecast bundle is worth
 # reusing for a few minutes, and a preview is often reloaded while somebody
@@ -23,7 +22,7 @@ from datetime import datetime, timezone
 cache = TTLCache()
 
 CREATE_REQUIRED = {"kind", "location", "channel_id"}
-EDITABLE = {"channel_id", "kind", "location", "schedule_local_time", "tz", "thresholds", "enabled", "units", "muted_until"}
+EDITABLE = {"channel_id", "kind", "location", "schedule_local_time", "tz", "thresholds", "enabled", "units"}
 
 
 def _database_url():
@@ -35,33 +34,10 @@ def _public(row: dict) -> dict:
         **row,
         "id": row["id"],
         "last_run_at": row["last_run_at"].isoformat() if row.get("last_run_at") else None,
-        # Snoozing is not disabling: the row keeps its settings and its
-        # schedule and only goes quiet, so the UI has to be able to tell the
-        # two states apart.
-        "muted_until": row["muted_until"].isoformat() if row.get("muted_until") else None,
         "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
         "kind_label": {"daily": "Daily digest", "severe": "Severe weather watch",
                        "class_suspension": "Class suspension watch"}.get(row["kind"], row["kind"]),
     }
-
-
-def _clean_muted_until(value):
-    """An ISO instant, or null to unmute.
-
-    Accepts a Z suffix, because that is what JavaScript's toISOString emits and
-    fromisoformat did not accept it before 3.11 -- normalising here means the
-    dashboard does not have to know.
-    """
-    if value in (None, ""):
-        return None
-    text = str(value).strip().replace("Z", "+00:00")
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        raise ValueError("muted_until must be an ISO timestamp, or null to unmute.")
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed
 
 
 def _clean_thresholds(value):
@@ -115,12 +91,6 @@ def _clean_common(body: dict, *, partial: bool) -> dict:
         values["thresholds"] = _clean_thresholds(body["thresholds"])
     if "enabled" in body:
         values["enabled"] = bool(body["enabled"])
-    if "muted_until" in body:
-        # Raises rather than returning a response: this function is the shared
-        # field parser for both create and patch, and its callers turn a
-        # ValueError into a 400. Returning here made the *caller* treat an error
-        # tuple as the values dict.
-        values["muted_until"] = _clean_muted_until(body["muted_until"])
 
     # A daily digest with no time would never fire, and a subscription that
     # silently never fires is worse than one that refuses to be created.

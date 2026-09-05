@@ -77,14 +77,7 @@ def load_conversation(channel_id, *, database_url=None):
     return payload
 
 
-def append_exchange(channel_id, guild_id, user_text, model_text, *, token_count=0, author_id=None, database_url=None):
-    """Record one turn.
-
-    ``author_id`` is what makes per-user erasure possible at all: a conversation
-    is keyed on the *channel*, so without it there is nothing linking a message
-    to the person who wrote it. Only the user's half carries one -- the model's
-    reply belongs to the conversation, not to anybody.
-    """
+def append_exchange(channel_id, guild_id, user_text, model_text, *, token_count=0, database_url=None):
     engine = get_engine(database_url)
     with engine.begin() as conn:
         row = conn.execute(select(AIConversation).where(AIConversation.channel_id == str(channel_id))).mappings().first()
@@ -93,11 +86,8 @@ def append_exchange(channel_id, guild_id, user_text, model_text, *, token_count=
         else:
             conversation_id = row["id"]
         conn.execute(insert(AIMessage), [
-            {"conversation_id": conversation_id, "role": "user", "content": user_text,
-             "tokens": max(0, len(user_text) // 4),
-             "author_id": str(author_id) if author_id else None},
-            {"conversation_id": conversation_id, "role": "model", "content": model_text,
-             "tokens": max(0, len(model_text) // 4), "author_id": None},
+            {"conversation_id": conversation_id, "role": "user", "content": user_text, "tokens": max(0, len(user_text) // 4)},
+            {"conversation_id": conversation_id, "role": "model", "content": model_text, "tokens": max(0, len(model_text) // 4)},
         ])
         conn.execute(update(AIConversation).where(AIConversation.id == conversation_id).values(token_count=max(0, int(token_count))))
 

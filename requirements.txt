@@ -26,10 +26,7 @@ alembic>=1.13.0              # schema migrations (not run automatically; see doc
 
 # ── Production / cloud deployment ──
 gunicorn>=23.0.0             # production WSGI server for Render/Heroku/Docker
-redis>=5.0.0
-# Optional: with no SENTRY_DSN nothing is initialised, and the import is
-# guarded, so a deployment without it behaves exactly as before.
-sentry-sdk>=2.0.0            # error tracking for both processes; optional (no DSN, no tracking)
+redis>=5.0.0                 # shared AI settings, and required for dashboard sessions
 
 # ── Optional: only needed if you add back the /generate `image_generator` module ──
 # (Imported in the original but unused; kept here so the environment is a superset.)

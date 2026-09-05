@@ -26,10 +26,10 @@ export function GuildAI() {
     queryClient.invalidateQueries({ queryKey: ['ai-personas', guildId] })
     queryClient.invalidateQueries({ queryKey: ['ai-memory', guildId] })
   }
-  const save = useMutation({ meta: { success: 'Persona created' }, mutationFn: () => api<Persona>(`/guilds/${guildId}/ai/personas`, { method: 'POST', body: { name, system_prompt: prompt } }), onSuccess: () => { setName(''); setPrompt(''); refresh() } })
-  const setDefault = useMutation({ meta: { success: 'Default persona set' }, mutationFn: (id: number) => api<Persona>(`/guilds/${guildId}/ai/personas/${id}/default`, { method: 'POST' }), onSuccess: refresh })
-  const remove = useMutation({ meta: { success: 'Persona deleted' }, mutationFn: (id: number) => api<void>(`/guilds/${guildId}/ai/personas/${id}`, { method: 'DELETE' }), onSuccess: refresh })
-  const purge = useMutation({ meta: { success: 'Memory purged' }, mutationFn: (id: string) => api<void>(`/guilds/${guildId}/ai/memory/${id}`, { method: 'DELETE' }), onSuccess: () => { setPurging(null); refresh() } })
+  const save = useMutation({ mutationFn: () => api<Persona>(`/guilds/${guildId}/ai/personas`, { method: 'POST', body: { name, system_prompt: prompt } }), onSuccess: () => { setName(''); setPrompt(''); refresh() } })
+  const setDefault = useMutation({ mutationFn: (id: number) => api<Persona>(`/guilds/${guildId}/ai/personas/${id}/default`, { method: 'POST' }), onSuccess: refresh })
+  const remove = useMutation({ mutationFn: (id: number) => api<void>(`/guilds/${guildId}/ai/personas/${id}`, { method: 'DELETE' }), onSuccess: refresh })
+  const purge = useMutation({ mutationFn: (id: string) => api<void>(`/guilds/${guildId}/ai/memory/${id}`, { method: 'DELETE' }), onSuccess: () => { setPurging(null); refresh() } })
 
   if (personas.isPending || memories.isPending) return <main className="app"><Skeleton lines={7} /></main>
   if (personas.error || memories.error) return <main className="app"><LargeTitleHeader title="AI" /><ErrorNote error={personas.error ?? memories.error} onRetry={refresh} /><BackLink to={`/g/${guildId}`}>Back to the server</BackLink></main>
@@ -78,7 +78,7 @@ export function GuildAI() {
           <span>System prompt</span>
           <textarea className="text-input full" required rows={3} value={prompt} maxLength={4000} onChange={event => setPrompt(event.target.value)} placeholder="Answer in two sentences. Always mention the heat index." />
         </label>
-        
+        {save.error && <ErrorNote error={save.error} onRetry={() => save.reset()} />}
         <PressableButton type="submit" className="self-start" disabled={save.isPending}>{save.isPending ? 'Saving…' : 'Add persona'}</PressableButton>
       </form>
     </GlassSurface>
@@ -94,7 +94,7 @@ export function GuildAI() {
         : <ListRow label="Nothing retained yet" detail="Memory appears once somebody talks to Zephyr in a channel." />}
     </ListGroup>
 
-    
+    {purge.error && <ErrorNote error={purge.error} onRetry={() => purge.reset()} />}
 
     {/* A sheet, like every other destructive confirmation in the dashboard. This
         used to be an inline block that pushed the page around when it appeared. */}
@@ -115,7 +115,7 @@ export function GuildAI() {
 }
 
 function PersonaEditor({ guildId, persona, onDone }: { guildId: string; persona: Persona; onDone(): void }) {
-  const [name, setName] = useState(persona.name); const [prompt, setPrompt] = useState(persona.system_prompt); const update = useMutation({ meta: { success: 'Persona updated' }, mutationFn: () => api<Persona>(`/guilds/${guildId}/ai/personas/${persona.id}`, { method: 'PATCH', body: { name, system_prompt: prompt, is_default: persona.is_default } }), onSuccess: onDone })
+  const [name, setName] = useState(persona.name); const [prompt, setPrompt] = useState(persona.system_prompt); const update = useMutation({ mutationFn: () => api<Persona>(`/guilds/${guildId}/ai/personas/${persona.id}`, { method: 'PATCH', body: { name, system_prompt: prompt, is_default: persona.is_default } }), onSuccess: onDone })
   return <><h2>Edit persona</h2><label className="field"><span>Name</span><input className="text-input full" value={name} onChange={event => setName(event.target.value)} /></label><label className="field"><span>System prompt</span><textarea className="text-input full" rows={5} value={prompt} onChange={event => setPrompt(event.target.value)} /></label>{update.error && <ErrorNote error={update.error} onRetry={() => update.reset()} />}<div className="sheet-actions"><PressableButton disabled={!name.trim() || !prompt.trim() || update.isPending} onClick={() => update.mutate()}>{update.isPending ? 'Saving…' : 'Save persona'}</PressableButton></div></>
 }
 function Transcript({ guildId, memory }: { guildId: string; memory: AIConversation }) {

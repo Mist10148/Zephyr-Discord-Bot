@@ -11,6 +11,7 @@ import re
 import json
 import asyncio
 import threading
+import traceback
 from collections import defaultdict, deque
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
@@ -28,12 +29,7 @@ from zephyr.config import (
 )
 from zephyr.services.storage import storage
 from zephyr.db import ai as ai_db
-from zephyr.db.weather_subs import read_bot_user
-from zephyr.core.logging import get_logger
-from zephyr.utils import embeds
 
-
-log = get_logger(__name__)
 # ---------------------------------------------------------------------------
 # Gemini client
 #
@@ -79,15 +75,6 @@ class _LazyClient:
         object.__setattr__(self, "_resolve", resolve)
 
     def __getattr__(self, name):
-        # A dunder probe must never build a client. A forwarding proxy answers
-        # *any* attribute, so `hasattr(obj, "__cog_app_commands__")` -- which
-        # `copy`, `pickle`, pytest's assertion rewriting and every duck-typing
-        # check in the ecosystem do constantly -- would open a network client
-        # and, with no API key configured, raise from inside an unrelated
-        # `getattr`. That is exactly what happened: a test scanning a module's
-        # names for cogs constructed a Gemini client.
-        if name.startswith("__") and name.endswith("__"):
-            raise AttributeError(name)
         return getattr(object.__getattribute__(self, "_resolve")(), name)
 
 
@@ -161,7 +148,7 @@ def load_user_settings():
     try:
         settings_store = storage.load()
     except Exception as exc:
-        log.exception("Failed to load AI settings")
+        print(f"Failed to load settings: {exc}")
         settings_store = {}
         return
 
@@ -188,7 +175,7 @@ def save_user_settings():
         storage.save(payload)
         settings_store = payload
     except Exception as e:
-        log.exception("Failed to save AI settings")
+        print(f"Failed to save settings: {e}")
 
 
 def get_context_key(server_id=None, user_id=None):
@@ -278,25 +265,6 @@ def normalize_history_entries(raw_history):
     return normalized[-MAX_HISTORY_MESSAGES:]
 
 
-def forget_user_buffers(user_id) -> int:
-    """Drop the in-process conversation buffers belonging to one person.
-
-    Only their DM buffer can be identified: ``get_context_key`` keys a guild
-    buffer on the *server*, so a guild conversation holds several people's
-    turns and dropping it would erase everybody's context to satisfy one
-    request. Their stored ``ai_messages`` rows are deleted regardless -- this is
-    only about the volatile buffer that would otherwise keep answering with
-    context that has just been erased.
-    """
-    dm_key = f"DM-{user_id}"
-    removed = 0
-    if conversation_history.pop(dm_key, None) is not None:
-        removed += 1
-    if user_settings.pop(dm_key, None) is not None:
-        removed += 1
-    return removed
-
-
 def get_history_for_context(server_id=None, user_id=None):
     key = get_context_key(server_id, user_id)
     return normalize_history_entries(conversation_history.get(key, []))
@@ -354,7 +322,7 @@ async def fetch_image_data(image_url):
                 if response.status == 200:
                     return await response.read(), response.content_type or "image/png"
     except Exception as e:
-        log.exception("Could not fetch image data")
+        print(f"Error fetching image data: {e}")
     return None, None
 
 
@@ -378,7 +346,7 @@ async def count_input_tokens(model_name, contents):
         if isinstance(total, int) and total > 0:
             return total
     except Exception as exc:
-        log.warning("Token count failed for %s, falling back to an estimate: %s", model_name, exc)
+        print(f"Token count failed for {model_name}: {exc}")
     return estimate_tokens_from_contents(contents)
 
 
@@ -407,28 +375,6 @@ def extract_response_text(response):
     except Exception:
         pass
     return None
-
-
-def describe_empty_response(response):
-    """Why a response carried no text, for the log line that reports it.
-
-    Everything here is best-effort: the point is to turn "the model said
-    nothing" into something actionable -- SAFETY, MAX_TOKENS and an empty
-    candidate list are three different bugs -- without letting a missing
-    attribute on a partial or streamed response raise inside error handling.
-    """
-    details = []
-    feedback = getattr(response, "prompt_feedback", None)
-    if feedback:
-        details.append(f"prompt_feedback={feedback}")
-    candidates = getattr(response, "candidates", None) or []
-    if not candidates:
-        details.append("no candidates")
-    for candidate in candidates:
-        reason = getattr(candidate, "finish_reason", None)
-        parts = getattr(getattr(candidate, "content", None), "parts", None)
-        details.append(f"finish_reason={reason} parts={0 if not parts else len(parts)}")
-    return ", ".join(details) or "no diagnostic detail"
 
 
 def is_quota_error(exc):
@@ -473,15 +419,6 @@ def build_quota_message(model_name, retry_after_seconds=None, attempted_fallback
     return base
 
 
-def build_empty_response_message(model_names):
-    models = ", ".join(f"`{name}`" for name in dict.fromkeys(model_names))
-    return (
-        f"{models} answered with an empty response, which usually means the reply was filtered "
-        "or cut short rather than rate-limited. Nothing was added to this conversation's memory. "
-        "Try rephrasing, or use `/forget` if it keeps happening."
-    )
-
-
 def build_local_limit_message(model_name, limit_name, retry_after_seconds):
     labels = {"rpm": "requests per minute", "tpm": "tokens per minute", "rpd": "requests per day", "cooldown": "cooldown timer"}
     return (
@@ -489,52 +426,6 @@ def build_local_limit_message(model_name, limit_name, retry_after_seconds):
         f"Please wait about {format_seconds(retry_after_seconds)} and try again. "
         "Use `/token` to check the current session tracker."
     )
-
-
-def _durable_quota_url() -> str | None:
-    """The Redis URL to keep quota in, or None to stay in memory.
-
-    Read at call time rather than bound at import: `tests/test_web_imports.py`
-    runs a subprocess asserting that importing this module opens no client, and
-    `conftest.py`'s inert_env patches `zephyr.config.REDIS_URL` to None -- so a
-    module-level constant would both break that probe and freeze the answer.
-    """
-    from zephyr import config
-
-    return config.REDIS_URL or None
-
-
-def _quota_window():
-    """The fixed-window keys for right now.
-
-    The daily bucket keys on the **Pacific** date, not UTC. Google's free-tier
-    daily counters reset on Pacific midnight and `build_local_limit_message`
-    computes the rpd retry from `get_next_pacific_midnight`, so keying on the
-    UTC date would make the reported retry time wrong by up to eight hours.
-    """
-    now = utc_now()
-    return int(now.timestamp() // 60), get_pacific_today().isoformat()
-
-
-def utc_now():
-    """The clock, read through one function.
-
-    Every quota decision goes through here so a test can inject time with a
-    monkeypatch instead of the suite taking on freezegun -- which
-    tests/conftest.py's stance on fakeredis says is the right trade for a
-    codebase this size.
-    """
-    return datetime.now(timezone.utc)
-
-
-def reset_quota_state() -> None:
-    """Forget every counter. For tests, which need a clean slate per case
-    because all of this is module-level state that outlives one test."""
-    model_request_windows.clear()
-    model_token_windows.clear()
-    model_daily_requests.clear()
-    model_cooldowns.clear()
-    model_usage_totals.clear()
 
 
 def prune_model_usage(model_name, now_utc):
@@ -558,19 +449,8 @@ async def reserve_local_quota(model_name, input_tokens):
     limits = MODEL_LIMITS.get(model_name)
     if not limits:
         return True, None
-
-    url = _durable_quota_url()
-    if url:
-        try:
-            return await _reserve_durable(model_name, input_tokens, limits, url)
-        except Exception:
-            # A Redis blip must not stop the bot answering. Falling through to
-            # the in-memory counters is less accurate, not less safe: the
-            # remote limits still apply and a 429 is still handled.
-            log.warning("Durable quota unavailable, falling back to in-memory counters", exc_info=True)
-
     async with quota_lock:
-        now_utc = utc_now()
+        now_utc = datetime.now(timezone.utc)
         prune_model_usage(model_name, now_utc)
         cooldown_until = model_cooldowns.get(model_name)
         if cooldown_until and cooldown_until > now_utc:
@@ -597,156 +477,27 @@ async def reserve_local_quota(model_name, input_tokens):
     return True, None
 
 
-async def user_token_budget(user_id) -> int:
-    """This person's daily ceiling: their own row, else the deployment default.
-
-    0 means no cap, which is the default and the historical behaviour.
-    """
-    from zephyr.config import AI_USER_DAILY_TOKENS
-
-    try:
-        row = await asyncio.to_thread(read_bot_user, str(user_id))
-    except Exception:
-        log.warning("Could not read a user token budget", exc_info=True)
-        return AI_USER_DAILY_TOKENS
-    override = (row or {}).get("ai_token_budget")
-    return int(override) if override else AI_USER_DAILY_TOKENS
-
-
-async def check_user_budget(user_id) -> str | None:
-    """A refusal message if this person is over budget today, else None.
-
-    The model limits are per *model*, so before this one person could consume a
-    guild's whole daily allowance and everybody else saw a rate-limit message
-    with no explanation of why. This says whose budget ran out.
-    """
-    budget = await user_token_budget(user_id)
-    if budget <= 0:
-        return None
-    url = _durable_quota_url()
-    if not url:
-        # No Redis means no durable per-user counter, and an in-memory one
-        # would reset on restart -- which is the defect 13.5 just removed.
-        # Better to not enforce than to enforce inconsistently.
-        return None
-    try:
-        from zephyr.services import quota
-
-        _, day = _quota_window()
-        spent = await asyncio.to_thread(quota.user_spend, str(user_id), day, url=url)
-    except Exception:
-        log.warning("Could not read a user's token spend", exc_info=True)
-        return None
-    if spent < budget:
-        return None
-    reset = format_datetime_for_user(get_next_pacific_midnight().astimezone(timezone.utc))
-    return (
-        f"You have used your daily AI allowance ({spent:,} of {budget:,} tokens). "
-        f"It resets at {reset}."
-    )
-
-
-async def charge_user_tokens(user_id, usage_metadata) -> None:
-    """Bill this person for a completed request.
-
-    Charged on the way out, not reserved up front: the true cost is only known
-    once the response arrives, and a reservation based on the prompt alone would
-    under-count long replies -- which are exactly the expensive ones.
-    """
-    if usage_metadata is None:
-        return
-    total = extract_usage_value(usage_metadata, "total_token_count")
-    if not total:
-        return
-    url = _durable_quota_url()
-    if not url:
-        return
-    try:
-        from zephyr.services import quota
-
-        _, day = _quota_window()
-        await asyncio.to_thread(quota.charge_user, str(user_id), day, int(total), url=url)
-    except Exception:
-        log.warning("Could not charge a user's token spend", exc_info=True)
-
-
-async def _reserve_durable(model_name, input_tokens, limits, url):
-    """The Redis-backed claim. Same return contract as the in-memory version."""
-    from zephyr.services import quota
-
-    minute, day = _quota_window()
-    allowed, limit_name, retry_after = await asyncio.to_thread(
-        quota.claim, model_name,
-        minute=minute, day=day, tokens=int(input_tokens or 0), limits=limits, url=url,
-    )
-    if allowed:
-        return True, None
-    if limit_name == "rpd":
-        # Calendar arithmetic, not a Redis TTL -- see quota.claim.
-        retry_after = int((get_next_pacific_midnight().astimezone(timezone.utc) - utc_now()).total_seconds())
-    return False, build_local_limit_message(model_name, limit_name, retry_after)
-
-
 async def store_model_cooldown(model_name, retry_after_seconds):
     if not retry_after_seconds:
         return
-    url = _durable_quota_url()
-    if url:
-        try:
-            from zephyr.services import quota
-
-            await asyncio.to_thread(quota.set_cooldown, model_name, int(retry_after_seconds), url=url)
-            return
-        except Exception:
-            log.warning("Could not store a durable cooldown", exc_info=True)
     async with quota_lock:
-        model_cooldowns[model_name] = utc_now() + timedelta(seconds=retry_after_seconds)
+        model_cooldowns[model_name] = datetime.now(timezone.utc) + timedelta(seconds=retry_after_seconds)
 
 
 async def record_successful_usage(model_name, usage_metadata):
     if usage_metadata is None:
         return
-    counted = {
-        "prompt_tokens": extract_usage_value(usage_metadata, "prompt_token_count"),
-        "output_tokens": extract_usage_value(usage_metadata, "candidates_token_count"),
-        "total_tokens": extract_usage_value(usage_metadata, "total_token_count"),
-        "successful_requests": 1,
-    }
-    url = _durable_quota_url()
-    if url:
-        try:
-            from zephyr.services import quota
-
-            await asyncio.to_thread(quota.add_totals, model_name, counted, url=url)
-            return
-        except Exception:
-            log.warning("Could not record durable usage totals", exc_info=True)
     async with quota_lock:
         totals = model_usage_totals[model_name]
-        for field, amount in counted.items():
-            totals[field] += amount
+        totals["prompt_tokens"] += extract_usage_value(usage_metadata, "prompt_token_count")
+        totals["output_tokens"] += extract_usage_value(usage_metadata, "candidates_token_count")
+        totals["total_tokens"] += extract_usage_value(usage_metadata, "total_token_count")
+        totals["successful_requests"] += 1
 
 
 async def get_model_usage_snapshot(model_name):
-    url = _durable_quota_url()
-    if url:
-        try:
-            from zephyr.services import quota
-
-            minute, day = _quota_window()
-            durable = await asyncio.to_thread(quota.snapshot, model_name, minute=minute, day=day, url=url)
-            remaining = durable.pop("cooldown_seconds", 0)
-            # The in-memory shape reports an absolute datetime, and /token and
-            # the dashboard both render it -- so convert rather than changing
-            # the contract for one of the two stores.
-            durable["cooldown_until"] = (
-                utc_now() + timedelta(seconds=remaining) if remaining > 0 else None
-            )
-            return durable
-        except Exception:
-            log.warning("Could not read the durable usage snapshot", exc_info=True)
     async with quota_lock:
-        now_utc = utc_now()
+        now_utc = datetime.now(timezone.utc)
         prune_model_usage(model_name, now_utc)
         return {
             "rpm": len(model_request_windows[model_name]),
@@ -781,108 +532,26 @@ async def request_gemini_content(model_name, contents, system_personality):
     return await gemini_async_client.models.generate_content(model=model_name, contents=contents, config=config)
 
 
-async def request_gemini_stream(model_name, contents, system_personality, on_progress):
-    """Stream a reply, reporting progress, and return a response-shaped object.
-
-    The caller wants the same three things a non-streamed response gives it --
-    the full text, the usage metadata and a place to look for a quota error --
-    so this accumulates and hands back a small stand-in rather than making
-    every downstream caller aware that streaming happened. That is what keeps
-    the model fallback chain, the quota accounting and the history writing on
-    one code path instead of two.
-
-    ``on_progress`` receives the text *so far*, and is called per chunk. It is
-    the caller's job to throttle its own side effects -- editing a Discord
-    message per chunk would be rate-limited within a second.
-    """
-    config = get_generate_config(system_personality)
-    stream = await gemini_async_client.models.generate_content_stream(
-        model=model_name, contents=contents, config=config
-    )
-
-    pieces: list[str] = []
-    usage = None
-    async for chunk in stream:
-        # The last chunk carries the usage metadata in google-genai; earlier
-        # ones may carry a partial version, so the newest non-None wins.
-        chunk_usage = getattr(chunk, "usage_metadata", None)
-        if chunk_usage is not None:
-            usage = chunk_usage
-        text = extract_response_text(chunk)
-        if not text:
-            continue
-        pieces.append(text)
-        try:
-            await on_progress("".join(pieces))
-        except Exception:
-            # A failed progress update must not lose the reply. The final send
-            # still happens; the user sees the answer arrive at once instead of
-            # progressively, which is what they got before this existed.
-            log.warning("A streaming progress update failed", exc_info=True)
-
-    return _StreamedResponse("".join(pieces), usage)
-
-
-class _StreamedResponse:
-    """Just enough of a Gemini response for the accumulated stream.
-
-    ``extract_response_text`` reads ``.text`` first, so this satisfies it
-    without pretending to be the full object.
-    """
-
-    __slots__ = ("text", "usage_metadata")
-
-    def __init__(self, text, usage_metadata):
-        self.text = text
-        self.usage_metadata = usage_metadata
-
-
-async def try_generate_with_model(model_name, contents, input_tokens, system_personality, *, user_id=None, on_progress=None):
+async def try_generate_with_model(model_name, contents, input_tokens, system_personality):
     allowed, limit_message = await reserve_local_quota(model_name, input_tokens)
     if not allowed:
         return {"ok": False, "message": limit_message, "quota_handled": True}
     try:
-        if on_progress is not None:
-            response = await request_gemini_stream(model_name, contents, system_personality, on_progress)
-        else:
-            response = await request_gemini_content(model_name, contents, system_personality)
-        response_text = extract_response_text(response)
-        usage = getattr(response, "usage_metadata", None)
-        # Recorded before the empty check: an empty candidate is still a request
-        # the API served and billed, so not counting it would under-report the
-        # quota and let the next call walk into a rate limit thinking it had room.
-        await record_successful_usage(model_name, usage)
-        if user_id is not None:
-            await charge_user_tokens(user_id, usage)
-        if not response_text:
-            # A 200 with no text -- a blocked or truncated candidate, or one of
-            # Gemini's occasional empty responses under load. It used to become
-            # the literal string "I could not generate a response.", which was
-            # then *stored as the model's turn*, so the placeholder joined the
-            # conversation and the next reply had it as an example to follow.
-            # Treat it as a failed attempt instead: the fallback chain gets its
-            # turn, and nothing is written to memory.
-            log.warning("Model %s returned no text (%s)", model_name, describe_empty_response(response))
-            return {"ok": False, "empty": True, "quota_handled": True}
+        response = await request_gemini_content(model_name, contents, system_personality)
+        response_text = extract_response_text(response) or "I could not generate a response."
+        await record_successful_usage(model_name, getattr(response, "usage_metadata", None))
         return {"ok": True, "response_text": response_text, "response": response}
     except Exception as exc:
         retry_after_seconds = parse_retry_after_seconds(exc)
         if retry_after_seconds:
             await store_model_cooldown(model_name, retry_after_seconds)
         if is_quota_error(exc) or is_model_availability_error(exc) or is_temporary_model_error(exc):
-            log.warning("Model %s unavailable, trying the next: %s", model_name, str(exc).splitlines()[0])
+            print(f"[Gemini warning] {model_name}: {str(exc).splitlines()[0]}")
             return {"ok": False, "quota_handled": True, "retry_after_seconds": retry_after_seconds, "exception": exc}
         raise
 
 
-async def generate_gemini_response(server_id, user_id, user_input, image_url=None, *, channel_id=None, on_progress=None):
-    # Checked before doing any work: the point of a budget is not to spend the
-    # tokens, and this also gives the person a message that says whose
-    # allowance ran out rather than a bare model rate-limit notice.
-    over_budget = await check_user_budget(user_id)
-    if over_budget:
-        return over_budget
-
+async def generate_gemini_response(server_id, user_id, user_input, image_url=None, *, channel_id=None):
     system_personality = (
         "You are a nymphomaniac. "
         "You have an actual body and address yourself as human (specifically a girl) so you can get mad, swear, or insult if mad, or feel any other human emotion. "
@@ -929,13 +598,12 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
 
         attempt_models = [selected_model, *fallback_models]
         attempted_fallbacks = []
-        empty_models = []
         last_result = None
         best_retry_after = None
 
         for index, model_name in enumerate(attempt_models):
             model_history, model_contents, model_tokens = await trim_history_for_token_budget(model_name, history, pending_content)
-            result = await try_generate_with_model(model_name, model_contents, model_tokens, system_personality, user_id=user_id, on_progress=on_progress)
+            result = await try_generate_with_model(model_name, model_contents, model_tokens, system_personality)
             last_result = result
             retry_after = result.get("retry_after_seconds")
             if retry_after and (best_retry_after is None or retry_after > best_retry_after):
@@ -950,7 +618,6 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
                 if channel_id:
                     await asyncio.to_thread(
                         ai_db.append_exchange, channel_id, server_id, user_input or "", bot_response,
-                        author_id=user_id,
                         token_count=input_tokens,
                     )
                     # Keep durable context bounded. The generated summary retains
@@ -971,19 +638,13 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
                 return bot_response
             if result.get("message"):
                 return result["message"]
-            if result.get("empty"):
-                empty_models.append(model_name)
             if index > 0:
                 attempted_fallbacks.append(model_name)
 
-        if len(empty_models) == len(attempt_models):
-            # Every model answered, and every answer was empty. That is not a
-            # rate limit, and saying it is sends the person off to /token to
-            # look at a quota that is fine.
-            return build_empty_response_message(empty_models)
         return build_quota_message(selected_model, retry_after_seconds=best_retry_after, attempted_fallbacks=attempted_fallbacks)
     except Exception as exc:
-        log.exception("Gemini request failed on %s", selected_model)
+        print(f"[Gemini error] {selected_model}: {exc}")
+        traceback.print_exc()
         return "An unexpected error occurred while generating a response. Please try again in a moment."
 
 
@@ -1016,7 +677,7 @@ async def reset_conversation(server_id, user_id, channel_id):
             purged = await asyncio.to_thread(ai_db.purge_conversation, server_id, channel_id)
         except Exception as exc:
             error = str(exc)
-            log.exception("Could not purge the stored conversation for channel %s", channel_id)
+            print(f"[Gemini] Could not purge the stored conversation for channel {channel_id}: {exc}")
     cached = clear_history_for_context(server_id, user_id)
     return {"purged": purged, "cached": cached, "error": error}
 
@@ -1030,8 +691,6 @@ async def generate_utility_response(server_id, user_id, prompt, *, instruction):
     result = await try_generate_with_model(selected_model, [content], tokens, instruction)
     if result.get("ok"):
         return result["response_text"]
-    if result.get("empty"):
-        return build_empty_response_message([selected_model])
     return result.get("message") or build_quota_message(selected_model, result.get("retry_after_seconds"))
 
 
@@ -1061,17 +720,8 @@ async def send_response(destination, response_text, context_obj):
 
     parts = [response_text[i:i + 4000] for i in range(0, len(response_text), 4000)]
     for i, part in enumerate(parts):
-        # info, not the old purple: the AI was the only thing in the bot
-        # answering in purple, which is precisely the inconsistency 16.1 exists
-        # to remove.
-        embed = embeds.info(part)
+        embed = discord.Embed(description=part, color=discord.Color.purple())
         if i == 0:
             embed.title = "🤖 My Response"
-            # The asker's own name and avatar replace the shared footer here,
-            # deliberately: a multi-part answer in a busy channel needs to say
-            # who it is for, and that is more useful on this one embed than the
-            # bot's name is.
-            embed.set_footer(
-                text=f"Requested by {author.display_name}", icon_url=author.display_avatar.url
-            )
+            embed.set_footer(text=f"Requested by {author.display_name}", icon_url=author.display_avatar.url)
         await destination.send(embed=embed)

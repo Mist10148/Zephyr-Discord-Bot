@@ -37,12 +37,6 @@ GUILDS_UPDATED_KEY = "zephyr:guilds:updated_at"
 PRESENCE_KEY = "zephyr:presence"
 PRESENCE_TTL = 30
 
-# The derived command list. No TTL, deliberately: unlike presence, a command
-# list that outlives the process is not a lie -- the commands still exist, and a
-# reference that vanished while the bot restarted would be worse than one a few
-# minutes stale. See write_guild_snapshot for the same argument.
-COMMANDS_KEY = "zephyr:commands"
-
 PLAYER_KEY = "zephyr:player:{guild_id}"
 PLAYER_TTL = 60
 
@@ -123,22 +117,6 @@ def _read_json(key: str, *, url: str | None = None) -> dict | None:
     except (TypeError, ValueError):
         return None
     return payload if isinstance(payload, dict) else None
-
-
-def write_commands(payload: dict, *, url: str | None = None) -> None:
-    """Publish the command list derived from the tree.
-
-    Written once at startup rather than on a loop: the set of commands changes
-    only when the bot is deployed, and the whole point of deriving it is that
-    nothing else has to be told.
-    """
-    client = redis_client.get_client(url)
-    client.set(COMMANDS_KEY, json.dumps({**payload, "published_at": int(time.time())}))
-
-
-def read_commands(*, url: str | None = None) -> dict | None:
-    """The published command list, or None when the bot has never published one."""
-    return _read_json(COMMANDS_KEY, url=url)
 
 
 def write_presence(payload: dict, *, url: str | None = None) -> None:

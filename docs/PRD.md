@@ -18,7 +18,7 @@
 
 Zephyr is a modular, multi-purpose Discord bot built for community servers. It bundles a weather service, a Groovy-style music player, a Google Gemini AI chat companion, text-to-speech, and a small Flask companion website — all organized into clean, self-contained cogs.
 
-The bot is written in Python 3.13 using `discord.py`, exposes **114 slash commands** (including aliases) and **13 prefix commands**, and runs on Windows, macOS, or Linux. It can be run locally, in Docker, or deployed to cloud platforms such as Render, Heroku, AWS, and Vercel.
+The bot is written in Python 3.13 using `discord.py`, exposes **75 slash commands** (including aliases) and **13 prefix commands**, and runs on Windows, macOS, or Linux. It can be run locally, in Docker, or deployed to cloud platforms such as Render, Heroku, AWS, and Vercel.
 
 ---
 
@@ -142,7 +142,7 @@ project-root/
 - **Class suspension forecast:** predicts whether classes are likely to be suspended using feels-like/apparent temperature.
 - **Personal default city:** `/setlocation` stores a per-user default, which every slash weather command falls back to before falling back to Iloilo.
 - **Data sources:** Open-Meteo is the primary source; OpenWeatherMap is used as a transparent fallback if Open-Meteo fails.
-- **Command formats:** every weather command works as a slash command; many also work as `z!` prefix commands.
+- **Command formats:** every weather command works as a slash command; many also work as prefix commands.
 
 ### 6.1a Weather subscriptions
 
@@ -203,27 +203,19 @@ the dashboard.
 
 ## 7. Command Inventory
 
-### 7.1 Slash commands (114 total, including aliases)
+### 7.1 Slash commands (75 total, including aliases)
 
 | Category | Commands |
 |----------|----------|
 | **Weather** | `/weather`, `/forecast`, `/temperature`, `/description`, `/humidity`, `/pressure`, `/windspeed`, `/air`, `/precipitation`, `/typhoon`, `/class`, `/search`, `/setlocation`, `/mylocation`, `/use`, `/helpweather`, `/ping` |
-| **Weather — Alerts** | `/weather-subscribe`, `/weather-subs`, `/weather-unsubscribe`, `/weather-preview`, `/weather-run`, `/weather-snooze` |
+| **Weather — Alerts** | `/weather-subscribe`, `/weather-subs`, `/weather-unsubscribe`, `/weather-preview` |
 | **Music — Playback** | `/play`, `/playskip`, `/playnext`, `/msearch`, `/now`, `/np`, `/pause`, `/resume`, `/stop`, `/seek`, `/forward`, `/rewind`, `/lyrics` |
 | **Music — Queue** | `/queue`, `/skip`, `/jump`, `/move`, `/remove`, `/clear`, `/shuffle`, `/loop`, `/loopqueue`, `/autoplay` |
 | **Music — Playlists** | `/save`, `/load`, `/playlists`, `/playlist-delete` |
 | **Music — Effects & Audio** | `/volume`, `/bassboost`, `/bass_boost`, `/pitch`, `/nightcore`, `/vaporwave`, `/slowed`, `/reverb`, `/slownrev`, `/16d`, `/reset_effects` |
-| **Music — Voice & Connection** | `/join`, `/summon`, `/leave`, `/disconnect` |
-| **Music — DJ controls** | `/dj-only`, `/vote-skip-ratio`, `/247` |
-| **Chat & AI** | `/prompt`, `/forget`, `/settings`, `/output`, `/token`, `/image-gen`, `/generate`, `/summarize`, `/translate` |
+| **Music — Voice & Connection** | `/join`, `/summon`, `/leave`, `/disconnect`, `/247` |
+| **Chat & AI** | `/prompt`, `/settings`, `/output`, `/token`, `/image-gen`, `/generate` |
 | **TTS & Voice** | `/say`, `/language`, `/disconnect` |
-| **Reminders** | `/remindme`, `/reminders`, `/reminder-cancel` |
-| **Welcome & Farewell** | `/welcome`, `/farewell`, `/greeting-preview` |
-| **Tags** | `/tag`, `/tag-create`, `/tag-edit`, `/tag-delete`, `/tag-list`, `/tag-info` |
-| **Activity & Levels** | `/rank`, `/leaderboard`, `/activity-today`, `/activity`, `/activity-ignore` |
-| **Starboard** | `/starboard`, `/starboard-ignore` |
-| **Moderation** | `/warn`, `/timeout`, `/untimeout`, `/kick`, `/ban`, `/unban`, `/purge`, `/cases`, `/case`, `/reason`, `/modlog` |
-| **Privacy** | `/export-my-data`, `/delete-my-data` |
 | **Help** | `/help`, `/helpmusic`, `/helpchat`, `/helpweather` |
 
 ### 7.2 Prefix commands (13 total)
@@ -471,7 +463,7 @@ Deliberate departures from the plan are recorded in
 
 ## Appendix: Counts at a Glance
 
-- **Slash commands:** 114 (including aliases)
+- **Slash commands:** 75 (including aliases)
 - **Prefix commands:** 13
 - **Cogs:** 6
 - **Entry points:** 2 (`run_bot.py`, `run_web.py`)

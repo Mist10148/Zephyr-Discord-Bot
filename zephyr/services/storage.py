@@ -16,18 +16,16 @@ from sqlalchemy import delete, select, text
 
 from zephyr.config import (
     DATABASE_URL,
+    DB_AUTO_CREATE,
     DEFAULT_DATABASE_URL,
     REDIS_URL,
     SETTINGS_PATH,
     STORAGE_BACKEND,
 )
-from zephyr.db.engine import build_engine, create_schema, should_auto_create
+from zephyr.db.engine import build_engine, create_schema
 from zephyr.db.models import AISettings, AppState
-from zephyr.core.logging import get_logger
 
 
-
-log = get_logger(__name__)
 class BaseStorage(ABC):
     """Abstract storage backend for Zephyr's persisted settings."""
 
@@ -57,7 +55,7 @@ class FileStorage(BaseStorage):
                 data = json.load(file)
             return data if isinstance(data, dict) else {}
         except Exception as exc:
-            log.exception("Failed to load %s", self.path)
+            print(f"[Storage] Failed to load {self.path}: {exc}")
             return {}
 
     def save(self, data: dict) -> None:
@@ -68,7 +66,7 @@ class FileStorage(BaseStorage):
             with open(self.path, "w", encoding="utf-8") as file:
                 json.dump(data, file, indent=4)
         except Exception as exc:
-            log.exception("Failed to save %s", self.path)
+            print(f"[Storage] Failed to save {self.path}: {exc}")
 
 
 class RedisStorage(BaseStorage):
@@ -89,14 +87,14 @@ class RedisStorage(BaseStorage):
                 return {}
             return json.loads(raw.decode("utf-8"))
         except Exception as exc:
-            log.exception("Failed to load from Redis")
+            print(f"[Storage] Failed to load from Redis: {exc}")
             return {}
 
     def save(self, data: dict) -> None:
         try:
             self.client.set(self.KEY, json.dumps(data, indent=4))
         except Exception as exc:
-            log.exception("Failed to save to Redis")
+            print(f"[Storage] Failed to save to Redis: {exc}")
 
     def close(self) -> None:
         try:
@@ -111,7 +109,7 @@ class DatabaseStorage(BaseStorage):
     def __init__(self, url: str | None = None, *, auto_create: bool | None = None):
         self.url = url or DATABASE_URL or DEFAULT_DATABASE_URL
         self.engine = build_engine(self.url)
-        if should_auto_create(self.url) if auto_create is None else auto_create:
+        if DB_AUTO_CREATE if auto_create is None else auto_create:
             create_schema(self.engine)
         # Connect now: a lazy failure would look like settings disappearing later.
         with self.engine.connect() as connection:
@@ -171,7 +169,7 @@ class DatabaseStorage(BaseStorage):
             result.update(copy.deepcopy(nested))
             return result
         except Exception as exc:
-            log.exception("Failed to load from the database")
+            print(f"[Storage] Failed to load from database: {exc}")
             return {}
 
     def save(self, data: dict) -> None:
@@ -191,7 +189,7 @@ class DatabaseStorage(BaseStorage):
                         [{"key": key, "data": value} for key, value in app_state.items()],
                     )
         except Exception as exc:
-            log.exception("Failed to save to the database")
+            print(f"[Storage] Failed to save to database: {exc}")
 
     def close(self) -> None:
         self.engine.dispose()
@@ -222,7 +220,8 @@ def get_storage() -> BaseStorage:
             return RedisStorage()
         return _database_storage(DEFAULT_DATABASE_URL)
     except Exception as exc:
-        log.exception("%s storage is unavailable; falling back to file storage", backend)
+        print(f"[Storage] {backend} storage is unavailable: {exc}")
+        print("[Storage] Falling back to file storage.")
         return FileStorage()
 
 
