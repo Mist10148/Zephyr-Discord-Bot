@@ -361,8 +361,9 @@ def extract_usage_value(usage_metadata, attr_name):
 
 def extract_response_text(response):
     try:
-        if getattr(response, "text", None):
-            return response.text
+        response_text = getattr(response, "text", None)
+        if response_text and response_text.strip():
+            return response_text.strip()
     except Exception:
         pass
     try:
@@ -370,8 +371,8 @@ def extract_response_text(response):
             content = getattr(candidate, "content", None)
             for part in getattr(content, "parts", []) or []:
                 text = getattr(part, "text", None)
-                if text:
-                    return text
+                if text and text.strip():
+                    return text.strip()
     except Exception:
         pass
     return None
@@ -538,7 +539,9 @@ async def try_generate_with_model(model_name, contents, input_tokens, system_per
         return {"ok": False, "message": limit_message, "quota_handled": True}
     try:
         response = await request_gemini_content(model_name, contents, system_personality)
-        response_text = extract_response_text(response) or "I could not generate a response."
+        response_text = extract_response_text(response)
+        if not response_text:
+            return {"ok": False, "empty_response": True, "quota_handled": True}
         await record_successful_usage(model_name, getattr(response, "usage_metadata", None))
         return {"ok": True, "response_text": response_text, "response": response}
     except Exception as exc:
@@ -614,7 +617,6 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
                     {"role": "user", "text": user_input or ""},
                     {"role": "model", "text": bot_response},
                 ]
-                save_history_for_context(server_id, user_id, updated_history)
                 if channel_id:
                     await asyncio.to_thread(
                         ai_db.append_exchange, channel_id, server_id, user_input or "", bot_response,
@@ -635,12 +637,15 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
                         if prior:
                             summary = f"{prior}\n\n{summary}"
                         await asyncio.to_thread(ai_db.compact_conversation, channel_id, summary)
+                save_history_for_context(server_id, user_id, updated_history)
                 return bot_response
             if result.get("message"):
                 return result["message"]
             if index > 0:
                 attempted_fallbacks.append(model_name)
 
+        if last_result and last_result.get("empty_response"):
+            return "I could not generate a response. Please try again in a moment."
         return build_quota_message(selected_model, retry_after_seconds=best_retry_after, attempted_fallbacks=attempted_fallbacks)
     except Exception as exc:
         print(f"[Gemini error] {selected_model}: {exc}")
