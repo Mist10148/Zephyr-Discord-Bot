@@ -145,6 +145,16 @@ def append_exchange(
             ).inserted_primary_key[0]
         else:
             conversation_id = row["id"]
+            if guild_id is None and owner_id and row["owner_id"] is None:
+                conn.execute(
+                    update(AIConversation)
+                    .where(
+                        AIConversation.id == conversation_id,
+                        AIConversation.guild_id.is_(None),
+                        AIConversation.owner_id.is_(None),
+                    )
+                    .values(owner_id=str(owner_id))
+                )
         conn.execute(insert(AIMessage), [
             {"conversation_id": conversation_id, "role": "user", "content": user_text, "tokens": max(0, len(user_text) // 4)},
             {"conversation_id": conversation_id, "role": "model", "content": model_text, "tokens": max(0, len(model_text) // 4)},

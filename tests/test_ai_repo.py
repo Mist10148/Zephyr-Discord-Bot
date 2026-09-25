@@ -43,6 +43,22 @@ def test_dm_history_is_private_to_the_persisted_owner(db_url):
     assert ai.load_dm_history("23", "100", database_url=db_url) is None
 
 
+def test_new_message_recovers_an_ownerless_legacy_dm(db_url):
+    ai.append_exchange("26", None, "legacy question", "old answer", database_url=db_url)
+    assert ai.list_dm_history("500", database_url=db_url)["entries"] == []
+
+    ai.append_exchange("26", None, "new question", "new answer", owner_id="500", database_url=db_url)
+
+    history = ai.load_dm_history("26", "500", database_url=db_url)
+    assert history is not None
+    assert [message["content"] for message in history["messages"]] == [
+        "legacy question",
+        "old answer",
+        "new question",
+        "new answer",
+    ]
+
+
 def test_dm_message_controls_require_the_owner(db_url):
     ai.append_exchange("24", None, "original", "answer", owner_id="300", database_url=db_url)
     message = ai.load_dm_history("24", "300", database_url=db_url)["messages"][0]
