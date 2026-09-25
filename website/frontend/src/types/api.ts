@@ -53,6 +53,11 @@ export type Alert = { kind: SubKind; title: string; summary: string; fields: Ale
 export type SubPreview = { id: number; kind: SubKind; alert: Alert | null; would_post: boolean; duplicate: boolean }
 export type Persona = { id: number; guild_id: string; name: string; system_prompt: string; is_default: boolean; created_at: string | null; updated_at: string | null }
 export type AIConversation = { channel_id: string; rolling_summary: string | null; token_count: number; updated_at: string | null; message_count: number }
+export type AIHistoryConversation = AIConversation & { id: number; category: string | null; is_archived: boolean }
+export type AIHistoryPage = { id: string; entries: AIHistoryConversation[]; next_cursor: number | null }
+export type AIHistoryMessage = { id: number; conversation_id: number; role: string; content: string; tokens: number; version: number; edited_at: string | null; redacted_at: string | null; created_at: string | null }
+export type AIHistoryDetail = AIHistoryConversation & { messages: AIHistoryMessage[] }
+export type AIMessageRevision = { id: number; message_id: number; editor_id: string; previous_content: string; replacement_content: string; reason: string | null; created_at: string | null }
 export type AIUsage = { model: string; rpm: number; tpm: number; rpd: number; cooldown_until: string | null; totals: { prompt_tokens: number; output_tokens: number; total_tokens: number; successful_requests: number; session_requests: number } }
 
 // The audit reader Phase 7 added. `payload` is whatever the writer recorded, so it

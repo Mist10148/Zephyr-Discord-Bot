@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useDeferredValue, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
-import type { AIConversation, AIUsage, Persona } from '../types/api'
+import type { AIHistoryConversation, AIHistoryDetail, AIHistoryMessage, AIMessageRevision, AIUsage, Persona } from '../types/api'
 import { ErrorNote } from '../components/ErrorNote'
 import { GuildShell } from '../components/GuildNav'
 import { ConfirmSheet } from '../components/ConfirmSheet'
@@ -16,20 +16,38 @@ export function GuildAI() {
   const [purging, setPurging] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<Persona | null>(null)
   const [editing, setEditing] = useState<Persona | null>(null)
-  const [transcript, setTranscript] = useState<AIConversation | null>(null)
+  const [transcript, setTranscript] = useState<AIHistoryConversation | null>(null)
+  const [search, setSearch] = useState('')
+  const [category, setCategory] = useState('')
+  const [archived, setArchived] = useState('active')
+  const deferredSearch = useDeferredValue(search)
 
   const personas = useQuery({ queryKey: ['ai-personas', guildId], queryFn: () => api<{ personas: Persona[] }>(`/guilds/${guildId}/ai/personas`) })
-  const memories = useQuery({ queryKey: ['ai-memory', guildId], queryFn: () => api<{ conversations: AIConversation[] }>(`/guilds/${guildId}/ai/memory`) })
+  const memories = useQuery({
+    queryKey: ['ai-history', guildId, deferredSearch, category, archived],
+    queryFn: () => {
+      const params = new URLSearchParams()
+      if (deferredSearch.trim()) params.set('q', deferredSearch.trim())
+      if (category) params.set('category', category)
+      if (archived !== 'all') params.set('archived', archived === 'archived' ? 'true' : 'false')
+      const query = params.toString()
+      return api<{ entries: AIHistoryConversation[]; next_cursor: number | null }>(`/guilds/${guildId}/ai/history${query ? `?${query}` : ''}`)
+    },
+  })
   const usage = useQuery({ queryKey: ['ai-usage', guildId], queryFn: () => api<AIUsage>(`/guilds/${guildId}/ai/usage`), refetchInterval: 10000 })
 
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ['ai-personas', guildId] })
-    queryClient.invalidateQueries({ queryKey: ['ai-memory', guildId] })
+    queryClient.invalidateQueries({ queryKey: ['ai-history', guildId] })
   }
   const save = useMutation({ mutationFn: () => api<Persona>(`/guilds/${guildId}/ai/personas`, { method: 'POST', body: { name, system_prompt: prompt } }), onSuccess: () => { setName(''); setPrompt(''); refresh() } })
   const setDefault = useMutation({ mutationFn: (id: number) => api<Persona>(`/guilds/${guildId}/ai/personas/${id}/default`, { method: 'POST' }), onSuccess: refresh })
   const remove = useMutation({ mutationFn: (id: number) => api<void>(`/guilds/${guildId}/ai/personas/${id}`, { method: 'DELETE' }), onSuccess: refresh })
   const purge = useMutation({ mutationFn: (id: string) => api<void>(`/guilds/${guildId}/ai/memory/${id}`, { method: 'DELETE' }), onSuccess: () => { setPurging(null); refresh() } })
+  const updateHistory = useMutation({
+    mutationFn: ({ channelId, body }: { channelId: string; body: { category?: string; is_archived?: boolean } }) => api<AIHistoryConversation>(`/guilds/${guildId}/ai/history/${channelId}`, { method: 'PATCH', body }),
+    onSuccess: refresh,
+  })
 
   if (personas.isPending || memories.isPending) return <main className="app"><Skeleton lines={7} /></main>
   if (personas.error || memories.error) return <main className="app"><LargeTitleHeader title="AI" /><ErrorNote error={personas.error ?? memories.error} onRetry={refresh} /><BackLink to={`/g/${guildId}`}>Back to the server</BackLink></main>
@@ -83,18 +101,33 @@ export function GuildAI() {
       </form>
     </GlassSurface>
 
-    <SectionLabel>Channel memory</SectionLabel>
+    <SectionLabel>AI history</SectionLabel>
+    <GlassSurface tier="thin" className="form-card">
+      <div className="stack">
+        <label className="field">
+          <span>Search retained messages</span>
+          <input className="text-input full" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search conversation text" />
+        </label>
+        <div className="row-actions">
+          <label className="field"><span>Category</span><input className="text-input" value={category} onChange={event => setCategory(event.target.value)} placeholder="Any category" /></label>
+          <label className="field"><span>View</span><select className="text-input" value={archived} onChange={event => setArchived(event.target.value)}><option value="active">Active</option><option value="archived">Archived</option><option value="all">All</option></select></label>
+        </div>
+        <p className="muted">Only exchanges sent to Zephyr are retained. Compaction may remove older messages while keeping a summary.</p>
+      </div>
+    </GlassSurface>
     <ListGroup>
-      {memories.data?.conversations.length
-        ? memories.data.conversations.map(memory => <ListRow key={memory.channel_id} label={`Channel ${memory.channel_id}`} detail={`${memory.message_count} messages · ${memory.token_count.toLocaleString()} tokens`} className="strong-row">
+      {memories.data?.entries.length
+        ? memories.data.entries.map(memory => <ListRow key={memory.channel_id} label={`Channel ${memory.channel_id}`} detail={`${memory.message_count} retained messages · ${memory.token_count.toLocaleString()} tokens${memory.category ? ` · ${memory.category}` : ''}${memory.is_archived ? ' · Archived' : ''}`} className="strong-row">
           <span className="row-actions">
-            <PressableButton variant="secondary" className="small" onClick={() => setTranscript(memory)}>View</PressableButton><PressableButton variant="danger" className="small" onClick={() => setPurging(memory.channel_id)}>Purge</PressableButton>
+            <PressableButton variant="secondary" className="small" onClick={() => setTranscript(memory)}>View</PressableButton>
+            <PressableButton className="small soft" onClick={() => updateHistory.mutate({ channelId: memory.channel_id, body: { is_archived: !memory.is_archived } })}>{memory.is_archived ? 'Restore' : 'Archive'}</PressableButton>
+            <PressableButton variant="danger" className="small" onClick={() => setPurging(memory.channel_id)}>Purge</PressableButton>
           </span>
         </ListRow>)
-        : <ListRow label="Nothing retained yet" detail="Memory appears once somebody talks to Zephyr in a channel." />}
+        : <ListRow label={search || category ? 'No matching conversations' : 'Nothing retained yet'} detail="Memory appears once somebody talks to Zephyr in a channel." />}
     </ListGroup>
 
-    {purge.error && <ErrorNote error={purge.error} onRetry={() => purge.reset()} />}
+    {(purge.error || updateHistory.error) && <ErrorNote error={purge.error ?? updateHistory.error} onRetry={() => { purge.reset(); updateHistory.reset() }} />}
 
     {/* A sheet, like every other destructive confirmation in the dashboard. This
         used to be an inline block that pushed the page around when it appeared. */}
@@ -118,7 +151,21 @@ function PersonaEditor({ guildId, persona, onDone }: { guildId: string; persona:
   const [name, setName] = useState(persona.name); const [prompt, setPrompt] = useState(persona.system_prompt); const update = useMutation({ mutationFn: () => api<Persona>(`/guilds/${guildId}/ai/personas/${persona.id}`, { method: 'PATCH', body: { name, system_prompt: prompt, is_default: persona.is_default } }), onSuccess: onDone })
   return <><h2>Edit persona</h2><label className="field"><span>Name</span><input className="text-input full" value={name} onChange={event => setName(event.target.value)} /></label><label className="field"><span>System prompt</span><textarea className="text-input full" rows={5} value={prompt} onChange={event => setPrompt(event.target.value)} /></label>{update.error && <ErrorNote error={update.error} onRetry={() => update.reset()} />}<div className="sheet-actions"><PressableButton disabled={!name.trim() || !prompt.trim() || update.isPending} onClick={() => update.mutate()}>{update.isPending ? 'Saving…' : 'Save persona'}</PressableButton></div></>
 }
-function Transcript({ guildId, memory }: { guildId: string; memory: AIConversation }) {
-  const detail = useQuery({ queryKey: ['ai-memory-detail', guildId, memory.channel_id], queryFn: () => api<{ rolling_summary: string | null; messages: { role: string; content: string; tokens: number; created_at: string | null }[] }>(`/guilds/${guildId}/ai/memory/${memory.channel_id}`) })
-  return <><h2>Channel {memory.channel_id}</h2>{detail.isPending && <Skeleton lines={5} />}{detail.data?.rolling_summary && <p className="muted">{detail.data.rolling_summary}</p>}{detail.data?.messages.map((message, index) => <article className="transcript-message" key={index}><b>{message.role}</b><p>{message.content}</p><small>{message.tokens} tokens {message.created_at ? `· ${new Date(message.created_at).toLocaleString()}` : ''}</small></article>)}</>
+function Transcript({ guildId, memory }: { guildId: string; memory: AIHistoryConversation }) {
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [draft, setDraft] = useState('')
+  const [revisionMessageId, setRevisionMessageId] = useState<number | null>(null)
+  const detail = useQuery({ queryKey: ['ai-history-detail', guildId, memory.channel_id], queryFn: () => api<AIHistoryDetail>(`/guilds/${guildId}/ai/history/${memory.channel_id}`) })
+  const revisions = useQuery({ queryKey: ['ai-history-revisions', guildId, revisionMessageId], queryFn: () => api<{ revisions: AIMessageRevision[] }>(`/guilds/${guildId}/ai/history/${memory.channel_id}/messages/${revisionMessageId}/revisions`), enabled: revisionMessageId !== null })
+  const update = useMutation({
+    mutationFn: ({ messageId, content, version }: { messageId: number; content: string; version: number }) => api<AIHistoryMessage>(`/guilds/${guildId}/ai/history/${memory.channel_id}/messages/${messageId}`, { method: 'PATCH', body: { content, expected_version: version, reason: 'Dashboard edit' } }),
+    onSuccess: () => { setEditingId(null); detail.refetch() },
+  })
+  return <><h2>Channel {memory.channel_id}</h2>{detail.isPending && <Skeleton lines={5} />}{detail.error && <ErrorNote error={detail.error} onRetry={() => detail.refetch()} />}{detail.data?.rolling_summary && <p className="muted">Summary of compacted messages: {detail.data.rolling_summary}</p>}{detail.data?.messages.map(message => <article className="transcript-message" key={message.id}>
+    <b>{message.role}</b>
+    {editingId === message.id ? <><textarea className="text-input full" rows={4} value={draft} onChange={event => setDraft(event.target.value)} /><div className="sheet-actions"><PressableButton variant="secondary" onClick={() => setEditingId(null)}>Cancel</PressableButton><PressableButton disabled={!draft.trim() || update.isPending} onClick={() => update.mutate({ messageId: message.id, content: draft, version: message.version })}>{update.isPending ? 'Saving…' : 'Save edit'}</PressableButton></div></> : <p>{message.content}</p>}
+    <small>{message.tokens} tokens {message.edited_at ? ' · Edited' : ''} {message.created_at ? `· ${new Date(message.created_at).toLocaleString()}` : ''}</small>
+    {editingId !== message.id && <div className="row-actions"><PressableButton variant="secondary" className="small" onClick={() => { setEditingId(message.id); setDraft(message.content) }}>Edit</PressableButton><PressableButton variant="secondary" className="small" onClick={() => setRevisionMessageId(message.id)}>Revisions</PressableButton></div>}
+    {revisionMessageId === message.id && <div className="muted">{revisions.isPending && 'Loading revisions…'}{revisions.data?.revisions.map(revision => <p key={revision.id}>{revision.previous_content} → {revision.replacement_content}{revision.reason ? ` (${revision.reason})` : ''}</p>)}</div>}
+  </article>)}</>
 }
