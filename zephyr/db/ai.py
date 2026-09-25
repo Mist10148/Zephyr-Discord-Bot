@@ -1,16 +1,52 @@
-"""Persistence for Phase 6 conversations and guild personas."""
+"""Persistence for AI conversations, history management, and guild personas."""
 
-from sqlalchemy import delete, func, insert, select, update
+from sqlalchemy import delete, desc, exists, func, insert, select, update
 
-from zephyr.db.models import AIConversation, AIMessage, Persona
+from zephyr.db.models import AIConversation, AIMessage, AIMessageRevision, Persona
 from zephyr.db.session import get_engine
 
 MAX_PERSONA_NAME = 64
 MAX_PERSONA_PROMPT = 4000
+MAX_HISTORY_QUERY = 100
+MAX_HISTORY_LIMIT = 50
+MAX_MESSAGE_CONTENT = 10000
+MAX_EDIT_REASON = 500
+REDACTED_CONTENT = "[Message redacted by a server administrator.]"
 
 
 class AIDataError(ValueError):
     pass
+
+
+class AIConflictError(AIDataError):
+    """Raised when an edit is based on an older message version."""
+
+
+def _iso(value):
+    return value.isoformat() if hasattr(value, "isoformat") else value
+
+
+def _validate_history_query(query):
+    query = " ".join(str(query or "").split())
+    if len(query) > MAX_HISTORY_QUERY:
+        raise AIDataError(f"Search terms must be {MAX_HISTORY_QUERY} characters or fewer.")
+    return query
+
+
+def _validate_message_content(content):
+    content = str(content or "").strip()
+    if not content:
+        raise AIDataError("Message content cannot be empty.")
+    if len(content) > MAX_MESSAGE_CONTENT:
+        raise AIDataError(f"Message content must be {MAX_MESSAGE_CONTENT} characters or fewer.")
+    return content
+
+
+def _validate_reason(reason):
+    reason = " ".join(str(reason or "").split())
+    if len(reason) > MAX_EDIT_REASON:
+        raise AIDataError(f"Reasons must be {MAX_EDIT_REASON} characters or fewer.")
+    return reason or None
 
 
 def _persona(row):
@@ -112,6 +148,215 @@ def list_conversations(guild_id, *, database_url=None):
     statement = select(AIConversation.channel_id, AIConversation.rolling_summary, AIConversation.token_count, AIConversation.updated_at, func.count(AIMessage.id).label("message_count")).join(AIMessage, AIMessage.conversation_id == AIConversation.id, isouter=True).where(AIConversation.guild_id == str(guild_id)).group_by(AIConversation.id).order_by(AIConversation.updated_at.desc())
     with get_engine(database_url).connect() as conn:
         return [dict(row) for row in conn.execute(statement).mappings().all()]
+
+
+def list_history(
+    guild_id,
+    *,
+    query=None,
+    category=None,
+    archived=None,
+    before_id=None,
+    limit=25,
+    database_url=None,
+):
+    """List retained guild conversations for the history manager."""
+    query = _validate_history_query(query)
+    page = max(1, min(int(limit or 25), MAX_HISTORY_LIMIT))
+    message_count = func.count(AIMessage.id).label("message_count")
+    statement = (
+        select(
+            AIConversation.id,
+            AIConversation.channel_id,
+            AIConversation.category,
+            AIConversation.is_archived,
+            AIConversation.rolling_summary,
+            AIConversation.token_count,
+            AIConversation.updated_at,
+            message_count,
+        )
+        .join(AIMessage, AIMessage.conversation_id == AIConversation.id, isouter=True)
+        .where(AIConversation.guild_id == str(guild_id))
+        .group_by(AIConversation.id)
+        .order_by(desc(AIConversation.id))
+        .limit(page + 1)
+    )
+    if category:
+        statement = statement.where(AIConversation.category == str(category))
+    if archived is not None:
+        statement = statement.where(AIConversation.is_archived.is_(bool(archived)))
+    if before_id is not None:
+        statement = statement.where(AIConversation.id < int(before_id))
+    if query:
+        pattern = f"%{query}%"
+        statement = statement.where(
+            exists(
+                select(AIMessage.id).where(
+                    AIMessage.conversation_id == AIConversation.id,
+                    AIMessage.content.ilike(pattern),
+                ).correlate(AIConversation)
+            )
+        )
+
+    with get_engine(database_url).connect() as conn:
+        rows = conn.execute(statement).mappings().all()
+    has_more = len(rows) > page
+    entries = [
+        {
+            "id": row["id"],
+            "channel_id": row["channel_id"],
+            "category": row["category"],
+            "is_archived": row["is_archived"],
+            "rolling_summary": row["rolling_summary"],
+            "token_count": row["token_count"],
+            "message_count": row["message_count"],
+            "updated_at": _iso(row["updated_at"]),
+        }
+        for row in rows[:page]
+    ]
+    return {
+        "entries": entries,
+        "next_cursor": entries[-1]["id"] if has_more and entries else None,
+    }
+
+
+def load_history(channel_id, guild_id, *, query=None, database_url=None):
+    """Load one guild conversation and its retained messages."""
+    query = _validate_history_query(query)
+    with get_engine(database_url).connect() as conn:
+        conversation = conn.execute(
+            select(AIConversation)
+            .where(
+                AIConversation.channel_id == str(channel_id),
+                AIConversation.guild_id == str(guild_id),
+            )
+        ).mappings().first()
+        if not conversation:
+            return None
+        statement = select(AIMessage).where(AIMessage.conversation_id == conversation["id"])
+        if query:
+            statement = statement.where(AIMessage.content.ilike(f"%{query}%"))
+        messages = conn.execute(
+            statement.order_by(AIMessage.created_at, AIMessage.id)
+        ).mappings().all()
+
+    payload = dict(conversation)
+    payload["updated_at"] = _iso(payload["updated_at"])
+    payload["messages"] = [
+        {
+            **dict(row),
+            "edited_at": _iso(row["edited_at"]),
+            "redacted_at": _iso(row["redacted_at"]),
+            "created_at": _iso(row["created_at"]),
+        }
+        for row in messages
+    ]
+    return payload
+
+
+def edit_message(
+    guild_id,
+    message_id,
+    content,
+    *,
+    editor_id,
+    expected_version,
+    reason=None,
+    database_url=None,
+):
+    """Replace a retained message while preserving its previous content."""
+    content = _validate_message_content(content)
+    reason = _validate_reason(reason)
+    engine = get_engine(database_url)
+    with engine.begin() as conn:
+        row = conn.execute(
+            select(
+                AIMessage.id,
+                AIMessage.content,
+                AIMessage.version,
+                AIMessage.conversation_id,
+            )
+            .join(AIConversation, AIConversation.id == AIMessage.conversation_id)
+            .where(AIMessage.id == int(message_id), AIConversation.guild_id == str(guild_id))
+        ).mappings().first()
+        if not row:
+            return None
+        if int(expected_version) != int(row["version"]):
+            raise AIConflictError("This message was edited by someone else. Reload it and try again.")
+        if content == row["content"]:
+            return dict(row)
+        conn.execute(
+            insert(AIMessageRevision).values(
+                message_id=row["id"],
+                editor_id=str(editor_id),
+                previous_content=row["content"],
+                replacement_content=content,
+                reason=reason,
+            )
+        )
+        conn.execute(
+            update(AIMessage)
+            .where(AIMessage.id == row["id"], AIMessage.version == row["version"])
+            .values(content=content, version=row["version"] + 1, edited_at=func.now())
+        )
+        updated = conn.execute(
+            select(AIMessage).where(AIMessage.id == row["id"])
+        ).mappings().one()
+    return dict(updated)
+
+
+def list_message_revisions(guild_id, message_id, *, database_url=None):
+    statement = (
+        select(AIMessageRevision)
+        .join(AIMessage, AIMessage.id == AIMessageRevision.message_id)
+        .join(AIConversation, AIConversation.id == AIMessage.conversation_id)
+        .where(
+            AIMessageRevision.message_id == int(message_id),
+            AIConversation.guild_id == str(guild_id),
+        )
+        .order_by(desc(AIMessageRevision.id))
+    )
+    with get_engine(database_url).connect() as conn:
+        rows = conn.execute(statement).mappings().all()
+    return [
+        {**dict(row), "created_at": _iso(row["created_at"])}
+        for row in rows
+    ]
+
+
+def update_conversation_metadata(
+    guild_id,
+    channel_id,
+    *,
+    category=None,
+    is_archived=None,
+    database_url=None,
+):
+    """Update manager metadata without changing the retained transcript."""
+    values = {}
+    if category is not None:
+        category = " ".join(str(category).split())
+        if len(category) > 64:
+            raise AIDataError("Categories must be 64 characters or fewer.")
+        values["category"] = category or None
+    if is_archived is not None:
+        values["is_archived"] = bool(is_archived)
+    if not values:
+        raise AIDataError("At least one conversation property is required.")
+    with get_engine(database_url).begin() as conn:
+        conversation_id = conn.execute(
+            select(AIConversation.id).where(
+                AIConversation.channel_id == str(channel_id),
+                AIConversation.guild_id == str(guild_id),
+            )
+        ).scalar_one_or_none()
+        if conversation_id is None:
+            return None
+        conn.execute(update(AIConversation).where(AIConversation.id == conversation_id).values(**values))
+        row = conn.execute(
+            select(AIConversation).where(AIConversation.id == conversation_id)
+        ).mappings().one()
+    return {**dict(row), "updated_at": _iso(row["updated_at"])}
 
 
 def purge_conversation(guild_id, channel_id, *, database_url=None):

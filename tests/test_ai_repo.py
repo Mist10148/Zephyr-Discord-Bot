@@ -39,3 +39,61 @@ def test_a_purge_cannot_cross_scopes(db_url):
     # The DM scope must not be a back door into a guild's channel either.
     assert ai.purge_conversation(None, "30", database_url=db_url) is False
     assert ai.load_conversation("30", database_url=db_url) is not None
+
+
+def test_history_can_search_and_update_conversation_metadata(db_url):
+    ai.append_exchange("40", "1", "find this question", "answer", database_url=db_url)
+    ai.append_exchange("41", "2", "other question", "answer", database_url=db_url)
+
+    page = ai.list_history("1", query="find", database_url=db_url)
+    assert [entry["channel_id"] for entry in page["entries"]] == ["40"]
+
+    updated = ai.update_conversation_metadata(
+        "1", "40", category="support", is_archived=True, database_url=db_url
+    )
+    assert updated["category"] == "support"
+    assert updated["is_archived"] is True
+    assert ai.list_history("2", database_url=db_url)["entries"][0]["channel_id"] == "41"
+
+
+def test_message_edits_keep_revisions_and_reject_stale_versions(db_url):
+    ai.append_exchange("50", "1", "original", "answer", database_url=db_url)
+    message = ai.load_history("50", "1", database_url=db_url)["messages"][0]
+
+    edited = ai.edit_message(
+        "1",
+        message["id"],
+        "corrected",
+        editor_id="900",
+        expected_version=message["version"],
+        reason="Fix typo",
+        database_url=db_url,
+    )
+    assert edited["content"] == "corrected"
+    assert edited["version"] == 2
+    revision = ai.list_message_revisions("1", message["id"], database_url=db_url)[0]
+    assert revision["previous_content"] == "original"
+    assert revision["replacement_content"] == "corrected"
+
+    try:
+        ai.edit_message(
+            "1",
+            message["id"],
+            "stale edit",
+            editor_id="901",
+            expected_version=1,
+            database_url=db_url,
+        )
+    except ai.AIConflictError:
+        pass
+    else:
+        raise AssertionError("stale edits must be rejected")
+
+    assert ai.edit_message(
+        "2",
+        message["id"],
+        "cross guild",
+        editor_id="902",
+        expected_version=2,
+        database_url=db_url,
+    ) is None
