@@ -74,3 +74,52 @@ class TestPurgeMemory:
         entries = audit.read("1", database_url=db_url)["entries"]
         assert [entry["action"] for entry in entries] == ["ai.memory.purge"]
         assert entries[0]["source"] == "web"
+
+
+class TestHistory:
+    def test_history_can_search_and_edit_with_revisions(self, client, logged_in, db_url):
+        from zephyr.db import audit
+
+        ai_db.append_exchange("12", "1", "original question", "answer", database_url=db_url)
+        response = client.get("/api/v1/guilds/1/ai/history?q=original", headers=_headers(logged_in))
+        assert response.status_code == 200
+        assert response.get_json()["entries"][0]["channel_id"] == "12"
+
+        detail = client.get("/api/v1/guilds/1/ai/history/12", headers=_headers(logged_in)).get_json()
+        message = detail["messages"][0]
+        edited = client.patch(
+            f"/api/v1/guilds/1/ai/history/12/messages/{message['id']}",
+            headers=_headers(logged_in),
+            json={"content": "corrected question", "expected_version": 1, "reason": "Typo"},
+        )
+        assert edited.status_code == 200
+        assert edited.get_json()["version"] == 2
+
+        revisions = client.get(
+            f"/api/v1/guilds/1/ai/history/12/messages/{message['id']}/revisions",
+            headers=_headers(logged_in),
+        )
+        assert revisions.status_code == 200
+        assert revisions.get_json()["revisions"][0]["previous_content"] == "original question"
+        event = audit.read("1", database_url=db_url)["entries"][0]
+        assert event["action"] == "ai.history.message.edit"
+        assert "content" not in event["payload"]
+
+    def test_history_mutation_requires_csrf(self, client, logged_in, db_url):
+        ai_db.append_exchange("13", "1", "question", "answer", database_url=db_url)
+        response = client.patch(
+            "/api/v1/guilds/1/ai/history/13",
+            json={"is_archived": True},
+        )
+        assert response.status_code == 403
+
+    def test_history_cannot_edit_another_guilds_message(self, client, logged_in, db_url):
+        ai_db.append_exchange("14", "2", "private", "answer", database_url=db_url)
+        detail = ai_db.load_history("14", "2", database_url=db_url)
+        message_id = detail["messages"][0]["id"]
+        response = client.patch(
+            f"/api/v1/guilds/1/ai/history/14/messages/{message_id}",
+            headers=_headers(logged_in),
+            json={"content": "changed", "expected_version": 1},
+        )
+        assert response.status_code == 404

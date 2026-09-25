@@ -19,6 +19,24 @@ def _body():
 def _audit(guild_id, action, payload=None):
     audit.record(action, actor_id=g.zephyr_session.user_id, guild_id=guild_id, payload=payload, source="web", database_url=current_app.config["DATABASE_URL"])
 
+
+def _history_bool(name):
+    raw = request.args.get(name)
+    if raw is None:
+        return None
+    if raw not in {"true", "false"}:
+        raise ValueError(f"{name} must be true or false.")
+    return raw == "true"
+
+
+def _history_int(name):
+    raw = request.args.get(name)
+    if raw is None or raw == "":
+        return None
+    if not raw.isdigit():
+        raise ValueError(f"{name} must be a positive integer.")
+    return int(raw)
+
 @api.get("/guilds/<guild_id>/ai/personas")
 @guild_scoped
 def personas(guild_id):
@@ -70,6 +88,106 @@ def default_persona(guild_id, persona_id):
 @guild_scoped
 def memories(guild_id):
     return jsonify({"conversations": ai_db.list_conversations(guild_id, database_url=current_app.config["DATABASE_URL"])})
+
+
+@api.get("/guilds/<guild_id>/ai/history")
+@guild_scoped
+def history(guild_id):
+    try:
+        archived = _history_bool("archived")
+        before = _history_int("before")
+        limit = _history_int("limit")
+        page = ai_db.list_history(
+            guild_id,
+            query=request.args.get("q"),
+            category=request.args.get("category"),
+            archived=archived,
+            before_id=before,
+            limit=limit or 25,
+            database_url=current_app.config["DATABASE_URL"],
+        )
+    except (ValueError, ai_db.AIDataError) as exc:
+        return error("invalid_query", str(exc), 400)
+    return jsonify({"id": guild_id, **page})
+
+
+@api.get("/guilds/<guild_id>/ai/history/<channel_id>")
+@guild_scoped
+def history_detail(guild_id, channel_id):
+    try:
+        conversation = ai_db.load_history(
+            channel_id,
+            guild_id,
+            query=request.args.get("q"),
+            database_url=current_app.config["DATABASE_URL"],
+        )
+    except ai_db.AIDataError as exc:
+        return error("invalid_query", str(exc), 400)
+    if conversation is None:
+        return error("not_found", "Conversation not found.", 404)
+    return jsonify(conversation)
+
+
+@api.patch("/guilds/<guild_id>/ai/history/<channel_id>")
+@guild_scoped
+def update_history(guild_id, channel_id):
+    body = _body()
+    if body is None or set(body) - {"category", "is_archived"}:
+        return error("invalid_body", "Send category and/or is_archived.", 400)
+    try:
+        conversation = ai_db.update_conversation_metadata(
+            guild_id,
+            channel_id,
+            category=body.get("category"),
+            is_archived=body.get("is_archived"),
+            database_url=current_app.config["DATABASE_URL"],
+        )
+    except ai_db.AIDataError as exc:
+        return error("invalid_value", str(exc), 400)
+    if conversation is None:
+        return error("not_found", "Conversation not found.", 404)
+    if "category" in body:
+        _audit(guild_id, "ai.history.category", {"channel_id": str(channel_id), "category": conversation["category"]})
+    if "is_archived" in body:
+        _audit(guild_id, "ai.history.archive" if conversation["is_archived"] else "ai.history.unarchive", {"channel_id": str(channel_id)})
+    return jsonify(conversation)
+
+
+@api.patch("/guilds/<guild_id>/ai/history/<channel_id>/messages/<int:message_id>")
+@guild_scoped
+def edit_history_message(guild_id, channel_id, message_id):
+    body = _body()
+    required = {"content", "expected_version"}
+    if body is None or set(body) - required - {"reason"} or not required <= set(body):
+        return error("invalid_body", "Send content and expected_version, with an optional reason.", 400)
+    try:
+        message = ai_db.edit_message(
+            guild_id,
+            channel_id,
+            message_id,
+            body["content"],
+            editor_id=g.zephyr_session.user_id,
+            expected_version=body["expected_version"],
+            reason=body.get("reason"),
+            database_url=current_app.config["DATABASE_URL"],
+        )
+    except ai_db.AIConflictError as exc:
+        return error("conflict", str(exc), 409)
+    except (TypeError, ValueError, ai_db.AIDataError) as exc:
+        return error("invalid_body", str(exc), 400)
+    if message is None:
+        return error("not_found", "Message not found.", 404)
+    _audit(guild_id, "ai.history.message.edit", {"channel_id": str(channel_id), "message_id": message_id, "version": message["version"]})
+    return jsonify(message)
+
+
+@api.get("/guilds/<guild_id>/ai/history/<channel_id>/messages/<int:message_id>/revisions")
+@guild_scoped
+def message_revisions(guild_id, channel_id, message_id):
+    conversation = ai_db.load_history(channel_id, guild_id, database_url=current_app.config["DATABASE_URL"])
+    if conversation is None or not any(message["id"] == message_id for message in conversation["messages"]):
+        return error("not_found", "Message not found.", 404)
+    return jsonify({"revisions": ai_db.list_message_revisions(guild_id, message_id, database_url=current_app.config["DATABASE_URL"])})
 
 @api.get("/guilds/<guild_id>/ai/memory/<channel_id>")
 @guild_scoped
