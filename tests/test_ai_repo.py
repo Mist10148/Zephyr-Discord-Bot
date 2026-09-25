@@ -62,6 +62,7 @@ def test_message_edits_keep_revisions_and_reject_stale_versions(db_url):
 
     edited = ai.edit_message(
         "1",
+        "50",
         message["id"],
         "corrected",
         editor_id="900",
@@ -78,6 +79,7 @@ def test_message_edits_keep_revisions_and_reject_stale_versions(db_url):
     try:
         ai.edit_message(
             "1",
+            "50",
             message["id"],
             "stale edit",
             editor_id="901",
@@ -91,6 +93,7 @@ def test_message_edits_keep_revisions_and_reject_stale_versions(db_url):
 
     assert ai.edit_message(
         "2",
+        "50",
         message["id"],
         "cross guild",
         editor_id="902",

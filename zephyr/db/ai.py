@@ -256,6 +256,7 @@ def load_history(channel_id, guild_id, *, query=None, database_url=None):
 
 def edit_message(
     guild_id,
+    channel_id,
     message_id,
     content,
     *,
@@ -277,7 +278,11 @@ def edit_message(
                 AIMessage.conversation_id,
             )
             .join(AIConversation, AIConversation.id == AIMessage.conversation_id)
-            .where(AIMessage.id == int(message_id), AIConversation.guild_id == str(guild_id))
+            .where(
+                AIMessage.id == int(message_id),
+                AIConversation.channel_id == str(channel_id),
+                AIConversation.guild_id == str(guild_id),
+            )
         ).mappings().first()
         if not row:
             return None
