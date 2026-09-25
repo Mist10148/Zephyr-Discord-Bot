@@ -48,7 +48,7 @@ async def test_a_reset_clears_both_layers(bot_db):
 
 @pytest.mark.asyncio
 async def test_a_dm_reset_removes_the_null_guild_row(bot_db):
-    ai_db.append_exchange("11", None, "secret", "ok", database_url=bot_db)
+    ai_db.append_exchange("11", None, "secret", "ok", owner_id="5", database_url=bot_db)
 
     assert (await gemini.reset_conversation(None, 5, 11))["purged"] is True
     assert ai_db.load_conversation("11", database_url=bot_db) is None

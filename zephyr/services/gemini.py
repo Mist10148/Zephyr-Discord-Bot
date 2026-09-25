@@ -679,7 +679,12 @@ async def reset_conversation(server_id, user_id, channel_id):
     purged, error = False, None
     if channel_id is not None:
         try:
-            purged = await asyncio.to_thread(ai_db.purge_conversation, server_id, channel_id)
+            purged = await asyncio.to_thread(
+                ai_db.purge_conversation,
+                server_id,
+                channel_id,
+                owner_id=str(user_id) if server_id is None else None,
+            )
         except Exception as exc:
             error = str(exc)
             print(f"[Gemini] Could not purge the stored conversation for channel {channel_id}: {exc}")
