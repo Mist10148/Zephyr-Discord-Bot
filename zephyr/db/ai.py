@@ -162,6 +162,33 @@ def append_exchange(
         conn.execute(update(AIConversation).where(AIConversation.id == conversation_id).values(token_count=max(0, int(token_count))))
 
 
+def list_unowned_dm_channel_ids(*, database_url=None):
+    """DM conversations stored before ownership was persisted (migration 0007)."""
+    with get_engine(database_url).connect() as conn:
+        return [
+            row[0]
+            for row in conn.execute(
+                select(AIConversation.channel_id).where(
+                    AIConversation.guild_id.is_(None), AIConversation.owner_id.is_(None)
+                )
+            )
+        ]
+
+
+def claim_dm_conversation(channel_id, owner_id, *, database_url=None):
+    """Assign an ownerless DM conversation to its recipient; never reassigns."""
+    with get_engine(database_url).begin() as conn:
+        return conn.execute(
+            update(AIConversation)
+            .where(
+                AIConversation.channel_id == str(channel_id),
+                AIConversation.guild_id.is_(None),
+                AIConversation.owner_id.is_(None),
+            )
+            .values(owner_id=str(owner_id))
+        ).rowcount > 0
+
+
 def compact_conversation(channel_id, summary, *, keep_messages=10, database_url=None):
     """Atomically retain the recent dialogue and replace older turns by a summary."""
     engine = get_engine(database_url)

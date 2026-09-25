@@ -185,3 +185,16 @@ def test_redaction_replaces_content_and_is_recorded_as_a_revision(db_url):
     assert redacted["content"].startswith("[Message redacted")
     assert redacted["redacted_at"] is not None
     assert ai.list_message_revisions("1", message["id"], database_url=db_url)[0]["previous_content"] == "sensitive text"
+
+
+def test_legacy_dm_can_be_claimed_by_its_recipient(db_url):
+    ai.append_exchange("27", None, "legacy question", "old answer", database_url=db_url)
+    ai.append_exchange("28", None, "owned", "reply", owner_id="600", database_url=db_url)
+    ai.append_exchange("29", "guild", "guild chat", "reply", database_url=db_url)
+
+    assert ai.list_unowned_dm_channel_ids(database_url=db_url) == ["27"]
+    assert ai.claim_dm_conversation("27", "700", database_url=db_url) is True
+    assert ai.claim_dm_conversation("28", "700", database_url=db_url) is False
+    assert ai.claim_dm_conversation("29", "700", database_url=db_url) is False
+    assert [e["channel_id"] for e in ai.list_dm_history("700", database_url=db_url)["entries"]] == ["27"]
+    assert ai.list_unowned_dm_channel_ids(database_url=db_url) == []

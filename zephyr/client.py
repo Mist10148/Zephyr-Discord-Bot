@@ -15,6 +15,7 @@ from discord.ext import commands, tasks
 
 from zephyr.config import ENABLED_COGS, REDIS_URL
 from zephyr.core.opus_loader import load_opus
+from zephyr.db import ai as ai_db
 from zephyr.core.ffmpeg import FFMPEG_PATH
 from zephyr.services import bridge
 from zephyr.services.bridge import write_guild_snapshot
@@ -46,6 +47,7 @@ class ZephyrBot(commands.Bot):
         self._synced_count = 0
         self._started_at = time.time()
         self._command_stream = None
+        self._dm_owners_backfilled = False
 
     async def setup_hook(self):
         # Voice prerequisites
@@ -263,6 +265,35 @@ class ZephyrBot(commands.Bot):
         activity = discord.Activity(type=discord.ActivityType.listening, name="/help")
         await self.change_presence(status=discord.Status.online, activity=activity)
         await self._publish_guilds()
+        if not self._dm_owners_backfilled:
+            self._dm_owners_backfilled = True
+            await self._backfill_dm_owners()
+
+    async def _backfill_dm_owners(self):
+        """Give legacy DM conversations an owner so they show in the web history.
+
+        Rows written before ownership was persisted have a NULL owner_id and are
+        invisible to /me/ai/history. The DM channel's recipient is the owner.
+        """
+        try:
+            channel_ids = await asyncio.to_thread(ai_db.list_unowned_dm_channel_ids)
+        except Exception as e:
+            print(f"⚠️ Could not list ownerless DM conversations: {e}")
+            return
+        claimed = 0
+        for channel_id in channel_ids:
+            try:
+                channel = self.get_channel(int(channel_id)) or await self.fetch_channel(int(channel_id))
+            except (discord.HTTPException, ValueError) as e:
+                print(f"⚠️ Could not resolve DM channel {channel_id}: {e}")
+                continue
+            recipient = getattr(channel, "recipient", None)
+            if not isinstance(channel, discord.DMChannel) or recipient is None:
+                continue
+            if await asyncio.to_thread(ai_db.claim_dm_conversation, channel_id, recipient.id):
+                claimed += 1
+        if channel_ids:
+            print(f"🔹 Recovered ownership for {claimed}/{len(channel_ids)} legacy DM conversation(s)")
 
     async def on_guild_remove(self, guild):
         await self._publish_guilds()
