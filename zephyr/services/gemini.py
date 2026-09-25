@@ -620,7 +620,7 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
                 if channel_id:
                     await asyncio.to_thread(
                         ai_db.append_exchange, channel_id, server_id, user_input or "", bot_response,
-                        token_count=input_tokens,
+                        owner_id=str(user_id), token_count=input_tokens,
                     )
                     # Keep durable context bounded. The generated summary retains
                     # the older discussion without treating ordinary channel chat

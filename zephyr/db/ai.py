@@ -122,12 +122,27 @@ def load_conversation(channel_id, *, database_url=None):
     return payload
 
 
-def append_exchange(channel_id, guild_id, user_text, model_text, *, token_count=0, database_url=None):
+def append_exchange(
+    channel_id,
+    guild_id,
+    user_text,
+    model_text,
+    *,
+    owner_id=None,
+    token_count=0,
+    database_url=None,
+):
     engine = get_engine(database_url)
     with engine.begin() as conn:
         row = conn.execute(select(AIConversation).where(AIConversation.channel_id == str(channel_id))).mappings().first()
         if row is None:
-            conversation_id = conn.execute(insert(AIConversation).values(channel_id=str(channel_id), guild_id=str(guild_id) if guild_id else None)).inserted_primary_key[0]
+            conversation_id = conn.execute(
+                insert(AIConversation).values(
+                    channel_id=str(channel_id),
+                    guild_id=str(guild_id) if guild_id else None,
+                    owner_id=str(owner_id) if owner_id else None,
+                )
+            ).inserted_primary_key[0]
         else:
             conversation_id = row["id"]
         conn.execute(insert(AIMessage), [

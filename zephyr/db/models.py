@@ -194,11 +194,15 @@ class AIConversation(Base):
     """
 
     __tablename__ = "ai_conversations"
-    __table_args__ = (Index("ix_ai_conversations_guild_id_updated_at", "guild_id", "updated_at"),)
+    __table_args__ = (
+        Index("ix_ai_conversations_guild_id_updated_at", "guild_id", "updated_at"),
+        Index("ix_ai_conversations_owner_id_updated_at", "owner_id", "updated_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     channel_id: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     guild_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    owner_id: Mapped[str | None] = mapped_column(String, nullable=True)
     rolling_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     token_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     category: Mapped[str | None] = mapped_column(String, nullable=True)
