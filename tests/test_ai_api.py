@@ -147,3 +147,34 @@ class TestHistory:
             "ai.history.annotation.add",
             "ai.history.label.add",
         ]
+
+
+class TestPrivateDMHistory:
+    def test_only_the_signed_in_owner_can_list_and_open_dm_history(self, client, logged_in, db_url):
+        ai_db.append_exchange("80", None, "my private question", "answer", owner_id=logged_in.user_id, database_url=db_url)
+        ai_db.append_exchange("81", None, "another private question", "answer", owner_id="800", database_url=db_url)
+
+        listing = client.get("/api/v1/me/ai/history")
+        assert listing.status_code == 200
+        assert [entry["channel_id"] for entry in listing.get_json()["entries"]] == ["80"]
+        assert client.get("/api/v1/me/ai/history/80").status_code == 200
+        assert client.get("/api/v1/me/ai/history/81").status_code == 404
+
+    def test_dm_message_edit_and_revision_are_owner_scoped(self, client, logged_in, db_url):
+        ai_db.append_exchange("82", None, "original", "answer", owner_id=logged_in.user_id, database_url=db_url)
+        message_id = ai_db.load_dm_history("82", logged_in.user_id, database_url=db_url)["messages"][0]["id"]
+        response = client.patch(
+            f"/api/v1/me/ai/history/82/messages/{message_id}",
+            headers=_headers(logged_in),
+            json={"content": "corrected", "expected_version": 1},
+        )
+        assert response.status_code == 200
+        revisions = client.get(f"/api/v1/me/ai/history/82/messages/{message_id}/revisions")
+        assert revisions.status_code == 200
+        assert revisions.get_json()["revisions"][0]["previous_content"] == "original"
+
+    def test_dm_purge_requires_csrf_and_deletes_only_owned_history(self, client, logged_in, fake_redis, db_url):
+        ai_db.append_exchange("83", None, "private", "answer", owner_id=logged_in.user_id, database_url=db_url)
+        assert client.delete("/api/v1/me/ai/history/83").status_code == 403
+        assert client.delete("/api/v1/me/ai/history/83", headers=_headers(logged_in)).status_code == 204
+        assert ai_db.load_dm_history("83", logged_in.user_id, database_url=db_url) is None

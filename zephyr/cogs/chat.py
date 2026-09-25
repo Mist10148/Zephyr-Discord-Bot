@@ -143,7 +143,9 @@ class ChatCog(commands.Cog):
         read path falls back to the buffer whenever a channel has no row.
         """
         if guild is None:
-            raise LookupError("Zephyr is not in that server.")
+            if not actor_id:
+                raise LookupError("A DM owner is required.")
+            return {"cleared": clear_history_for_context(None, int(actor_id))}
         return {"cleared": clear_history_for_context(guild.id, None)}
 
     async def _bridge_usage(self, guild, actor_id, args):

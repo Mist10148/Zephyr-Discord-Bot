@@ -2,7 +2,7 @@
 from flask import current_app, g, jsonify, request
 
 from website.api import api, error
-from website.api.guard import guild_scoped
+from website.api.guard import guild_scoped, require_session
 from website.api.player import bridge_call
 from zephyr.db import ai as ai_db
 from zephyr.db import audit
@@ -18,6 +18,20 @@ def _body():
 
 def _audit(guild_id, action, payload=None):
     audit.record(action, actor_id=g.zephyr_session.user_id, guild_id=guild_id, payload=payload, source="web", database_url=current_app.config["DATABASE_URL"])
+
+
+def _dm_audit(action, payload=None):
+    audit.record(action, actor_id=g.zephyr_session.user_id, payload=payload, source="web", database_url=current_app.config["DATABASE_URL"])
+
+
+def _clear_dm_memory_cache(owner_id):
+    redis_url = current_app.config["REDIS_URL"]
+    if not redis_url:
+        return
+    try:
+        bridge.send_command("ai.memory.purge", actor_id=owner_id, args={"scope": "dm"}, timeout=MEMORY_CACHE_TIMEOUT, url=redis_url)
+    except Exception as exc:
+        print(f"[AI] Could not clear the DM memory buffer for {owner_id}: {exc}")
 
 
 def _history_bool(name):
@@ -88,6 +102,114 @@ def default_persona(guild_id, persona_id):
 @guild_scoped
 def memories(guild_id):
     return jsonify({"conversations": ai_db.list_conversations(guild_id, database_url=current_app.config["DATABASE_URL"])})
+
+
+@api.get("/me/ai/history")
+@require_session
+def my_dm_history():
+    try:
+        before = _history_int("before")
+        limit = _history_int("limit")
+        page = ai_db.list_dm_history(
+            g.zephyr_session.user_id,
+            query=request.args.get("q"),
+            before_id=before,
+            limit=limit or 25,
+            database_url=current_app.config["DATABASE_URL"],
+        )
+    except (ValueError, ai_db.AIDataError) as exc:
+        return error("invalid_query", str(exc), 400)
+    return jsonify(page)
+
+
+@api.get("/me/ai/history/<channel_id>")
+@require_session
+def my_dm_history_detail(channel_id):
+    try:
+        conversation = ai_db.load_dm_history(
+            channel_id,
+            g.zephyr_session.user_id,
+            query=request.args.get("q"),
+            database_url=current_app.config["DATABASE_URL"],
+        )
+    except ai_db.AIDataError as exc:
+        return error("invalid_query", str(exc), 400)
+    if conversation is None:
+        return error("not_found", "DM conversation not found.", 404)
+    return jsonify(conversation)
+
+
+@api.patch("/me/ai/history/<channel_id>/messages/<int:message_id>")
+@require_session
+def edit_my_dm_message(channel_id, message_id):
+    body = _body()
+    required = {"content", "expected_version"}
+    if body is None or set(body) - required - {"reason"} or not required <= set(body):
+        return error("invalid_body", "Send content and expected_version, with an optional reason.", 400)
+    try:
+        message = ai_db.edit_message(
+            None,
+            channel_id,
+            message_id,
+            body["content"],
+            editor_id=g.zephyr_session.user_id,
+            expected_version=body["expected_version"],
+            reason=body.get("reason"),
+            owner_id=g.zephyr_session.user_id,
+            database_url=current_app.config["DATABASE_URL"],
+        )
+    except ai_db.AIConflictError as exc:
+        return error("conflict", str(exc), 409)
+    except (TypeError, ValueError, ai_db.AIDataError) as exc:
+        return error("invalid_body", str(exc), 400)
+    if message is None:
+        return error("not_found", "DM message not found.", 404)
+    _dm_audit("ai.dm.message.edit", {"channel_id": str(channel_id), "message_id": message_id, "version": message["version"]})
+    return jsonify(message)
+
+
+@api.post("/me/ai/history/<channel_id>/messages/<int:message_id>/redact")
+@require_session
+def redact_my_dm_message(channel_id, message_id):
+    body = _body()
+    if body is None or set(body) - {"reason"}:
+        return error("invalid_body", "Send an optional reason.", 400)
+    try:
+        message = ai_db.redact_message(
+            None,
+            channel_id,
+            message_id,
+            editor_id=g.zephyr_session.user_id,
+            reason=body.get("reason"),
+            owner_id=g.zephyr_session.user_id,
+            database_url=current_app.config["DATABASE_URL"],
+        )
+    except ai_db.AIDataError as exc:
+        return error("invalid_body", str(exc), 400)
+    if message is None:
+        return error("not_found", "DM message not found.", 404)
+    _dm_audit("ai.dm.message.redact", {"channel_id": str(channel_id), "message_id": message_id, "version": message["version"]})
+    return jsonify(message)
+
+
+@api.get("/me/ai/history/<channel_id>/messages/<int:message_id>/revisions")
+@require_session
+def my_dm_message_revisions(channel_id, message_id):
+    conversation = ai_db.load_dm_history(channel_id, g.zephyr_session.user_id, database_url=current_app.config["DATABASE_URL"])
+    if conversation is None or not any(message["id"] == message_id for message in conversation["messages"]):
+        return error("not_found", "DM message not found.", 404)
+    return jsonify({"revisions": ai_db.list_message_revisions(None, message_id, owner_id=g.zephyr_session.user_id, database_url=current_app.config["DATABASE_URL"])})
+
+
+@api.delete("/me/ai/history/<channel_id>")
+@require_session
+def purge_my_dm_history(channel_id):
+    owner_id = g.zephyr_session.user_id
+    if not ai_db.purge_conversation(None, channel_id, owner_id=owner_id, database_url=current_app.config["DATABASE_URL"]):
+        return error("not_found", "DM conversation not found.", 404)
+    _clear_dm_memory_cache(owner_id)
+    _dm_audit("ai.dm.memory.purge", {"channel_id": str(channel_id)})
+    return "", 204
 
 
 @api.get("/guilds/<guild_id>/ai/history")
