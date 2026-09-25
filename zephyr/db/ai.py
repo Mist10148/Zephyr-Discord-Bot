@@ -1,6 +1,6 @@
 """Persistence for AI conversations, history management, and guild personas."""
 
-from sqlalchemy import delete, desc, exists, func, insert, select, update
+from sqlalchemy import and_, delete, desc, exists, func, insert, select, update
 
 from zephyr.db.models import (
     AIConversation,
@@ -293,6 +293,100 @@ def load_history(channel_id, guild_id, *, query=None, database_url=None):
     return payload
 
 
+def list_dm_history(
+    owner_id,
+    *,
+    query=None,
+    before_id=None,
+    limit=25,
+    database_url=None,
+):
+    """List only the signed-in owner's DM conversations."""
+    query = _validate_history_query(query)
+    page = max(1, min(int(limit or 25), MAX_HISTORY_LIMIT))
+    message_count = func.count(AIMessage.id).label("message_count")
+    statement = (
+        select(
+            AIConversation.id,
+            AIConversation.channel_id,
+            AIConversation.owner_id,
+            AIConversation.category,
+            AIConversation.is_archived,
+            AIConversation.rolling_summary,
+            AIConversation.token_count,
+            AIConversation.updated_at,
+            message_count,
+        )
+        .join(AIMessage, AIMessage.conversation_id == AIConversation.id, isouter=True)
+        .where(AIConversation.guild_id.is_(None), AIConversation.owner_id == str(owner_id))
+        .group_by(AIConversation.id)
+        .order_by(desc(AIConversation.id))
+        .limit(page + 1)
+    )
+    if before_id is not None:
+        statement = statement.where(AIConversation.id < int(before_id))
+    if query:
+        statement = statement.where(
+            exists(
+                select(AIMessage.id).where(
+                    AIMessage.conversation_id == AIConversation.id,
+                    AIMessage.content.ilike(f"%{query}%"),
+                ).correlate(AIConversation)
+            )
+        )
+    with get_engine(database_url).connect() as conn:
+        rows = conn.execute(statement).mappings().all()
+    has_more = len(rows) > page
+    entries = [{**dict(row), "updated_at": _iso(row["updated_at"])} for row in rows[:page]]
+    return {
+        "entries": entries,
+        "next_cursor": entries[-1]["id"] if has_more and entries else None,
+    }
+
+
+def load_dm_history(channel_id, owner_id, *, query=None, database_url=None):
+    """Load a DM transcript only when it belongs to the signed-in owner."""
+    query = _validate_history_query(query)
+    with get_engine(database_url).connect() as conn:
+        conversation = conn.execute(
+            select(AIConversation).where(
+                AIConversation.channel_id == str(channel_id),
+                AIConversation.guild_id.is_(None),
+                AIConversation.owner_id == str(owner_id),
+            )
+        ).mappings().first()
+        if not conversation:
+            return None
+        statement = select(AIMessage).where(AIMessage.conversation_id == conversation["id"])
+        if query:
+            statement = statement.where(AIMessage.content.ilike(f"%{query}%"))
+        messages = conn.execute(statement.order_by(AIMessage.created_at, AIMessage.id)).mappings().all()
+        labels = conn.execute(
+            select(AIConversationLabel).where(AIConversationLabel.conversation_id == conversation["id"])
+        ).mappings().all()
+        annotations = conn.execute(
+            select(AIConversationAnnotation)
+            .where(AIConversationAnnotation.conversation_id == conversation["id"])
+            .order_by(desc(AIConversationAnnotation.id))
+        ).mappings().all()
+    payload = {**dict(conversation), "updated_at": _iso(conversation["updated_at"])}
+    payload["messages"] = [
+        {
+            **dict(row),
+            "edited_at": _iso(row["edited_at"]),
+            "redacted_at": _iso(row["redacted_at"]),
+            "created_at": _iso(row["created_at"]),
+        }
+        for row in messages
+    ]
+    payload["labels"] = [dict(row) for row in labels]
+    payload["annotations"] = [
+        {**dict(row), "created_at": _iso(row["created_at"]), "updated_at": _iso(row["updated_at"])}
+        for row in annotations
+    ]
+    return payload
+
+
 def edit_message(
     guild_id,
     channel_id,
@@ -302,6 +396,7 @@ def edit_message(
     editor_id,
     expected_version,
     reason=None,
+    owner_id=None,
     database_url=None,
 ):
     """Replace a retained message while preserving its previous content."""
@@ -309,6 +404,11 @@ def edit_message(
     reason = _validate_reason(reason)
     engine = get_engine(database_url)
     with engine.begin() as conn:
+        scope = (
+            [AIConversation.guild_id.is_(None), AIConversation.owner_id == str(owner_id)]
+            if owner_id is not None
+            else [AIConversation.guild_id == str(guild_id)]
+        )
         row = conn.execute(
             select(
                 AIMessage.id,
@@ -317,11 +417,7 @@ def edit_message(
                 AIMessage.conversation_id,
             )
             .join(AIConversation, AIConversation.id == AIMessage.conversation_id)
-            .where(
-                AIMessage.id == int(message_id),
-                AIConversation.channel_id == str(channel_id),
-                AIConversation.guild_id == str(guild_id),
-            )
+            .where(AIMessage.id == int(message_id), AIConversation.channel_id == str(channel_id), *scope)
         ).mappings().first()
         if not row:
             return None
@@ -349,15 +445,17 @@ def edit_message(
     return dict(updated)
 
 
-def list_message_revisions(guild_id, message_id, *, database_url=None):
+def list_message_revisions(guild_id, message_id, *, owner_id=None, database_url=None):
+    scope = (
+        [AIConversation.guild_id.is_(None), AIConversation.owner_id == str(owner_id)]
+        if owner_id is not None
+        else [AIConversation.guild_id == str(guild_id)]
+    )
     statement = (
         select(AIMessageRevision)
         .join(AIMessage, AIMessage.id == AIMessageRevision.message_id)
         .join(AIConversation, AIConversation.id == AIMessage.conversation_id)
-        .where(
-            AIMessageRevision.message_id == int(message_id),
-            AIConversation.guild_id == str(guild_id),
-        )
+        .where(AIMessageRevision.message_id == int(message_id), *scope)
         .order_by(desc(AIMessageRevision.id))
     )
     with get_engine(database_url).connect() as conn:
@@ -368,16 +466,21 @@ def list_message_revisions(guild_id, message_id, *, database_url=None):
     ]
 
 
-def redact_message(guild_id, channel_id, message_id, *, editor_id, reason=None, database_url=None):
+def redact_message(guild_id, channel_id, message_id, *, editor_id, reason=None, owner_id=None, database_url=None):
     """Replace a message with a fixed redaction marker and retain a revision."""
     reason = _validate_reason(reason)
     engine = get_engine(database_url)
     with engine.begin() as conn:
+        scope = (
+            [AIConversation.guild_id.is_(None), AIConversation.owner_id == str(owner_id)]
+            if owner_id is not None
+            else [AIConversation.guild_id == str(guild_id)]
+        )
         row = conn.execute(
             select(AIMessage).join(AIConversation, AIConversation.id == AIMessage.conversation_id).where(
                 AIMessage.id == int(message_id),
                 AIConversation.channel_id == str(channel_id),
-                AIConversation.guild_id == str(guild_id),
+                *scope,
             )
         ).mappings().first()
         if not row:
@@ -559,7 +662,7 @@ def remove_annotation(guild_id, channel_id, annotation_id, *, database_url=None)
         ).rowcount > 0
 
 
-def purge_conversation(guild_id, channel_id, *, database_url=None):
+def purge_conversation(guild_id, channel_id, *, owner_id=None, database_url=None):
     """Delete one channel's conversation, scoped to whoever is entitled to it.
 
     ``guild_id=None`` means *the DM scope*, not "no scope". ``append_exchange``
@@ -569,7 +672,10 @@ def purge_conversation(guild_id, channel_id, *, database_url=None):
     guarantee the web endpoint leans on: a guild caller still cannot reach another
     guild's channel or a DM, and a DM caller cannot reach a guild's channel.
     """
-    scope = AIConversation.guild_id.is_(None) if guild_id is None else AIConversation.guild_id == str(guild_id)
+    if owner_id is not None:
+        scope = and_(AIConversation.guild_id.is_(None), AIConversation.owner_id == str(owner_id))
+    else:
+        scope = AIConversation.guild_id.is_(None) if guild_id is None else AIConversation.guild_id == str(guild_id)
     engine = get_engine(database_url)
     with engine.begin() as conn:
         row = conn.execute(select(AIConversation.id).where(scope, AIConversation.channel_id == str(channel_id))).scalar_one_or_none()

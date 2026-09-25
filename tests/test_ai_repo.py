@@ -32,6 +32,51 @@ def test_a_dm_conversation_can_be_purged(db_url):
     assert ai.load_conversation("20", database_url=db_url) is None
 
 
+def test_dm_history_is_private_to_the_persisted_owner(db_url):
+    ai.append_exchange("21", None, "owner one secret", "reply", owner_id="100", database_url=db_url)
+    ai.append_exchange("22", None, "owner two secret", "reply", owner_id="200", database_url=db_url)
+    ai.append_exchange("23", None, "legacy secret", "reply", database_url=db_url)
+
+    assert [row["channel_id"] for row in ai.list_dm_history("100", database_url=db_url)["entries"]] == ["21"]
+    assert ai.list_dm_history("100", query="owner two", database_url=db_url)["entries"] == []
+    assert ai.load_dm_history("21", "200", database_url=db_url) is None
+    assert ai.load_dm_history("23", "100", database_url=db_url) is None
+
+
+def test_dm_message_controls_require_the_owner(db_url):
+    ai.append_exchange("24", None, "original", "answer", owner_id="300", database_url=db_url)
+    message = ai.load_dm_history("24", "300", database_url=db_url)["messages"][0]
+
+    assert ai.edit_message(
+        None,
+        "24",
+        message["id"],
+        "corrected",
+        editor_id="300",
+        expected_version=1,
+        owner_id="301",
+        database_url=db_url,
+    ) is None
+    edited = ai.edit_message(
+        None,
+        "24",
+        message["id"],
+        "corrected",
+        editor_id="300",
+        expected_version=1,
+        owner_id="300",
+        database_url=db_url,
+    )
+    assert edited["content"] == "corrected"
+    assert ai.list_message_revisions(None, message["id"], owner_id="300", database_url=db_url)[0]["editor_id"] == "300"
+
+
+def test_dm_purge_requires_the_owner(db_url):
+    ai.append_exchange("25", None, "private", "reply", owner_id="400", database_url=db_url)
+    assert ai.purge_conversation(None, "25", owner_id="401", database_url=db_url) is False
+    assert ai.purge_conversation(None, "25", owner_id="400", database_url=db_url) is True
+
+
 def test_a_purge_cannot_cross_scopes(db_url):
     ai.append_exchange("30", "1", "question", "answer", database_url=db_url)
 
