@@ -181,6 +181,29 @@ def edit_history_message(guild_id, channel_id, message_id):
     return jsonify(message)
 
 
+@api.post("/guilds/<guild_id>/ai/history/<channel_id>/messages/<int:message_id>/redact")
+@guild_scoped
+def redact_history_message(guild_id, channel_id, message_id):
+    body = _body()
+    if body is None or set(body) - {"reason"}:
+        return error("invalid_body", "Send an optional reason.", 400)
+    try:
+        message = ai_db.redact_message(
+            guild_id,
+            channel_id,
+            message_id,
+            editor_id=g.zephyr_session.user_id,
+            reason=body.get("reason"),
+            database_url=current_app.config["DATABASE_URL"],
+        )
+    except ai_db.AIDataError as exc:
+        return error("invalid_body", str(exc), 400)
+    if message is None:
+        return error("not_found", "Message not found.", 404)
+    _audit(guild_id, "ai.history.message.redact", {"channel_id": str(channel_id), "message_id": message_id, "version": message["version"]})
+    return jsonify(message)
+
+
 @api.get("/guilds/<guild_id>/ai/history/<channel_id>/messages/<int:message_id>/revisions")
 @guild_scoped
 def message_revisions(guild_id, channel_id, message_id):
@@ -188,6 +211,72 @@ def message_revisions(guild_id, channel_id, message_id):
     if conversation is None or not any(message["id"] == message_id for message in conversation["messages"]):
         return error("not_found", "Message not found.", 404)
     return jsonify({"revisions": ai_db.list_message_revisions(guild_id, message_id, database_url=current_app.config["DATABASE_URL"])})
+
+
+@api.get("/guilds/<guild_id>/ai/history/<channel_id>/labels")
+@guild_scoped
+def history_labels(guild_id, channel_id):
+    if ai_db.load_history(channel_id, guild_id, database_url=current_app.config["DATABASE_URL"]) is None:
+        return error("not_found", "Conversation not found.", 404)
+    return jsonify({"labels": ai_db.list_labels(guild_id, channel_id, database_url=current_app.config["DATABASE_URL"])})
+
+
+@api.post("/guilds/<guild_id>/ai/history/<channel_id>/labels")
+@guild_scoped
+def add_history_label(guild_id, channel_id):
+    body = _body()
+    if body is None or set(body) != {"label"}:
+        return error("invalid_body", "Send a label.", 400)
+    try:
+        label = ai_db.add_label(guild_id, channel_id, body["label"], created_by=g.zephyr_session.user_id, database_url=current_app.config["DATABASE_URL"])
+    except ai_db.AIDataError as exc:
+        return error("invalid_value", str(exc), 400)
+    if label is None:
+        return error("not_found", "Conversation not found.", 404)
+    _audit(guild_id, "ai.history.label.add", {"channel_id": str(channel_id), "label_id": label["id"]})
+    return jsonify(label), 201
+
+
+@api.delete("/guilds/<guild_id>/ai/history/<channel_id>/labels/<int:label_id>")
+@guild_scoped
+def remove_history_label(guild_id, channel_id, label_id):
+    if not ai_db.remove_label(guild_id, channel_id, label_id, database_url=current_app.config["DATABASE_URL"]):
+        return error("not_found", "Label not found.", 404)
+    _audit(guild_id, "ai.history.label.remove", {"channel_id": str(channel_id), "label_id": label_id})
+    return "", 204
+
+
+@api.get("/guilds/<guild_id>/ai/history/<channel_id>/annotations")
+@guild_scoped
+def history_annotations(guild_id, channel_id):
+    if ai_db.load_history(channel_id, guild_id, database_url=current_app.config["DATABASE_URL"]) is None:
+        return error("not_found", "Conversation not found.", 404)
+    return jsonify({"annotations": ai_db.list_annotations(guild_id, channel_id, database_url=current_app.config["DATABASE_URL"])})
+
+
+@api.post("/guilds/<guild_id>/ai/history/<channel_id>/annotations")
+@guild_scoped
+def add_history_annotation(guild_id, channel_id):
+    body = _body()
+    if body is None or set(body) != {"note"}:
+        return error("invalid_body", "Send a note.", 400)
+    try:
+        annotation = ai_db.add_annotation(guild_id, channel_id, body["note"], author_id=g.zephyr_session.user_id, database_url=current_app.config["DATABASE_URL"])
+    except ai_db.AIDataError as exc:
+        return error("invalid_value", str(exc), 400)
+    if annotation is None:
+        return error("not_found", "Conversation not found.", 404)
+    _audit(guild_id, "ai.history.annotation.add", {"channel_id": str(channel_id), "annotation_id": annotation["id"]})
+    return jsonify(annotation), 201
+
+
+@api.delete("/guilds/<guild_id>/ai/history/<channel_id>/annotations/<int:annotation_id>")
+@guild_scoped
+def remove_history_annotation(guild_id, channel_id, annotation_id):
+    if not ai_db.remove_annotation(guild_id, channel_id, annotation_id, database_url=current_app.config["DATABASE_URL"]):
+        return error("not_found", "Annotation not found.", 404)
+    _audit(guild_id, "ai.history.annotation.remove", {"channel_id": str(channel_id), "annotation_id": annotation_id})
+    return "", 204
 
 @api.get("/guilds/<guild_id>/ai/memory/<channel_id>")
 @guild_scoped

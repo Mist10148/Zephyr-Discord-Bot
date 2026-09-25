@@ -123,3 +123,27 @@ class TestHistory:
             json={"content": "changed", "expected_version": 1},
         )
         assert response.status_code == 404
+
+    def test_history_labels_and_annotations_are_audited(self, client, logged_in, db_url):
+        from zephyr.db import audit
+
+        ai_db.append_exchange("15", "1", "question", "answer", database_url=db_url)
+        label = client.post(
+            "/api/v1/guilds/1/ai/history/15/labels",
+            headers=_headers(logged_in),
+            json={"label": "Needs review"},
+        )
+        annotation = client.post(
+            "/api/v1/guilds/1/ai/history/15/annotations",
+            headers=_headers(logged_in),
+            json={"note": "Ask the moderator to follow up."},
+        )
+        assert label.status_code == 201
+        assert annotation.status_code == 201
+        detail = client.get("/api/v1/guilds/1/ai/history/15", headers=_headers(logged_in)).get_json()
+        assert detail["labels"][0]["label"] == "needs review"
+        assert detail["annotations"][0]["note"].startswith("Ask")
+        assert [entry["action"] for entry in audit.read("1", database_url=db_url)["entries"][:2]] == [
+            "ai.history.annotation.add",
+            "ai.history.label.add",
+        ]
