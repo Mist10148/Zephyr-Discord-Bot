@@ -18,6 +18,7 @@ const GuildOverview = lazy(() => import('./routes/GuildOverview').then(m => ({ d
 const GuildMusic = lazy(() => import('./routes/GuildMusic').then(m => ({ default: m.GuildMusic })))
 const GuildWeatherAlerts = lazy(() => import('./routes/GuildWeatherAlerts').then(m => ({ default: m.GuildWeatherAlerts })))
 const GuildAI = lazy(() => import('./routes/GuildAI').then(m => ({ default: m.GuildAI })))
+const DmHistory = lazy(() => import('./routes/DmHistory').then(m => ({ default: m.DmHistory })))
 const GuildSettings = lazy(() => import('./routes/GuildSettings').then(m => ({ default: m.GuildSettings })))
 const GuildAudit = lazy(() => import('./routes/GuildAudit').then(m => ({ default: m.GuildAudit })))
 const WebsiteSettings = lazy(() => import('./routes/WebsiteSettings').then(m => ({ default: m.WebsiteSettings })))
@@ -29,6 +30,6 @@ export default function App() {
   const { pathname } = useLocation(); const [paletteOpen, setPaletteOpen] = useState(false); const showPalette = pathname !== '/login'
   return <AppShell onOpenPalette={() => setPaletteOpen(true)}><a className="skip-link" href="#main-content">Skip to content</a><RouteErrorBoundary><Suspense fallback={loading}><Routes>
     <Route path="/" element={<Home />} /><Route path="/weather" element={<Weather />} /><Route path="/commands" element={<Commands />} /><Route path="/settings" element={<WebsiteSettings />} /><Route path="/kitchen-sink" element={<KitchenSink />} /><Route path="/login" element={<Login />} />
-    <Route path="/g" element={<RequireAuth><Guilds /></RequireAuth>} /><Route path="/g/:guildId" element={<RequireAuth><GuildOverview /></RequireAuth>} /><Route path="/g/:guildId/music" element={<RequireAuth><GuildMusic /></RequireAuth>} /><Route path="/g/:guildId/weather-alerts" element={<RequireAuth><GuildWeatherAlerts /></RequireAuth>} /><Route path="/g/:guildId/ai" element={<RequireAuth><GuildAI /></RequireAuth>} /><Route path="/g/:guildId/settings" element={<RequireAuth><GuildSettings /></RequireAuth>} /><Route path="/g/:guildId/audit" element={<RequireAuth><GuildAudit /></RequireAuth>} /><Route path="*" element={<NotFound />} />
+    <Route path="/g" element={<RequireAuth><Guilds /></RequireAuth>} /><Route path="/account/ai-history" element={<RequireAuth><DmHistory /></RequireAuth>} /><Route path="/g/:guildId" element={<RequireAuth><GuildOverview /></RequireAuth>} /><Route path="/g/:guildId/music" element={<RequireAuth><GuildMusic /></RequireAuth>} /><Route path="/g/:guildId/weather-alerts" element={<RequireAuth><GuildWeatherAlerts /></RequireAuth>} /><Route path="/g/:guildId/ai" element={<RequireAuth><GuildAI /></RequireAuth>} /><Route path="/g/:guildId/settings" element={<RequireAuth><GuildSettings /></RequireAuth>} /><Route path="/g/:guildId/audit" element={<RequireAuth><GuildAudit /></RequireAuth>} /><Route path="*" element={<NotFound />} />
   </Routes></Suspense></RouteErrorBoundary><MiniPlayer />{showPalette && <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />}<PwaUpdate /><TabBar /></AppShell>
 }
