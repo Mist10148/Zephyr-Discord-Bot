@@ -12,7 +12,7 @@ import { useMe } from '../lib/auth'
 export function AppShell({ children, onOpenPalette }: { children: ReactNode; onOpenPalette(): void }) {
   const { pathname } = useLocation()
   const inDashboard = pathname.startsWith('/g')
-  const me = useMe()
+  const me = useMe(inDashboard || pathname.startsWith('/account'))
   const [online, setOnline] = useState(() => navigator.onLine)
   useEffect(() => { const update = () => setOnline(navigator.onLine); window.addEventListener('online', update); window.addEventListener('offline', update); return () => { window.removeEventListener('online', update); window.removeEventListener('offline', update) } }, [])
   // The palette is not mounted on the sign-in screen, so its trigger must not be

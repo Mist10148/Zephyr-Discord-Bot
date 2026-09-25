@@ -12,7 +12,7 @@ import type { Me } from '../types/api'
 // so exporting hooks alongside plain functions here cannot trip
 // react-refresh/only-export-components, which CI treats as an error via
 // --max-warnings=0.
-export function useMe() { return useQuery({ queryKey: ['me'], queryFn: () => api<Me>('/me') }) }
+export function useMe(enabled = true) { return useQuery({ queryKey: ['me'], queryFn: () => api<Me>('/me'), enabled }) }
 export function isUnauthorized(error: unknown) { return error instanceof ApiError && error.status === 401 }
 // A server with no OAuth application configured answers 503 auth_not_configured.
 // That is a deployment state, not an outage, so it belongs on the sign-in screen

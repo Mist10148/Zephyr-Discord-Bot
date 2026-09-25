@@ -88,7 +88,8 @@ playlists           (id PK, owner_id, guild_id, name, is_public, created_at)
 playlist_tracks     (playlist_id FK, position, title, url, duration_s, source)
                     -- PK (playlist_id, position)
 
-ai_conversations    (id PK, channel_id UNIQUE, rolling_summary, token_count, updated_at)
+ai_conversations    (id PK, channel_id UNIQUE, guild_id NULL, owner_id NULL,
+                     rolling_summary, token_count, updated_at)
 ai_messages         (id PK, conversation_id FK, role, content, tokens, created_at)
 personas            (id PK, guild_id FK, name, system_prompt, is_default)
 
@@ -124,6 +125,10 @@ current interface**; two chat handlers defer and move database writes off the ev
 | PATCH/GET | `/guilds/:id/ai/history/:channel/messages/:message/revisions` | MANAGE_GUILD | versioned message edits and revision history |
 | POST/DELETE | `/guilds/:id/ai/history/:channel/{labels,annotations}` | MANAGE_GUILD | private management metadata |
 | POST | `/guilds/:id/ai/history/:channel/messages/:message/redact` | MANAGE_GUILD | irreversible visible redaction with audit event |
+| GET | `/me/ai/history` | session | private history for the signed-in user's DMs with Zephyr |
+| GET/PATCH | `/me/ai/history/:channel/messages/:message` | session | owner-scoped DM transcript and versioned edits |
+| POST | `/me/ai/history/:channel/messages/:message/redact` | session | owner-scoped DM redaction |
+| DELETE | `/me/ai/history/:channel` | session | purge the user's DM history and bot cache |
 | GET | `/guilds/:id/audit` | MANAGE_GUILD | paginated |
 
 Session: server-side, Redis-backed, `HttpOnly` + `Secure` + `SameSite=Lax`.
@@ -135,6 +140,12 @@ compaction may remove older retained messages while preserving a rolling summary
 message edits create immutable revisions, redaction replaces the visible content with a fixed
 marker, and labels/annotations are separate management metadata. Audit events record the
 administrative action without copying message content into the audit payload.
+
+DM history is private to the signed-in Discord account. DM conversations are stored with
+`guild_id = NULL` and an explicit `owner_id`; ownerless legacy rows are not exposed or
+automatically assigned. Guild managers cannot access DM endpoints, and DM records never
+appear in guild AI history or guild audit pages. Web purge clears both the durable row and
+the bot's in-process DM context.
 
 ---
 
