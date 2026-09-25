@@ -56,7 +56,9 @@ export type AIConversation = { channel_id: string; rolling_summary: string | nul
 export type AIHistoryConversation = AIConversation & { id: number; category: string | null; is_archived: boolean }
 export type AIHistoryPage = { id: string; entries: AIHistoryConversation[]; next_cursor: number | null }
 export type AIHistoryMessage = { id: number; conversation_id: number; role: string; content: string; tokens: number; version: number; edited_at: string | null; redacted_at: string | null; created_at: string | null }
-export type AIHistoryDetail = AIHistoryConversation & { messages: AIHistoryMessage[] }
+export type AIHistoryLabel = { id: number; conversation_id: number; label: string; created_by: string; created_at: string | null }
+export type AIHistoryAnnotation = { id: number; conversation_id: number; author_id: string; note: string; created_at: string | null; updated_at: string | null }
+export type AIHistoryDetail = AIHistoryConversation & { messages: AIHistoryMessage[]; labels: AIHistoryLabel[]; annotations: AIHistoryAnnotation[] }
 export type AIMessageRevision = { id: number; message_id: number; editor_id: string; previous_content: string; replacement_content: string; reason: string | null; created_at: string | null }
 export type AIUsage = { model: string; rpm: number; tpm: number; rpd: number; cooldown_until: string | null; totals: { prompt_tokens: number; output_tokens: number; total_tokens: number; successful_requests: number; session_requests: number } }
 

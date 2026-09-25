@@ -155,17 +155,31 @@ function Transcript({ guildId, memory }: { guildId: string; memory: AIHistoryCon
   const [editingId, setEditingId] = useState<number | null>(null)
   const [draft, setDraft] = useState('')
   const [revisionMessageId, setRevisionMessageId] = useState<number | null>(null)
+  const [label, setLabel] = useState('')
+  const [note, setNote] = useState('')
+  const [redacting, setRedacting] = useState<number | null>(null)
   const detail = useQuery({ queryKey: ['ai-history-detail', guildId, memory.channel_id], queryFn: () => api<AIHistoryDetail>(`/guilds/${guildId}/ai/history/${memory.channel_id}`) })
   const revisions = useQuery({ queryKey: ['ai-history-revisions', guildId, revisionMessageId], queryFn: () => api<{ revisions: AIMessageRevision[] }>(`/guilds/${guildId}/ai/history/${memory.channel_id}/messages/${revisionMessageId}/revisions`), enabled: revisionMessageId !== null })
   const update = useMutation({
     mutationFn: ({ messageId, content, version }: { messageId: number; content: string; version: number }) => api<AIHistoryMessage>(`/guilds/${guildId}/ai/history/${memory.channel_id}/messages/${messageId}`, { method: 'PATCH', body: { content, expected_version: version, reason: 'Dashboard edit' } }),
     onSuccess: () => { setEditingId(null); detail.refetch() },
   })
-  return <><h2>Channel {memory.channel_id}</h2>{detail.isPending && <Skeleton lines={5} />}{detail.error && <ErrorNote error={detail.error} onRetry={() => detail.refetch()} />}{detail.data?.rolling_summary && <p className="muted">Summary of compacted messages: {detail.data.rolling_summary}</p>}{detail.data?.messages.map(message => <article className="transcript-message" key={message.id}>
+  const addLabel = useMutation({ mutationFn: () => api(`/guilds/${guildId}/ai/history/${memory.channel_id}/labels`, { method: 'POST', body: { label } }), onSuccess: () => { setLabel(''); detail.refetch() } })
+  const addAnnotation = useMutation({ mutationFn: () => api(`/guilds/${guildId}/ai/history/${memory.channel_id}/annotations`, { method: 'POST', body: { note } }), onSuccess: () => { setNote(''); detail.refetch() } })
+  const removeAnnotation = useMutation({ mutationFn: (id: number) => api(`/guilds/${guildId}/ai/history/${memory.channel_id}/annotations/${id}`, { method: 'DELETE' }), onSuccess: () => detail.refetch() })
+  const redact = useMutation({ mutationFn: (id: number) => api<AIHistoryMessage>(`/guilds/${guildId}/ai/history/${memory.channel_id}/messages/${id}/redact`, { method: 'POST', body: { reason: 'Dashboard redaction' } }), onSuccess: () => { setRedacting(null); detail.refetch() } })
+  return <><h2>Channel {memory.channel_id}</h2>{detail.isPending && <Skeleton lines={5} />}{detail.error && <ErrorNote error={detail.error} onRetry={() => detail.refetch()} />}{detail.data?.rolling_summary && <p className="muted">Summary of compacted messages: {detail.data.rolling_summary}</p>}
+  {detail.data && <>
+    <div className="stack"><span className="section-label">Labels</span><div className="row-actions">{detail.data.labels.map(item => <span className="badge" key={item.id}>{item.label}</span>)}</div><div className="row-actions"><input className="text-input" value={label} onChange={event => setLabel(event.target.value)} placeholder="Add label" /><PressableButton className="small" disabled={!label.trim() || addLabel.isPending} onClick={() => addLabel.mutate()}>Add</PressableButton></div></div>
+    <div className="stack"><span className="section-label">Private annotations</span>{detail.data.annotations.map(item => <div className="list-row" key={item.id}><span className="row-label">{item.note}</span><IconButton variant="danger" size={30} label="Remove annotation" onClick={() => removeAnnotation.mutate(item.id)}>×</IconButton></div>)}<textarea className="text-input full" rows={2} value={note} onChange={event => setNote(event.target.value)} placeholder="Add a private admin note" /><PressableButton className="self-start" disabled={!note.trim() || addAnnotation.isPending} onClick={() => addAnnotation.mutate()}>Add note</PressableButton></div>
+  </>}
+  {detail.data?.messages.map(message => <article className="transcript-message" key={message.id}>
     <b>{message.role}</b>
     {editingId === message.id ? <><textarea className="text-input full" rows={4} value={draft} onChange={event => setDraft(event.target.value)} /><div className="sheet-actions"><PressableButton variant="secondary" onClick={() => setEditingId(null)}>Cancel</PressableButton><PressableButton disabled={!draft.trim() || update.isPending} onClick={() => update.mutate({ messageId: message.id, content: draft, version: message.version })}>{update.isPending ? 'Saving…' : 'Save edit'}</PressableButton></div></> : <p>{message.content}</p>}
     <small>{message.tokens} tokens {message.edited_at ? ' · Edited' : ''} {message.created_at ? `· ${new Date(message.created_at).toLocaleString()}` : ''}</small>
-    {editingId !== message.id && <div className="row-actions"><PressableButton variant="secondary" className="small" onClick={() => { setEditingId(message.id); setDraft(message.content) }}>Edit</PressableButton><PressableButton variant="secondary" className="small" onClick={() => setRevisionMessageId(message.id)}>Revisions</PressableButton></div>}
+    {editingId !== message.id && <div className="row-actions"><PressableButton variant="secondary" className="small" onClick={() => { setEditingId(message.id); setDraft(message.content) }}>Edit</PressableButton><PressableButton variant="secondary" className="small" onClick={() => setRevisionMessageId(message.id)}>Revisions</PressableButton>{!message.redacted_at && <PressableButton variant="danger" className="small" onClick={() => setRedacting(message.id)}>Redact</PressableButton>}</div>}
     {revisionMessageId === message.id && <div className="muted">{revisions.isPending && 'Loading revisions…'}{revisions.data?.revisions.map(revision => <p key={revision.id}>{revision.previous_content} → {revision.replacement_content}{revision.reason ? ` (${revision.reason})` : ''}</p>)}</div>}
-  </article>)}</>
+  </article>)}
+  <ConfirmSheet open={redacting !== null} onOpenChange={open => !open && setRedacting(null)} title="Redact AI message" description="Replace this retained message with a redaction marker? The original remains available in revision history." confirmLabel="Redact message" pending={redact.isPending} onConfirm={() => redacting !== null && redact.mutate(redacting)} />
+  </>
 }
