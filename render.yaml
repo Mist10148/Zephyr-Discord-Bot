@@ -3,6 +3,7 @@ services:
     name: zephyr-website
     runtime: python
     plan: free
+    autoDeploy: true
     buildCommand: npm --prefix website/frontend ci && npm --prefix website/frontend run build && pip install -r requirements.txt
     # Migrations run here, once, between build and release -- not in startCommand,
     # where the two gunicorn workers would race the same `alembic upgrade` (the free
@@ -52,6 +53,7 @@ services:
     name: zephyr-bot
     runtime: python
     plan: starter  # Background workers require a paid plan on Render
+    autoDeploy: true
     buildCommand: pip install -r requirements.txt
     startCommand: python run_bot.py
     envVars:
