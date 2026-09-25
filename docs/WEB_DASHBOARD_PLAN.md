@@ -120,11 +120,21 @@ current interface**; two chat handlers defer and move database writes off the ev
 | CRUD | `/guilds/:id/weather-subs` | MANAGE_GUILD | |
 | CRUD | `/playlists` | owner | + `POST /playlists/import/spotify` |
 | GET | `/guilds/:id/ai/usage` | MANAGE_GUILD | RPM/TPM/RPD from the existing tracker |
+| GET/PATCH | `/guilds/:id/ai/history` | MANAGE_GUILD | searchable retained AI conversations, archive/category metadata |
+| PATCH/GET | `/guilds/:id/ai/history/:channel/messages/:message/revisions` | MANAGE_GUILD | versioned message edits and revision history |
+| POST/DELETE | `/guilds/:id/ai/history/:channel/{labels,annotations}` | MANAGE_GUILD | private management metadata |
+| POST | `/guilds/:id/ai/history/:channel/messages/:message/redact` | MANAGE_GUILD | irreversible visible redaction with audit event |
 | GET | `/guilds/:id/audit` | MANAGE_GUILD | paginated |
 
 Session: server-side, Redis-backed, `HttpOnly` + `Secure` + `SameSite=Lax`.
 Discord tokens are Fernet-encrypted at rest and **never** reach the browser.
 CSRF token required on all mutating calls. Per-session rate limit on `/player/*`.
+
+AI history contains only exchanges directed at Zephyr and its replies. Conversation
+compaction may remove older retained messages while preserving a rolling summary. Dashboard
+message edits create immutable revisions, redaction replaces the visible content with a fixed
+marker, and labels/annotations are separate management metadata. Audit events record the
+administrative action without copying message content into the audit payload.
 
 ---
 
