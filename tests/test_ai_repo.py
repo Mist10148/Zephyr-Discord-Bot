@@ -100,3 +100,27 @@ def test_message_edits_keep_revisions_and_reject_stale_versions(db_url):
         expected_version=2,
         database_url=db_url,
     ) is None
+
+
+def test_history_labels_and_annotations_are_scoped(db_url):
+    ai.append_exchange("60", "1", "question", "answer", database_url=db_url)
+    label = ai.add_label("1", "60", "Needs review", created_by="900", database_url=db_url)
+    assert label["label"] == "needs review"
+    assert ai.add_label("1", "60", "Needs review", created_by="901", database_url=db_url)["id"] == label["id"]
+    annotation = ai.add_annotation("1", "60", "Follow up with the moderator.", author_id="900", database_url=db_url)
+    detail = ai.load_history("60", "1", database_url=db_url)
+    assert [row["label"] for row in detail["labels"]] == ["needs review"]
+    assert detail["annotations"][0]["note"] == annotation["note"]
+    assert ai.remove_label("2", "60", label["id"], database_url=db_url) is False
+    assert ai.remove_annotation("2", "60", annotation["id"], database_url=db_url) is False
+    assert ai.remove_label("1", "60", label["id"], database_url=db_url)
+    assert ai.remove_annotation("1", "60", annotation["id"], database_url=db_url)
+
+
+def test_redaction_replaces_content_and_is_recorded_as_a_revision(db_url):
+    ai.append_exchange("70", "1", "sensitive text", "answer", database_url=db_url)
+    message = ai.load_history("70", "1", database_url=db_url)["messages"][0]
+    redacted = ai.redact_message("1", "70", message["id"], editor_id="900", database_url=db_url)
+    assert redacted["content"].startswith("[Message redacted")
+    assert redacted["redacted_at"] is not None
+    assert ai.list_message_revisions("1", message["id"], database_url=db_url)[0]["previous_content"] == "sensitive text"

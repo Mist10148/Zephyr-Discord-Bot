@@ -2,7 +2,14 @@
 
 from sqlalchemy import delete, desc, exists, func, insert, select, update
 
-from zephyr.db.models import AIConversation, AIMessage, AIMessageRevision, Persona
+from zephyr.db.models import (
+    AIConversation,
+    AIConversationAnnotation,
+    AIConversationLabel,
+    AIMessage,
+    AIMessageRevision,
+    Persona,
+)
 from zephyr.db.session import get_engine
 
 MAX_PERSONA_NAME = 64
@@ -11,6 +18,8 @@ MAX_HISTORY_QUERY = 100
 MAX_HISTORY_LIMIT = 50
 MAX_MESSAGE_CONTENT = 10000
 MAX_EDIT_REASON = 500
+MAX_LABEL = 40
+MAX_ANNOTATION = 2000
 REDACTED_CONTENT = "[Message redacted by a server administrator.]"
 
 
@@ -239,6 +248,16 @@ def load_history(channel_id, guild_id, *, query=None, database_url=None):
         messages = conn.execute(
             statement.order_by(AIMessage.created_at, AIMessage.id)
         ).mappings().all()
+        labels = conn.execute(
+            select(AIConversationLabel)
+            .where(AIConversationLabel.conversation_id == conversation["id"])
+            .order_by(AIConversationLabel.label)
+        ).mappings().all()
+        annotations = conn.execute(
+            select(AIConversationAnnotation)
+            .where(AIConversationAnnotation.conversation_id == conversation["id"])
+            .order_by(desc(AIConversationAnnotation.id))
+        ).mappings().all()
 
     payload = dict(conversation)
     payload["updated_at"] = _iso(payload["updated_at"])
@@ -250,6 +269,11 @@ def load_history(channel_id, guild_id, *, query=None, database_url=None):
             "created_at": _iso(row["created_at"]),
         }
         for row in messages
+    ]
+    payload["labels"] = [dict(row) for row in labels]
+    payload["annotations"] = [
+        {**dict(row), "created_at": _iso(row["created_at"]), "updated_at": _iso(row["updated_at"])}
+        for row in annotations
     ]
     return payload
 
@@ -329,6 +353,45 @@ def list_message_revisions(guild_id, message_id, *, database_url=None):
     ]
 
 
+def redact_message(guild_id, channel_id, message_id, *, editor_id, reason=None, database_url=None):
+    """Replace a message with a fixed redaction marker and retain a revision."""
+    reason = _validate_reason(reason)
+    engine = get_engine(database_url)
+    with engine.begin() as conn:
+        row = conn.execute(
+            select(AIMessage).join(AIConversation, AIConversation.id == AIMessage.conversation_id).where(
+                AIMessage.id == int(message_id),
+                AIConversation.channel_id == str(channel_id),
+                AIConversation.guild_id == str(guild_id),
+            )
+        ).mappings().first()
+        if not row:
+            return None
+        if row["redacted_at"] is not None:
+            return dict(row)
+        conn.execute(
+            insert(AIMessageRevision).values(
+                message_id=row["id"],
+                editor_id=str(editor_id),
+                previous_content=row["content"],
+                replacement_content=REDACTED_CONTENT,
+                reason=reason or "Administrative redaction",
+            )
+        )
+        conn.execute(
+            update(AIMessage)
+            .where(AIMessage.id == row["id"], AIMessage.version == row["version"])
+            .values(
+                content=REDACTED_CONTENT,
+                version=row["version"] + 1,
+                edited_at=func.now(),
+                redacted_at=func.now(),
+            )
+        )
+        updated = conn.execute(select(AIMessage).where(AIMessage.id == row["id"])).mappings().one()
+    return dict(updated)
+
+
 def update_conversation_metadata(
     guild_id,
     channel_id,
@@ -362,6 +425,123 @@ def update_conversation_metadata(
             select(AIConversation).where(AIConversation.id == conversation_id)
         ).mappings().one()
     return {**dict(row), "updated_at": _iso(row["updated_at"])}
+
+
+def _conversation_id(conn, guild_id, channel_id):
+    return conn.execute(
+        select(AIConversation.id).where(
+            AIConversation.channel_id == str(channel_id),
+            AIConversation.guild_id == str(guild_id),
+        )
+    ).scalar_one_or_none()
+
+
+def list_labels(guild_id, channel_id, *, database_url=None):
+    statement = (
+        select(AIConversationLabel)
+        .join(AIConversation, AIConversation.id == AIConversationLabel.conversation_id)
+        .where(
+            AIConversationLabel.conversation_id == AIConversation.id,
+            AIConversation.channel_id == str(channel_id),
+            AIConversation.guild_id == str(guild_id),
+        )
+        .order_by(AIConversationLabel.label)
+    )
+    with get_engine(database_url).connect() as conn:
+        return [dict(row) for row in conn.execute(statement).mappings().all()]
+
+
+def add_label(guild_id, channel_id, label, *, created_by, database_url=None):
+    label = " ".join(str(label or "").split()).lower()
+    if not label or len(label) > MAX_LABEL:
+        raise AIDataError(f"Labels must be 1 to {MAX_LABEL} characters.")
+    with get_engine(database_url).begin() as conn:
+        conversation_id = _conversation_id(conn, guild_id, channel_id)
+        if conversation_id is None:
+            return None
+        existing = conn.execute(
+            select(AIConversationLabel).where(
+                AIConversationLabel.conversation_id == conversation_id,
+                AIConversationLabel.label == label,
+            )
+        ).mappings().first()
+        if existing:
+            return dict(existing)
+        row = conn.execute(
+            insert(AIConversationLabel).values(
+                conversation_id=conversation_id,
+                label=label,
+                created_by=str(created_by),
+            )
+        )
+        label_id = row.inserted_primary_key[0]
+        return dict(conn.execute(select(AIConversationLabel).where(AIConversationLabel.id == label_id)).mappings().one())
+
+
+def remove_label(guild_id, channel_id, label_id, *, database_url=None):
+    with get_engine(database_url).begin() as conn:
+        conversation_id = _conversation_id(conn, guild_id, channel_id)
+        if conversation_id is None:
+            return False
+        return conn.execute(
+            delete(AIConversationLabel).where(
+                AIConversationLabel.id == int(label_id),
+                AIConversationLabel.conversation_id == conversation_id,
+            )
+        ).rowcount > 0
+
+
+def list_annotations(guild_id, channel_id, *, database_url=None):
+    statement = (
+        select(AIConversationAnnotation)
+        .join(AIConversation, AIConversation.id == AIConversationAnnotation.conversation_id)
+        .where(
+            AIConversationAnnotation.conversation_id == AIConversation.id,
+            AIConversation.channel_id == str(channel_id),
+            AIConversation.guild_id == str(guild_id),
+        )
+        .order_by(desc(AIConversationAnnotation.id))
+    )
+    with get_engine(database_url).connect() as conn:
+        rows = conn.execute(statement).mappings().all()
+    return [
+        {**dict(row), "created_at": _iso(row["created_at"]), "updated_at": _iso(row["updated_at"])}
+        for row in rows
+    ]
+
+
+def add_annotation(guild_id, channel_id, note, *, author_id, database_url=None):
+    note = str(note or "").strip()
+    if not note or len(note) > MAX_ANNOTATION:
+        raise AIDataError(f"Annotations must be 1 to {MAX_ANNOTATION} characters.")
+    with get_engine(database_url).begin() as conn:
+        conversation_id = _conversation_id(conn, guild_id, channel_id)
+        if conversation_id is None:
+            return None
+        annotation_id = conn.execute(
+            insert(AIConversationAnnotation).values(
+                conversation_id=conversation_id,
+                author_id=str(author_id),
+                note=note,
+            )
+        ).inserted_primary_key[0]
+        row = conn.execute(
+            select(AIConversationAnnotation).where(AIConversationAnnotation.id == annotation_id)
+        ).mappings().one()
+    return {**dict(row), "created_at": _iso(row["created_at"]), "updated_at": _iso(row["updated_at"])}
+
+
+def remove_annotation(guild_id, channel_id, annotation_id, *, database_url=None):
+    with get_engine(database_url).begin() as conn:
+        conversation_id = _conversation_id(conn, guild_id, channel_id)
+        if conversation_id is None:
+            return False
+        return conn.execute(
+            delete(AIConversationAnnotation).where(
+                AIConversationAnnotation.id == int(annotation_id),
+                AIConversationAnnotation.conversation_id == conversation_id,
+            )
+        ).rowcount > 0
 
 
 def purge_conversation(guild_id, channel_id, *, database_url=None):

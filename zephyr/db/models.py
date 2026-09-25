@@ -246,6 +246,46 @@ class AIMessageRevision(Base):
     )
 
 
+class AIConversationLabel(Base):
+    """A normalized label assigned to one retained guild conversation."""
+
+    __tablename__ = "ai_conversation_labels"
+    __table_args__ = (
+        UniqueConstraint("conversation_id", "label"),
+        Index("ix_ai_conversation_labels_conversation_id", "conversation_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("ai_conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    label: Mapped[str] = mapped_column(String, nullable=False)
+    created_by: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class AIConversationAnnotation(Base):
+    """Private dashboard note attached to one retained guild conversation."""
+
+    __tablename__ = "ai_conversation_annotations"
+    __table_args__ = (Index("ix_ai_conversation_annotations_conversation_id", "conversation_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("ai_conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    author_id: Mapped[str] = mapped_column(String, nullable=False)
+    note: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class Persona(Base):
     __tablename__ = "personas"
     __table_args__ = (UniqueConstraint("guild_id", "name"), Index("ix_personas_guild_id", "guild_id"))
