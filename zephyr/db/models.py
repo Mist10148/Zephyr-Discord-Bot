@@ -201,6 +201,8 @@ class AIConversation(Base):
     guild_id: Mapped[str | None] = mapped_column(String, nullable=True)
     rolling_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     token_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    category: Mapped[str | None] = mapped_column(String, nullable=True)
+    is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
@@ -217,6 +219,28 @@ class AIMessage(Base):
     role: Mapped[str] = mapped_column(String, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    redacted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class AIMessageRevision(Base):
+    """Immutable record of an administrator changing a retained AI message."""
+
+    __tablename__ = "ai_message_revisions"
+    __table_args__ = (Index("ix_ai_message_revisions_message_id_created_at", "message_id", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    message_id: Mapped[int] = mapped_column(
+        ForeignKey("ai_messages.id", ondelete="CASCADE"), nullable=False
+    )
+    editor_id: Mapped[str] = mapped_column(String, nullable=False)
+    previous_content: Mapped[str] = mapped_column(Text, nullable=False)
+    replacement_content: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
