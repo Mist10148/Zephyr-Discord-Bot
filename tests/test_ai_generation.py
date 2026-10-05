@@ -194,3 +194,19 @@ async def test_failed_summarization_keeps_previous_summary(monkeypatch, isolated
 
     assert await gemini.generate_gemini_response(None, 5, "hi", channel_id="dm-7") == "answer"
     assert compacted == []
+
+
+@pytest.mark.asyncio
+async def test_system_instruction_counts_toward_local_tpm(monkeypatch):
+    reserved = []
+
+    async def reserve(model_name, input_tokens):
+        reserved.append(input_tokens)
+        return False, "limited"
+
+    monkeypatch.setattr(gemini, "reserve_local_quota", reserve)
+
+    result = await gemini.try_generate_with_model(gemini.DEFAULT_CHAT_MODEL, [], 10, "x" * 4000)
+
+    assert result == {"ok": False, "message": "limited", "quota_handled": True}
+    assert reserved == [10 + 1000]

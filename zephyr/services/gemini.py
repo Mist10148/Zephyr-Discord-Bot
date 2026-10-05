@@ -340,6 +340,10 @@ def estimate_tokens_from_contents(contents):
     return max(estimated, 1)
 
 
+def estimate_text_tokens(text):
+    return max(1, len(text or "") // 4)
+
+
 async def count_input_tokens(model_name, contents):
     try:
         response = await gemini_async_client.models.count_tokens(model=model_name, contents=contents)
@@ -535,7 +539,9 @@ async def request_gemini_content(model_name, contents, system_personality):
 
 
 async def try_generate_with_model(model_name, contents, input_tokens, system_personality):
-    allowed, limit_message = await reserve_local_quota(model_name, input_tokens)
+    # The system instruction is billed as input too, so it counts toward TPM.
+    reserved_tokens = input_tokens + estimate_text_tokens(system_personality)
+    allowed, limit_message = await reserve_local_quota(model_name, reserved_tokens)
     if not allowed:
         return {"ok": False, "message": limit_message, "quota_handled": True}
     try:
