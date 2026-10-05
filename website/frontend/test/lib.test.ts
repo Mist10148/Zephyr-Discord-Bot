@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { groupByDay, timeOfDay } from '../src/lib/audit-groups'
 import { airQualityLabel, heatAdvisory, weatherGlyph } from '../src/lib/weather-icons'
+import { buildTranscriptMarkdown } from '../src/lib/export'
 import type { AuditEntry } from '../src/types/api'
 
 function entry(id: number, createdAt: string | null): AuditEntry {
@@ -101,5 +102,25 @@ describe('timeOfDay', () => {
 
   it('formats a real timestamp', () => {
     expect(timeOfDay(new Date(2026, 7, 1, 14, 2).toISOString())).toMatch(/\d/)
+  })
+})
+
+describe('buildTranscriptMarkdown', () => {
+  const message = (id: number, role: string, content: string, createdAt: string | null = null) => ({ id, conversation_id: 1, role, content, tokens: 1, version: 1, edited_at: null, redacted_at: null, created_at: createdAt })
+  const at = new Date('2026-10-05T00:00:00Z')
+
+  it('puts the summary before the messages, in order', () => {
+    const text = buildTranscriptMarkdown({ channel_id: '42', rolling_summary: ' Likes tea. ', messages: [message(1, 'user', 'hello', '2026-10-04T10:00:00Z'), message(2, 'model', 'hi there')] }, at)
+    expect(text).toContain('# DM conversation 42')
+    expect(text).toContain('Exported 2026-10-05T00:00:00.000Z')
+    expect(text.indexOf('Likes tea.')).toBeLessThan(text.indexOf('**user** · 2026-10-04T10:00:00Z'))
+    expect(text.indexOf('hello')).toBeLessThan(text.indexOf('**model**'))
+    expect(text).toContain('hi there')
+  })
+
+  it('handles a missing summary and no messages', () => {
+    const text = buildTranscriptMarkdown({ channel_id: '7', rolling_summary: null, messages: [] }, at)
+    expect(text).toContain('_No summary._')
+    expect(text).toContain('_No retained messages._')
   })
 })
