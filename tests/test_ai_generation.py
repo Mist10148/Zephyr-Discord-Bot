@@ -175,3 +175,22 @@ async def test_oversized_stored_summary_is_capped_in_system_prompt(monkeypatch, 
     summary = prompts[0].split("Earlier channel context summary:\n", 1)[1]
     assert len(summary) <= gemini.MAX_SUMMARY_CHARS
     assert summary.endswith("newest")
+
+
+@pytest.mark.asyncio
+async def test_failed_summarization_keeps_previous_summary(monkeypatch, isolated_generation):
+    compacted = []
+    monkeypatch.setattr(gemini.ai_db, "load_conversation", lambda channel_id: _conversation(22, "old summary"))
+    monkeypatch.setattr(gemini.ai_db, "append_exchange", lambda *args, **kwargs: None)
+    monkeypatch.setattr(gemini.ai_db, "compact_conversation", lambda channel_id, summary: compacted.append(summary))
+    monkeypatch.setattr(gemini, "count_input_tokens", _one_token)
+
+    async def respond(model_name, contents, input_tokens, system_personality):
+        if system_personality.startswith("Merge"):
+            return {"ok": False, "message": "model is on cooldown"}
+        return {"ok": True, "response_text": "answer"}
+
+    monkeypatch.setattr(gemini, "try_generate_with_model", respond)
+
+    assert await gemini.generate_gemini_response(None, 5, "hi", channel_id="dm-7") == "answer"
+    assert compacted == []

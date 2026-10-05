@@ -631,7 +631,11 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
                         prior = conversation.get("rolling_summary") or ""
                         old = conversation["messages"][:-MAX_HISTORY_MESSAGES]
                         summary = await summarize_conversation_memory(server_id, user_id, prior, old)
-                        await asyncio.to_thread(ai_db.compact_conversation, channel_id, summary)
+                        if summary:
+                            await asyncio.to_thread(ai_db.compact_conversation, channel_id, summary)
+                        else:
+                            # Keep the old turns and summary; the next exchange retries.
+                            print(f"[Gemini warning] Memory compaction skipped for channel {channel_id}: summarization failed")
                 save_history_for_context(server_id, user_id, updated_history)
                 return bot_response
             if result.get("message"):
