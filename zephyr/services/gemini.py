@@ -364,6 +364,23 @@ def extract_usage_value(usage_metadata, attr_name):
     return 0
 
 
+def _enum_name(value):
+    if value is None:
+        return "none"
+    return getattr(value, "name", None) or str(value)
+
+
+def describe_empty_response(response):
+    """Explain an empty reply, e.g. ``block_reason=PROHIBITED_CONTENT finish_reason=SAFETY``."""
+    feedback = getattr(response, "prompt_feedback", None)
+    block_reason = _enum_name(getattr(feedback, "block_reason", None))
+    finish_reasons = [
+        _enum_name(getattr(candidate, "finish_reason", None))
+        for candidate in getattr(response, "candidates", None) or []
+    ]
+    return f"block_reason={block_reason} finish_reason={','.join(finish_reasons) or 'none'}"
+
+
 def extract_response_text(response):
     try:
         response_text = getattr(response, "text", None)
@@ -548,6 +565,7 @@ async def try_generate_with_model(model_name, contents, input_tokens, system_per
         response = await request_gemini_content(model_name, contents, system_personality)
         response_text = extract_response_text(response)
         if not response_text:
+            print(f"[Gemini warning] {model_name}: empty response ({describe_empty_response(response)})")
             return {"ok": False, "empty_response": True, "quota_handled": True}
         await record_successful_usage(model_name, getattr(response, "usage_metadata", None))
         return {"ok": True, "response_text": response_text, "response": response}

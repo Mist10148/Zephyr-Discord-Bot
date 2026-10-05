@@ -210,3 +210,39 @@ async def test_system_instruction_counts_toward_local_tpm(monkeypatch):
 
     assert result == {"ok": False, "message": "limited", "quota_handled": True}
     assert reserved == [10 + 1000]
+
+
+class _Reason:
+    def __init__(self, name):
+        self.name = name
+
+
+class _Blocked:
+    text = None
+    usage_metadata = None
+
+    def __init__(self):
+        self.prompt_feedback = type("Feedback", (), {"block_reason": _Reason("PROHIBITED_CONTENT")})()
+        self.candidates = [type("Candidate", (), {"finish_reason": _Reason("SAFETY"), "content": None})()]
+
+
+def test_describe_empty_response_reports_block_and_finish_reasons():
+    assert gemini.describe_empty_response(_Blocked()) == "block_reason=PROHIBITED_CONTENT finish_reason=SAFETY"
+    assert gemini.describe_empty_response(Response("")) == "block_reason=none finish_reason=none"
+
+
+@pytest.mark.asyncio
+async def test_empty_response_logs_reason(monkeypatch, capsys):
+    async def allow(model_name, input_tokens):
+        return True, None
+
+    async def blocked(model_name, contents, system_personality):
+        return _Blocked()
+
+    monkeypatch.setattr(gemini, "reserve_local_quota", allow)
+    monkeypatch.setattr(gemini, "request_gemini_content", blocked)
+
+    result = await gemini.try_generate_with_model("model-x", [], 1, "system")
+
+    assert result["empty_response"] is True
+    assert "model-x: empty response (block_reason=PROHIBITED_CONTENT finish_reason=SAFETY)" in capsys.readouterr().out
