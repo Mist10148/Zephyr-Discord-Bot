@@ -8,7 +8,11 @@ best-effort by design, which is why the offline case below still expects a 204.
 
 import json
 
+from sqlalchemy import select
+
 from zephyr.db import ai as ai_db
+from zephyr.db.models import AuditLog
+from zephyr.db.session import get_engine
 from zephyr.services import bridge
 
 
@@ -178,3 +182,26 @@ class TestPrivateDMHistory:
         assert client.delete("/api/v1/me/ai/history/83").status_code == 403
         assert client.delete("/api/v1/me/ai/history/83", headers=_headers(logged_in)).status_code == 204
         assert ai_db.load_dm_history("83", logged_in.user_id, database_url=db_url) is None
+
+    def test_dm_summary_edit_is_owner_scoped_csrf_protected_and_audited(self, client, logged_in, db_url):
+        ai_db.append_exchange("84", None, "private", "answer", owner_id=logged_in.user_id, database_url=db_url)
+        ai_db.append_exchange("85", None, "other", "answer", owner_id="800", database_url=db_url)
+        url = "/api/v1/me/ai/history/84/summary"
+
+        assert client.put(url, json={"summary": "kept"}).status_code == 403
+        assert client.put(url, headers=_headers(logged_in), json={"summary": "kept", "extra": 1}).status_code == 400
+        assert client.put(url, headers=_headers(logged_in), json={"summary": 5}).status_code == 400
+        too_long = client.put(url, headers=_headers(logged_in), json={"summary": "x" * 3001})
+        assert too_long.status_code == 400
+        assert client.put("/api/v1/me/ai/history/85/summary", headers=_headers(logged_in), json={"summary": "no"}).status_code == 404
+
+        saved = client.put(url, headers=_headers(logged_in), json={"summary": "  my private summary  "})
+        assert saved.status_code == 200
+        assert saved.get_json()["rolling_summary"] == "my private summary"
+        assert ai_db.load_dm_history("84", logged_in.user_id, database_url=db_url)["rolling_summary"] == "my private summary"
+        assert ai_db.load_conversation("85", database_url=db_url)["rolling_summary"] is None
+
+        with get_engine(db_url).connect() as conn:
+            rows = conn.execute(select(AuditLog.action, AuditLog.payload).where(AuditLog.action == "ai.dm.summary.edit")).all()
+        assert len(rows) == 1
+        assert rows[0].payload == {"channel_id": "84", "length": len("my private summary")}

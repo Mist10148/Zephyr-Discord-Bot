@@ -20,6 +20,7 @@ MAX_MESSAGE_CONTENT = 10000
 MAX_EDIT_REASON = 500
 MAX_LABEL = 40
 MAX_ANNOTATION = 2000
+MAX_SUMMARY_CHARS = 3000
 REDACTED_CONTENT = "[Message redacted by a server administrator.]"
 
 
@@ -720,3 +721,27 @@ def purge_conversation(guild_id, channel_id, *, owner_id=None, database_url=None
             return False
         conn.execute(delete(AIMessage).where(AIMessage.conversation_id == row))
         return conn.execute(delete(AIConversation).where(AIConversation.id == row)).rowcount > 0
+
+
+def set_dm_summary(channel_id, owner_id, summary, *, database_url=None):
+    """Replace the rolling summary of one of ``owner_id``'s DM conversations.
+
+    An empty summary clears it. Returns ``None`` when the conversation does not
+    exist or belongs to someone else, like ``purge_conversation(owner_id=...)``.
+    """
+    summary = str(summary or "").strip()
+    if len(summary) > MAX_SUMMARY_CHARS:
+        raise AIDataError(f"Summaries must be {MAX_SUMMARY_CHARS} characters or fewer.")
+    scope = and_(AIConversation.guild_id.is_(None), AIConversation.owner_id == str(owner_id))
+    with get_engine(database_url).begin() as conn:
+        row = conn.execute(
+            select(AIConversation.id).where(scope, AIConversation.channel_id == str(channel_id))
+        ).scalar_one_or_none()
+        if row is None:
+            return None
+        conn.execute(
+            update(AIConversation)
+            .where(AIConversation.id == row)
+            .values(rolling_summary=summary or None, token_count=len(summary) // 4)
+        )
+        return {"rolling_summary": summary or None, "token_count": len(summary) // 4}

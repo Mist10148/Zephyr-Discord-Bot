@@ -198,3 +198,24 @@ def test_legacy_dm_can_be_claimed_by_its_recipient(db_url):
     assert ai.claim_dm_conversation("29", "700", database_url=db_url) is False
     assert [e["channel_id"] for e in ai.list_dm_history("700", database_url=db_url)["entries"]] == ["27"]
     assert ai.list_unowned_dm_channel_ids(database_url=db_url) == []
+
+
+def test_dm_summary_edit_is_owner_scoped_and_bounded(db_url):
+    ai.append_exchange("30", None, "hello", "hi", owner_id="100", database_url=db_url)
+    ai.compact_conversation("30", "x" * 400, keep_messages=1, database_url=db_url)
+
+    assert ai.set_dm_summary("30", "200", "stolen", database_url=db_url) is None
+    assert ai.set_dm_summary("31", "100", "missing", database_url=db_url) is None
+    saved = ai.set_dm_summary("30", "100", "  short summary  ", database_url=db_url)
+    assert saved == {"rolling_summary": "short summary", "token_count": 3}
+    assert ai.load_conversation("30", database_url=db_url)["rolling_summary"] == "short summary"
+
+    try:
+        ai.set_dm_summary("30", "100", "y" * (ai.MAX_SUMMARY_CHARS + 1), database_url=db_url)
+    except ai.AIDataError:
+        pass
+    else:
+        raise AssertionError("an oversized summary must be rejected")
+
+    assert ai.set_dm_summary("30", "100", "   ", database_url=db_url)["rolling_summary"] is None
+    assert ai.load_conversation("30", database_url=db_url)["rolling_summary"] is None

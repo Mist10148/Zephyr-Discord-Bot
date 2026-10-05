@@ -201,6 +201,28 @@ def my_dm_message_revisions(channel_id, message_id):
     return jsonify({"revisions": ai_db.list_message_revisions(None, message_id, owner_id=g.zephyr_session.user_id, database_url=current_app.config["DATABASE_URL"])})
 
 
+@api.put("/me/ai/history/<channel_id>/summary")
+@require_session
+def edit_my_dm_summary(channel_id):
+    body = _body()
+    if body is None or set(body) != {"summary"} or not isinstance(body["summary"], str):
+        return error("invalid_body", "Send a summary string.", 400)
+    try:
+        saved = ai_db.set_dm_summary(
+            channel_id,
+            g.zephyr_session.user_id,
+            body["summary"],
+            database_url=current_app.config["DATABASE_URL"],
+        )
+    except ai_db.AIDataError as exc:
+        return error("invalid_value", str(exc), 400)
+    if saved is None:
+        return error("not_found", "DM conversation not found.", 404)
+    # Length only: the audit log is not the place to copy private conversation text.
+    _dm_audit("ai.dm.summary.edit", {"channel_id": str(channel_id), "length": len(saved["rolling_summary"] or "")})
+    return jsonify(saved)
+
+
 @api.delete("/me/ai/history/<channel_id>")
 @require_session
 def purge_my_dm_history(channel_id):
