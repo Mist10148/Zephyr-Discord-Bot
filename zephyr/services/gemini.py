@@ -119,6 +119,7 @@ model_usage_totals = defaultdict(lambda: {
 MAX_HISTORY_MESSAGES = 10
 MAX_HISTORY_INPUT_TOKENS = 8000
 MEMORY_COMPACTION_MESSAGES = 20
+MAX_SUMMARY_CHARS = 3000
 PACIFIC_TZ = ZoneInfo("America/Los_Angeles")
 
 
@@ -587,7 +588,7 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
     try:
         persisted = await asyncio.to_thread(ai_db.load_conversation, channel_id) if channel_id else None
         if persisted and persisted.get("rolling_summary"):
-            system_personality += "\n\nEarlier channel context summary:\n" + persisted["rolling_summary"]
+            system_personality += "\n\nEarlier channel context summary:\n" + cap_summary_tail(persisted["rolling_summary"])
         history = (
             [{"role": row["role"], "text": row["content"]} for row in persisted["messages"]]
             if persisted else get_history_for_context(server_id, user_id)
@@ -629,13 +630,7 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
                     if conversation and len(conversation["messages"]) > MEMORY_COMPACTION_MESSAGES:
                         prior = conversation.get("rolling_summary") or ""
                         old = conversation["messages"][:-MAX_HISTORY_MESSAGES]
-                        transcript = "\n".join(f"{row['role']}: {row['content']}" for row in old)
-                        summary = await generate_utility_response(
-                            server_id, user_id, transcript,
-                            instruction="Create a concise factual memory summary for a future assistant. Preserve decisions, preferences, names, and open questions. Do not add advice.",
-                        )
-                        if prior:
-                            summary = f"{prior}\n\n{summary}"
+                        summary = await summarize_conversation_memory(server_id, user_id, prior, old)
                         await asyncio.to_thread(ai_db.compact_conversation, channel_id, summary)
                 save_history_for_context(server_id, user_id, updated_history)
                 return bot_response
@@ -690,6 +685,56 @@ async def reset_conversation(server_id, user_id, channel_id):
             print(f"[Gemini] Could not purge the stored conversation for channel {channel_id}: {exc}")
     cached = clear_history_for_context(server_id, user_id)
     return {"purged": purged, "cached": cached, "error": error}
+
+
+def cap_summary_head(text, limit=MAX_SUMMARY_CHARS):
+    """Trim a freshly generated summary to ``limit`` characters at a word boundary."""
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    boundary = cut.rfind(" ")
+    return (cut[:boundary] if boundary > limit // 2 else cut).rstrip()
+
+
+def cap_summary_tail(text, limit=MAX_SUMMARY_CHARS):
+    """Keep the newest ``limit`` characters of a stored summary.
+
+    Summaries written before compaction merged them grew by appending, so the
+    most recent context is at the end.
+    """
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    tail = text[-limit:]
+    boundary = tail.find(" ")
+    return (tail[boundary + 1:] if 0 <= boundary < limit // 2 else tail).lstrip()
+
+
+async def summarize_conversation_memory(server_id, user_id, prior, old_messages):
+    """Merge the existing summary and the turns being dropped into one bounded summary.
+
+    Re-summarizing (rather than appending) keeps durable memory from growing
+    without limit. Returns ``None`` when the model call does not succeed.
+    """
+    transcript = "\n".join(f"{row['role']}: {row['content']}" for row in old_messages)
+    sections = []
+    if prior:
+        sections.append("Existing memory summary:\n" + cap_summary_tail(prior))
+    sections.append("New conversation turns:\n" + transcript)
+    instruction = (
+        "Merge the existing memory summary and the new conversation turns into ONE concise factual "
+        "memory summary for a future assistant. Preserve decisions, preferences, names, and open "
+        f"questions. Drop redundant detail. Do not add advice. Stay under {MAX_SUMMARY_CHARS} characters."
+    )
+    settings = get_context_settings(server_id, user_id)
+    model_name = settings["ai_model"]
+    content = build_user_content("\n\n".join(sections))
+    tokens = await count_input_tokens(model_name, [content])
+    result = await try_generate_with_model(model_name, [content], tokens, instruction)
+    if not result.get("ok"):
+        return None
+    return cap_summary_head(result["response_text"])
 
 
 async def generate_utility_response(server_id, user_id, prompt, *, instruction):

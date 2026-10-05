@@ -113,3 +113,65 @@ async def test_durable_write_error_does_not_publish_in_memory_turn(monkeypatch, 
 
     assert result == "An unexpected error occurred while generating a response. Please try again in a moment."
     assert gemini.get_history_for_context(None, 5) == []
+
+
+def _conversation(message_count, summary):
+    messages = [
+        {"role": "user" if index % 2 == 0 else "model", "content": f"turn {index}"}
+        for index in range(message_count)
+    ]
+    return {"messages": messages, "rolling_summary": summary}
+
+
+async def _one_token(model_name, contents):
+    return 1
+
+
+@pytest.mark.asyncio
+async def test_compaction_replaces_summary_instead_of_appending(monkeypatch, isolated_generation):
+    compacted = []
+    summarizer_inputs = []
+    monkeypatch.setattr(gemini.ai_db, "load_conversation", lambda channel_id: _conversation(22, "old summary"))
+    monkeypatch.setattr(gemini.ai_db, "append_exchange", lambda *args, **kwargs: None)
+    monkeypatch.setattr(gemini.ai_db, "compact_conversation", lambda channel_id, summary: compacted.append(summary))
+    monkeypatch.setattr(gemini, "count_input_tokens", _one_token)
+
+    async def respond(model_name, contents, input_tokens, system_personality):
+        if system_personality.startswith("Merge"):
+            summarizer_inputs.append(contents[0].parts[0].text)
+            return {"ok": True, "response_text": "merged summary"}
+        return {"ok": True, "response_text": "answer"}
+
+    monkeypatch.setattr(gemini, "try_generate_with_model", respond)
+
+    assert await gemini.generate_gemini_response(None, 5, "hi", channel_id="dm-5") == "answer"
+    assert compacted == ["merged summary"]
+    assert "Existing memory summary:\nold summary" in summarizer_inputs[0]
+    assert "turn 0" in summarizer_inputs[0]
+
+
+def test_summary_caps_keep_bounded_length():
+    long_text = " ".join(f"word{index}" for index in range(2000))
+    head = gemini.cap_summary_head(long_text)
+    tail = gemini.cap_summary_tail(long_text)
+    assert len(head) <= gemini.MAX_SUMMARY_CHARS and head.startswith("word0 ")
+    assert len(tail) <= gemini.MAX_SUMMARY_CHARS and tail.endswith("word1999")
+    assert gemini.cap_summary_head("short") == "short"
+
+
+@pytest.mark.asyncio
+async def test_oversized_stored_summary_is_capped_in_system_prompt(monkeypatch, isolated_generation):
+    prompts = []
+    monkeypatch.setattr(gemini.ai_db, "load_conversation", lambda channel_id: _conversation(2, "x " * 100000 + "newest"))
+    monkeypatch.setattr(gemini.ai_db, "append_exchange", lambda *args, **kwargs: None)
+
+    async def respond(model_name, contents, input_tokens, system_personality):
+        prompts.append(system_personality)
+        return {"ok": True, "response_text": "answer"}
+
+    monkeypatch.setattr(gemini, "try_generate_with_model", respond)
+
+    await gemini.generate_gemini_response(None, 5, "hi", channel_id="dm-6")
+    summary = prompts[0].split("Earlier channel context summary:\n", 1)[1]
+    assert len(summary) <= gemini.MAX_SUMMARY_CHARS
+    assert summary.endswith("newest")
