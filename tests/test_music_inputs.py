@@ -4,13 +4,15 @@ These tests mock yt-dlp and spotipy so they do not perform any network calls.
 """
 
 import asyncio
-from unittest.mock import MagicMock, patch
+import shlex
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from zephyr.cogs.music import (
     YTDLSource,
     YTDLError,
+    _FFmpegDiagnostics,
     _sanitize_search,
     _is_url,
     _is_spotify_url,
@@ -69,6 +71,29 @@ class TestInputHelpers:
         assert _is_audio_file_url("https://example.com/song.flac") is True
         assert _is_audio_file_url("https://example.com/song.txt") is False
         assert _is_audio_file_url("plain text") is False
+
+
+class TestYtdlpAndFfmpegConfiguration:
+    def test_node_runtime_is_explicitly_enabled(self):
+        """yt-dlp enables only Deno by default, even when Node is installed."""
+        assert YTDLSource.YTDL_OPTIONS["js_runtimes"] == {"node": {}}
+        # YoutubeDL normalises omitted remote components to an empty set.
+        assert YTDLSource.YTDL_OPTIONS.get("remote_components", set()) == set()
+
+    def test_media_headers_are_sanitised_and_quoted_for_ffmpeg(self):
+        option = YTDLSource._ffmpeg_headers({
+            "User-Agent": "Zephyr Test",
+            "X-Unsafe\r\nHeader": "value\nwith-break",
+        })
+        arguments = shlex.split(option)
+        assert arguments[0] == "-headers"
+        assert arguments[1] == "User-Agent: Zephyr Test\r\nX-UnsafeHeader: valuewith-break\r\n"
+
+    def test_diagnostics_keep_only_the_bounded_stderr_tail(self):
+        diagnostics = _FFmpegDiagnostics(limit=8)
+        diagnostics.write(b"12345")
+        diagnostics.write(b"67890")
+        assert diagnostics.tail() == "34567890"
 
 
 class TestSpotifyIdParsing:
@@ -315,6 +340,21 @@ class TestFromTrack:
         assert no_audio.call_count == 1
         assert track.title == "Real Title"
         assert track.duration_seconds == 240
+
+    @pytest.mark.asyncio
+    async def test_passes_extractor_headers_and_a_stderr_sink_to_ffmpeg(self, mock_ytdl, no_audio):
+        track = self._track()
+        info = _make_info("http://stream/1", "Song", "1")
+        info["http_headers"] = {"User-Agent": "Zephyr Test"}
+        mock_ytdl.extract_info.return_value = info
+
+        await YTDLSource.from_track(track, loop=asyncio.get_event_loop())
+
+        kwargs = no_audio.call_args.kwargs
+        assert "-headers" in kwargs["before_options"]
+        assert "User-Agent: Zephyr Test" in kwargs["before_options"]
+        assert "Range: bytes=0-" in kwargs["before_options"]
+        assert isinstance(kwargs["stderr"], _FFmpegDiagnostics)
 
     @pytest.mark.asyncio
     async def test_a_seek_is_passed_to_ffmpeg(self, mock_ytdl, no_audio):

@@ -6,11 +6,11 @@ data, and VoiceState only needs a MagicMock bot.
 """
 
 import asyncio
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from zephyr.cogs.music import SongQueue, VoiceState
+from zephyr.cogs.music import SongQueue, Track, VoiceState
 
 
 def _make_state(guild_id=123456789, channel_id=987654321):
@@ -197,6 +197,82 @@ class TestPlayNextSong:
         await asyncio.sleep(0)
         await asyncio.to_thread(state.play_next_song)
         await asyncio.wait_for(waiter, timeout=1)
+
+    def test_stream_failure_is_saved_for_the_player_task(self):
+        state = _make_state()
+        state.bot.loop = MagicMock()
+        track = Track(title="Broken stream", url="https://example.com/watch?v=1")
+        source = MagicMock(stderr_tail="HTTP error 403 Forbidden")
+
+        state.play_next_song(source=source, track=track)
+
+        assert state._playback_failure == {
+            "track": track,
+            "diagnostics": "HTTP error 403 Forbidden",
+        }
+        state.bot.loop.call_soon_threadsafe.assert_called_once_with(state.next.set)
+
+
+class TestPlaybackRetry:
+    def test_queue_loop_track_is_retried_without_a_duplicate(self):
+        state = _make_state()
+        track = Track(title="Retry once")
+        state.songs.put_nowait(Track(title="Later"))
+        state.songs.put_nowait(track)
+
+        state._queue_track_for_retry(track)
+        assert list(state.songs) == [track, state.songs[1]]
+        state._remove_queued_track(track)
+        assert [item.title for item in state.songs] == ["Later"]
+
+    @pytest.mark.asyncio
+    async def test_a_failed_stream_is_refreshed_once_then_reported(self):
+        class Voice:
+            def play(self, source, *, after):
+                self.source = source
+                self.after = after
+
+        class Source:
+            def __init__(self):
+                self.stderr_tail = "HTTP error 403 Forbidden"
+
+        bot = MagicMock()
+        bot.loop = asyncio.get_running_loop()
+        state = VoiceState(bot, guild_id=1)
+        state.voice = Voice()
+        track = Track(title="Broken stream", url="https://example.com/watch?v=1")
+        state.songs.put_nowait(track)
+        state._notify = AsyncMock()
+        state.announce_now_playing = AsyncMock()
+        first, second = Source(), Source()
+
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            from zephyr.cogs.music import YTDLSource
+            factory = AsyncMock(side_effect=[first, second])
+            monkeypatch.setattr(YTDLSource, "from_track", factory)
+            task = asyncio.create_task(state.audio_player_task())
+            for _ in range(20):
+                if hasattr(state.voice, "after"):
+                    break
+                await asyncio.sleep(0)
+            state.voice.after(None)
+            for _ in range(20):
+                if factory.await_count == 2:
+                    break
+                await asyncio.sleep(0)
+            state.voice.after(None)
+            for _ in range(20):
+                if state._stream_retry_ids == set():
+                    break
+                await asyncio.sleep(0)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        assert factory.await_count == 2
+        messages = [call.kwargs["content"] for call in state._notify.call_args_list]
+        assert any("refreshing" in message for message in messages)
+        assert any("could not stream" in message for message in messages)
 
 
 class TestVoiceStateDefaults:

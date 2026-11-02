@@ -11,6 +11,9 @@ import asyncio
 import dataclasses
 import functools
 import itertools
+import logging
+import shlex
+import threading
 import traceback
 import time
 import re
@@ -42,6 +45,9 @@ from zephyr.db.playlists import (
 from zephyr.services import bridge
 from zephyr.services.spotify import is_spotify_url, parse_spotify_id, resolve_short_link
 from zephyr.utils.time_utils import _parse_user_time, _format_timestamp
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -334,6 +340,31 @@ class Track:
         return bar
 
 
+class _FFmpegDiagnostics:
+    """Thread-safe, bounded stderr sink accepted by discord.py's FFmpeg source."""
+
+    def __init__(self, limit: int = 8_192):
+        self._limit = limit
+        self._data = bytearray()
+        self._lock = threading.Lock()
+
+    def write(self, data: bytes) -> int:
+        if isinstance(data, str):
+            data = data.encode("utf-8", "replace")
+        with self._lock:
+            self._data.extend(data)
+            if len(self._data) > self._limit:
+                del self._data[:-self._limit]
+        return len(data)
+
+    def flush(self) -> None:
+        pass
+
+    def tail(self) -> str:
+        with self._lock:
+            return bytes(self._data).decode("utf-8", "replace").strip()
+
+
 class YTDLSource(discord.PCMVolumeTransformer):
     YTDL_OPTIONS = {
         'format': 'bestaudio/best',
@@ -348,19 +379,52 @@ class YTDLSource(discord.PCMVolumeTransformer):
         'quiet': True,
         'no_warnings': True,
         'default_search': 'auto',
+        # Node is explicitly enabled: yt-dlp intentionally enables only Deno by
+        # default, even when Node is installed. requirements.txt installs the
+        # matching yt-dlp-ejs component via the ``default`` extra.
+        'js_runtimes': {'node': {}},
     }
 
     DEFAULT_FFMPEG_OPTIONS = {
-        'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
         'options': '-vn',
     }
 
     ytdl = yt_dlp.YoutubeDL(YTDL_OPTIONS)
 
-    def __init__(self, source: discord.FFmpegPCMAudio, *, data: dict, volume: float = 0.5):
+    def __init__(self, source: discord.FFmpegPCMAudio, *, data: dict, diagnostics: _FFmpegDiagnostics,
+                 volume: float = 0.5):
         super().__init__(source, volume)
         self.data = data
         self.stream_url = data.get('url')
+        self._diagnostics = diagnostics
+
+    @property
+    def stderr_tail(self) -> str:
+        return self._diagnostics.tail()
+
+    @staticmethod
+    def _ffmpeg_headers(headers: dict | None) -> str:
+        """Return a safely quoted FFmpeg ``-headers`` argument for yt-dlp media URLs."""
+        lines = []
+        for name, value in (headers or {}).items():
+            clean_name = str(name).replace("\r", "").replace("\n", "").strip()
+            clean_value = str(value).replace("\r", "").replace("\n", "").strip()
+            if clean_name and clean_value:
+                lines.append(f"{clean_name}: {clean_value}")
+        if not lines:
+            return ""
+        header_block = "\r\n".join(lines) + "\r\n"
+        return f"-headers {shlex.quote(header_block)}"
+
+    @classmethod
+    def _make_ffmpeg_source(cls, url: str, *, data: dict, options: dict, volume: float) -> 'YTDLSource':
+        diagnostics = _FFmpegDiagnostics()
+        return cls(
+            discord.FFmpegPCMAudio(url, executable=FFMPEG_PATH, stderr=diagnostics, **options),
+            data=data,
+            diagnostics=diagnostics,
+            volume=volume,
+        )
 
     # Kept as an alias so nothing that referenced the old classmethod breaks.
     parse_duration = staticmethod(_format_duration)
@@ -521,8 +585,8 @@ class YTDLSource(discord.PCMVolumeTransformer):
 
         if track.source == 'file':
             # Direct media: hand the URL straight to FFmpeg, no extraction.
-            return cls(discord.FFmpegPCMAudio(track.url, executable=FFMPEG_PATH, **options),
-                       data={'url': track.url, 'title': track.title}, volume=volume)
+            return cls._make_ffmpeg_source(track.url, data={'url': track.url, 'title': track.title},
+                                           options=options, volume=volume)
 
         info = None
         if track.url:
@@ -544,8 +608,15 @@ class YTDLSource(discord.PCMVolumeTransformer):
             raise YTDLError(f'Could not fetch `{track.title or track.url}`')
         # A flat entry's title/duration are placeholders until now.
         track.absorb(info)
-        return cls(discord.FFmpegPCMAudio(info['url'], executable=FFMPEG_PATH, **options),
-                   data=info, volume=volume)
+        # yt-dlp's downloader asks Googlevideo for a byte range.  FFmpeg's
+        # initial request otherwise receives a 403 for some YouTube clients,
+        # even with yt-dlp's browser headers forwarded.
+        headers_data = dict(info.get('http_headers') or {})
+        headers_data.setdefault('Range', 'bytes=0-')
+        headers = cls._ffmpeg_headers(headers_data)
+        if headers:
+            options['before_options'] = f"{options.get('before_options', '')} {headers}".strip()
+        return cls._make_ffmpeg_source(info['url'], data=info, options=options, volume=volume)
 
     @classmethod
     async def _resolve_by_title(cls, track: 'Track', *, loop) -> dict | None:
@@ -718,6 +789,11 @@ class VoiceState:
         self._volume = 0.5
         self.skip_votes = set()
         self.manual_stop = False
+        # The AudioPlayer after-callback runs in a worker thread.  It records a
+        # failed FFmpeg source here before waking audio_player_task on the event
+        # loop; the task owns the retry and all Discord API calls.
+        self._playback_failure = None
+        self._stream_retry_ids = set()
 
         self._16d_enabled = False
         self._reverb_enabled = False
@@ -793,7 +869,6 @@ class VoiceState:
 
     def get_ffmpeg_options(self, seek_position: float = None):
         options = {
-            'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
             'options': '-vn'
         }
         if seek_position is not None and seek_position > 0:
@@ -967,6 +1042,21 @@ class VoiceState:
         if key:
             self._recent_ids.append(key)
 
+    def _queue_track_for_retry(self, track: 'Track') -> None:
+        """Put one failed track at the front without duplicating queue-loop items."""
+        for index, queued in enumerate(self.songs):
+            if queued is track:
+                self.songs.move(index, 0)
+                return
+        self.songs.add_to_front(track)
+
+    def _remove_queued_track(self, track: 'Track') -> None:
+        """Drop the queue-loop copy after its one permitted stream retry fails."""
+        for index, queued in enumerate(self.songs):
+            if queued is track:
+                self.songs.remove(index)
+                return
+
     async def audio_player_task(self):
         while True:
             self.next.clear()
@@ -1003,10 +1093,11 @@ class VoiceState:
                 continue
 
             try:
+                self._playback_failure = None
                 self.source = source
                 self._current_start_time = time.time()
                 self._current_position = 0.0
-                self.voice.play(source, after=self.play_next_song)
+                self.voice.play(source, after=lambda error: self.play_next_song(error, source=source, track=track))
                 self._remember(track)
                 self.changed()
                 await self.announce_now_playing(track)
@@ -1021,11 +1112,36 @@ class VoiceState:
                     pass
                 await self._notify(content=f'An error occurred while playing: {e}')
                 traceback.print_exc()
-                self.play_next_song()
+                self.play_next_song(e, source=source, track=track)
 
             await self.next.wait()
 
-    def play_next_song(self, error=None):
+            failure = self._playback_failure
+            if failure and failure['track'] is track:
+                self._playback_failure = None
+                diagnostics = failure['diagnostics']
+                LOGGER.error("FFmpeg failed while streaming %r: %s", track.title, diagnostics)
+                retry_id = id(track)
+                if retry_id not in self._stream_retry_ids:
+                    # yt-dlp URLs are short-lived.  One fresh extraction is cheap
+                    # and recovers from an expired edge URL; never retry forever.
+                    self._stream_retry_ids.add(retry_id)
+                    self.current = None
+                    self._current_start_time = None
+                    self._queue_track_for_retry(track)
+                    await self._notify(content='⚠️ The stream was rejected; refreshing it once and retrying.')
+                else:
+                    self._stream_retry_ids.discard(retry_id)
+                    self._remove_queued_track(track)
+                    self.current = None
+                    self._current_start_time = None
+                    await self._notify(
+                        content='❌ I could not stream that track. Please try it again later or choose another result.'
+                    )
+            else:
+                self._stream_retry_ids.discard(id(track))
+
+    def play_next_song(self, error=None, *, source: YTDLSource | None = None, track: Track | None = None):
         """Advance the queue once the current track finishes.
 
         discord.py invokes this from its AudioPlayer *thread* (discord/player.py's
@@ -1037,11 +1153,22 @@ class VoiceState:
         ``manual_stop`` is read cross-thread too; it is safe only because
         ``restart_current`` sets it *before* calling ``voice.stop()``.
         """
-        if error:
-            print(f"[FFmpeg Error] {error}")
         if self.manual_stop:
             self.manual_stop = False
             return
+        diagnostics = source.stderr_tail if source else ''
+        is_stream_failure = bool(error) or any(
+            marker in diagnostics.lower()
+            for marker in ('http error', 'error opening input', 'invalid data', 'server returned', 'connection refused')
+        )
+        if is_stream_failure:
+            detail = str(error) if error else diagnostics
+            print(f"[FFmpeg Error] {detail}")
+            if track is not None:
+                # Attribute replacement is atomic under CPython and happens
+                # before the loop is woken below.  Only the event-loop task
+                # reads and clears it.
+                self._playback_failure = {'track': track, 'diagnostics': diagnostics or detail}
         try:
             self.bot.loop.call_soon_threadsafe(self.next.set)
         except RuntimeError:
@@ -1064,6 +1191,8 @@ class VoiceState:
         self.songs.clear()
         self._loop_mode = 'off'
         self.manual_stop = False
+        self._playback_failure = None
+        self._stream_retry_ids.clear()
         self.current = None
         self.source = None
         if cancel_player and self.audio_player and not self.audio_player.done():
