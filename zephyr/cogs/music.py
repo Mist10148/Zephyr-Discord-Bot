@@ -119,6 +119,12 @@ NOW_PLAYING_REFRESH_SECONDS = 10
 # stalling a guild indefinitely.
 STREAM_AVAILABLE_MAX_WAIT_SECONDS = 30
 
+# Googlevideo routinely drops long-lived HTTP connections mid-track.  Without
+# these, FFmpeg treats the drop as a clean EOF and the song stops partway
+# through.  ``-reconnect_at_eof`` is deliberately absent: it can loop at the
+# genuine end of a track.
+FFMPEG_RECONNECT_OPTIONS = '-reconnect 1 -reconnect_streamed 1 -reconnect_on_network_error 1 -reconnect_delay_max 5'
+
 _VIDEO_ID_RE = re.compile(r'(?:v=|youtu\.be/|/shorts/|/embed/)([A-Za-z0-9_-]{11})')
 
 
@@ -392,6 +398,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
     }
 
     DEFAULT_FFMPEG_OPTIONS = {
+        'before_options': FFMPEG_RECONNECT_OPTIONS,
         'options': '-vn',
     }
 
@@ -891,6 +898,7 @@ class VoiceState:
 
     def get_ffmpeg_options(self, seek_position: float = None):
         options = {
+            'before_options': FFMPEG_RECONNECT_OPTIONS,
             'options': '-vn'
         }
         if seek_position is not None and seek_position > 0:

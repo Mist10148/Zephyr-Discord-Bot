@@ -95,6 +95,17 @@ class TestYtdlpAndFfmpegConfiguration:
         diagnostics.write(b"67890")
         assert diagnostics.tail() == "34567890"
 
+    def test_ffmpeg_reconnects_when_youtube_drops_the_connection(self):
+        """Without these, a dropped Googlevideo connection ends the song mid-track."""
+        from zephyr.cogs.music import VoiceState
+
+        state = VoiceState(MagicMock(), guild_id=1)
+        for options in (YTDLSource.DEFAULT_FFMPEG_OPTIONS, state.get_ffmpeg_options(),
+                        state.get_ffmpeg_options(seek_position=42)):
+            assert "-reconnect 1" in options["before_options"]
+            assert "-reconnect_streamed 1" in options["before_options"]
+        assert state.get_ffmpeg_options(seek_position=42)["before_options"].endswith("-ss 42")
+
 
 class TestSpotifyIdParsing:
     """These are the tests that were impossible before the helpers moved to module
