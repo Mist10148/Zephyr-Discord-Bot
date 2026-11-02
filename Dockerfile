@@ -16,8 +16,12 @@ FROM python:3.13-slim
 # Install system dependencies required by the bot and website.
 # libopus0 provides Opus voice support; ffmpeg handles audio decoding.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg libopus0 \
+    && apt-get install -y --no-install-recommends ffmpeg libopus0 libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
+
+# yt-dlp needs a supported JavaScript runtime for modern YouTube challenge
+# handling.  The frontend image already provides the maintained Node 22 binary.
+COPY --from=frontend /usr/local/bin/node /usr/local/bin/node
 
 WORKDIR /app
 

@@ -5,12 +5,13 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Discord bot core ──
-discord.py[voice]>=2.4.0     # includes PyNaCl for voice support
-yt-dlp>=2024.8.6             # YouTube extraction / streaming
+discord.py[voice]>=2.7.1     # voice gateway support
+PyNaCl>=1.5.0,<1.6           # newest range supported by discord.py 2.7
+yt-dlp[default]>=2026.10.26  # YouTube extraction plus the required yt-dlp-ejs component
 spotipy>=2.24.0              # Spotify track/playlist/album lookups
 gTTS>=2.5.3                  # text-to-speech for /say
 google-genai>=1.0.0          # modern `from google import genai` SDK (Gemini)
-aiohttp>=3.10.0              # async HTTP (lyrics, image fetch)
+aiohttp>=3.14.5              # async HTTP (lyrics, image fetch)
 requests>=2.32.0             # sync HTTP (weather APIs)
 async-timeout>=4.0.3         # idle/queue timeout in the music player
 python-dotenv>=1.0.1         # loads the .env file
