@@ -14,6 +14,7 @@ venv/
 env/
 
 # Bot runtime artifacts
+.cache
 settings.json
 data/
 tts.mp3
