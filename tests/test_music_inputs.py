@@ -357,6 +357,45 @@ class TestFromTrack:
         assert isinstance(kwargs["stderr"], _FFmpegDiagnostics)
 
     @pytest.mark.asyncio
+    async def test_waits_until_ytdlp_marks_the_stream_available(self, mock_ytdl, no_audio):
+        info = _make_info("http://stream/1", "Song", "1")
+        info["available_at"] = 107
+        mock_ytdl.extract_info.return_value = info
+
+        with patch("zephyr.cogs.music.time.time", return_value=100), \
+             patch("zephyr.cogs.music.asyncio.sleep", new_callable=AsyncMock) as sleep:
+            await YTDLSource.from_track(self._track(), loop=asyncio.get_event_loop())
+
+        sleep.assert_awaited_once_with(7)
+        assert no_audio.call_count == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("available_at", [None, "not-a-timestamp", 99])
+    async def test_skips_wait_for_missing_or_expired_stream_availability(
+            self, mock_ytdl, no_audio, available_at):
+        info = _make_info("http://stream/1", "Song", "1")
+        info["available_at"] = available_at
+        mock_ytdl.extract_info.return_value = info
+
+        with patch("zephyr.cogs.music.time.time", return_value=100), \
+             patch("zephyr.cogs.music.asyncio.sleep", new_callable=AsyncMock) as sleep:
+            await YTDLSource.from_track(self._track(), loop=asyncio.get_event_loop())
+
+        sleep.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_caps_an_abnormal_stream_availability_wait(self, mock_ytdl, no_audio):
+        info = _make_info("http://stream/1", "Song", "1")
+        info["available_at"] = 9_999
+        mock_ytdl.extract_info.return_value = info
+
+        with patch("zephyr.cogs.music.time.time", return_value=100), \
+             patch("zephyr.cogs.music.asyncio.sleep", new_callable=AsyncMock) as sleep:
+            await YTDLSource.from_track(self._track(), loop=asyncio.get_event_loop())
+
+        sleep.assert_awaited_once_with(30)
+
+    @pytest.mark.asyncio
     async def test_a_seek_is_passed_to_ffmpeg(self, mock_ytdl, no_audio):
         mock_ytdl.extract_info.return_value = _make_info("http://stream/1", "Song", "1")
         await YTDLSource.from_track(self._track(), seek=42, loop=asyncio.get_event_loop())

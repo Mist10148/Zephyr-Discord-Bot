@@ -113,6 +113,12 @@ AUTOPLAY_MEMORY = 50
 # edit, so this is a rate-limit budget, not a smoothness setting.
 NOW_PLAYING_REFRESH_SECONDS = 10
 
+# Recent YouTube responses can deliberately delay a signed media URL.  yt-dlp's
+# downloader honours ``available_at`` before fetching it; our FFmpeg handoff
+# must do the same, while a cap prevents a malformed extractor response from
+# stalling a guild indefinitely.
+STREAM_AVAILABLE_MAX_WAIT_SECONDS = 30
+
 _VIDEO_ID_RE = re.compile(r'(?:v=|youtu\.be/|/shorts/|/embed/)([A-Za-z0-9_-]{11})')
 
 
@@ -426,6 +432,21 @@ class YTDLSource(discord.PCMVolumeTransformer):
             volume=volume,
         )
 
+    @staticmethod
+    async def _wait_for_stream_availability(info: dict) -> float:
+        """Wait for yt-dlp's signed URL readiness time, returning the delay used."""
+        try:
+            available_at = float(info.get('available_at') or 0)
+        except (TypeError, ValueError):
+            return 0.0
+        delay = available_at - time.time()
+        if delay <= 0:
+            return 0.0
+        delay = min(delay, STREAM_AVAILABLE_MAX_WAIT_SECONDS)
+        LOGGER.info("Waiting %.1fs for the YouTube stream to become available.", delay)
+        await asyncio.sleep(delay)
+        return delay
+
     # Kept as an alias so nothing that referenced the old classmethod breaks.
     parse_duration = staticmethod(_format_duration)
 
@@ -606,6 +627,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
 
         if not info or 'url' not in info:
             raise YTDLError(f'Could not fetch `{track.title or track.url}`')
+        await cls._wait_for_stream_availability(info)
         # A flat entry's title/duration are placeholders until now.
         track.absorb(info)
         # yt-dlp's downloader asks Googlevideo for a byte range.  FFmpeg's
