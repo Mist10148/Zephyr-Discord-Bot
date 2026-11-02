@@ -637,11 +637,11 @@ class YTDLSource(discord.PCMVolumeTransformer):
         await cls._wait_for_stream_availability(info)
         # A flat entry's title/duration are placeholders until now.
         track.absorb(info)
-        # yt-dlp's downloader asks Googlevideo for a byte range.  FFmpeg's
-        # initial request otherwise receives a 403 for some YouTube clients,
-        # even with yt-dlp's browser headers forwarded.
-        headers_data = dict(info.get('http_headers') or {})
-        headers_data.setdefault('Range', 'bytes=0-')
+        # FFmpeg already sends ``Range: bytes=<offset>-`` on every request, and
+        # updates the offset when it reconnects.  A user-supplied Range header
+        # suppresses that, so every reconnect would restart the track from 0.
+        headers_data = {name: value for name, value in (info.get('http_headers') or {}).items()
+                        if str(name).strip().lower() != 'range'}
         headers = cls._ffmpeg_headers(headers_data)
         if headers:
             options['before_options'] = f"{options.get('before_options', '')} {headers}".strip()

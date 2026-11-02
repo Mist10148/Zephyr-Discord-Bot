@@ -356,7 +356,7 @@ class TestFromTrack:
     async def test_passes_extractor_headers_and_a_stderr_sink_to_ffmpeg(self, mock_ytdl, no_audio):
         track = self._track()
         info = _make_info("http://stream/1", "Song", "1")
-        info["http_headers"] = {"User-Agent": "Zephyr Test"}
+        info["http_headers"] = {"User-Agent": "Zephyr Test", "range": "bytes=0-"}
         mock_ytdl.extract_info.return_value = info
 
         await YTDLSource.from_track(track, loop=asyncio.get_event_loop())
@@ -364,7 +364,9 @@ class TestFromTrack:
         kwargs = no_audio.call_args.kwargs
         assert "-headers" in kwargs["before_options"]
         assert "User-Agent: Zephyr Test" in kwargs["before_options"]
-        assert "Range: bytes=0-" in kwargs["before_options"]
+        # FFmpeg must own Range so a reconnect resumes at the right offset.
+        assert "range:" not in kwargs["before_options"].lower()
+        assert "-reconnect 1" in kwargs["before_options"]
         assert isinstance(kwargs["stderr"], _FFmpegDiagnostics)
 
     @pytest.mark.asyncio
