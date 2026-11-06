@@ -11,6 +11,7 @@ result -- a ?login=1 would linger in history and in shared URLs for no benefit.
 
 import hmac
 import secrets
+from urllib.parse import urlsplit
 
 from flask import current_app, redirect, request
 
@@ -41,6 +42,13 @@ def safe_next(value: str | None) -> str | None:
     if not value.startswith("/") or value.startswith("//"):
         return None
     if "\\" in value:
+        return None
+    # Browsers strip tabs and newlines from URLs before resolving them, so
+    # "/	/evil.com" lands on //evil.com; a newline also makes redirect() raise.
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
+        return None
+    parts = urlsplit(value)
+    if parts.scheme or parts.netloc:
         return None
     return value
 

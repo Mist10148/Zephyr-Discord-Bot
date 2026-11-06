@@ -55,7 +55,20 @@ class TestSafeNext:
 
     @pytest.mark.parametrize(
         "value",
-        ["https://evil.com", "//evil.com", "/\\evil.com", "evil.com", "", None, "/" + "x" * 300],
+        [
+            "https://evil.com",
+            "//evil.com",
+            "/\\evil.com",
+            "evil.com",
+            "",
+            None,
+            "/" + "x" * 300,
+            # Browsers strip tabs/newlines, so these resolve to //evil.com.
+            "/\t/evil.com",
+            "/\n/evil.com",
+            "/\r\n",
+            "/\x7f/evil.com",
+        ],
     )
     def test_rejected(self, app, value):
         from website.api.auth import safe_next

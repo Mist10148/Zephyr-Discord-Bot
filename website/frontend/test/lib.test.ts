@@ -124,3 +124,16 @@ describe('buildTranscriptMarkdown', () => {
     expect(text).toContain('_No retained messages._')
   })
 })
+
+describe('safeNext', () => {
+  it('keeps same-site paths', async () => {
+    const { safeNext } = await import('../src/lib/auth')
+    expect(safeNext('/g/1?tab=music')).toBe('/g/1?tab=music')
+  })
+
+  it('falls back to /g for anything that could leave the site', async () => {
+    const { safeNext } = await import('../src/lib/auth')
+    for (const value of ['//evil.com', '/\\evil.com', 'https://evil.com', '/\t/evil.com', '/\n/evil.com', null, ''])
+      expect(safeNext(value)).toBe('/g')
+  })
+})

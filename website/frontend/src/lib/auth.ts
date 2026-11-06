@@ -21,7 +21,11 @@ export function isUnconfigured(error: unknown) { return error instanceof ApiErro
 // Path-only, always leading-slash. The backend re-validates it anyway (rejecting
 // //evil.com, backslash tricks and absolute URLs) and falls back to /g.
 export function loginUrl(next: string) { return `/api/v1/auth/login?next=${encodeURIComponent(next)}` }
-export function safeNext(value: string | null | undefined) { return value && value.startsWith('/') && !value.startsWith('//') && !value.includes('\\') ? value : '/g' }
+// Browsers strip tabs and newlines before resolving a URL, so "/\t/evil.com"
+// would otherwise become //evil.com.
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS = /[\u0000-\u001f\u007f]/
+export function safeNext(value: string | null | undefined) { return value && value.startsWith('/') && !value.startsWith('//') && !value.includes('\\') && !CONTROL_CHARS.test(value) ? value : '/g' }
 // clear(), not invalidate(): after signing out, cached guild data must be evicted
 // rather than refetched.
 export function useLogout() { const client = useQueryClient(); return useMutation({ mutationFn: () => api<null>('/auth/logout', { method: 'POST' }), onSettled: () => client.clear() }) }
