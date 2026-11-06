@@ -4,6 +4,7 @@ Ported 1:1 from the original bot.py (lines 2218-2264). The module-level
 ``LANGUAGE`` global becomes the ``tts_language`` attribute on the cog.
 """
 
+import asyncio
 import os
 import tempfile
 
@@ -44,6 +45,10 @@ class TTSCog(commands.Cog):
         if not interaction.guild or not interaction.guild.voice_client:
             await interaction.response.send_message("I'm not in a voice call, let me in.", ephemeral=True)
             return
+        if self._music_is_active(interaction.guild.id):
+            await interaction.response.send_message(
+                "Music is playing (or paused) here. Stop it with `/stop` before using `/say`.", ephemeral=True)
+            return
         await interaction.response.defer()
 
         # Write the temporary TTS file to the system temp directory so the bot
@@ -52,9 +57,14 @@ class TTSCog(commands.Cog):
         os.close(tts_fd)
         try:
             tts = gTTS(text=text, lang=self.tts_language)
-            tts.save(tts_path)
+            # gTTS.save() is a blocking HTTP request; on the event loop it froze
+            # every other command (and the gateway heartbeat) while it ran.
+            await asyncio.to_thread(tts.save, tts_path)
             vc = interaction.guild.voice_client
-            if vc and not vc.is_playing():
+            # is_paused() too: play() on a paused client replaces the music's
+            # AudioPlayer, orphaning its thread and FFmpeg process and leaving
+            # the music loop waiting forever for an after-callback.
+            if vc and not vc.is_playing() and not vc.is_paused() and not self._music_is_active(interaction.guild.id):
                 audio_source = discord.FFmpegPCMAudio(tts_path, executable=FFMPEG_PATH)
                 vc.play(audio_source, after=lambda e: _safe_remove(tts_path))
                 await interaction.followup.send(f"Speaking: {text}", ephemeral=True)
@@ -64,6 +74,17 @@ class TTSCog(commands.Cog):
         except Exception as exc:
             _safe_remove(tts_path)
             await interaction.followup.send(f"TTS failed: {exc}", ephemeral=True)
+
+    def _music_is_active(self, guild_id: int) -> bool:
+        """Whether the music player owns the voice client right now.
+
+        Between tracks the client is briefly idle while the next one loads; a
+        /say in that gap made the music's voice.play() fail with "Already
+        playing audio", so a current track or a non-empty queue counts too.
+        """
+        music_cog = self.bot.get_cog('MusicCog')
+        state = music_cog.peek_voice_state(guild_id) if music_cog else None
+        return bool(state and (state.current is not None or len(state.songs)))
 
     @app_commands.command(name="language", description="Change the TTS language output.")
     @app_commands.describe(lang="Language code (e.g., 'en' for English, 'ja' for Japanese)")
