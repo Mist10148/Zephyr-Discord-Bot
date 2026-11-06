@@ -26,37 +26,41 @@ no feedback, machine values shown raw, and a layout that only really works at ph
 | Phase | Theme | Status |
 |---|---|---|
 | A–F | Surface unused API data, code-splitting, PWA, a11y basics | Shipped, except **A3**, **F4**, **E5** |
-| **8** | **UX correctness — dead and misbehaving controls** | **Not started** |
+| 8 | UX correctness — dead and misbehaving controls | Shipped |
 | **9** | **Feedback layer and display vocabulary** | **Not started** |
 | **10** | **Layout, density and loading states** | **Not started** |
 | **11** | **Navigation and information architecture** | **Not started** |
 | **12** | **Public site layer** | **Not started** |
 
-**Do Phase 8 first.** Those are bugs a user hits on the two most-used screens.
+**Phase 8 has shipped.** Start with 9.1, the toast host.
 
 ---
 
-## Known issues deferred from the 2026-11 audit
+## Issues from the 2026-11 audit (resolved)
 
-Found during a code audit and left open on purpose, because each needs a design decision rather
-than a local fix:
+The four issues this audit left open have since been fixed:
 
-- **Stale sessions keep admin access.** A session's guild list is captured at login, and the web
-  tier writes settings, weather subscriptions and AI data on its strength without asking the bot.
-  Someone who loses Manage Server keeps those rights until the session expires (up to 30 days).
-  Fix: re-validate the actor over the bridge for mutations, or force a guild refresh first.
-- **Bridge timeout for slow actions.** `play` and `playlist.load` can take longer than the 5s
-  bridge timeout while yt-dlp resolves tracks; the dashboard then reports 504 although the bot
-  queues the track, and a retry duplicates it. Fix: acknowledge immediately and finish async.
-- **Cache retries after a failed load are serial.** When `TTLCache`'s loader fails with no stale
-  value, each waiting request retries in turn rather than sharing one retry.
-- **SQLite does not enforce foreign keys.** Nothing sets `PRAGMA foreign_keys=ON`, so
-  `ON DELETE CASCADE` is inert on the default database: purged conversations leave orphaned
-  labels, annotations and revisions that a reused rowid can later inherit. Postgres is unaffected.
+- **Stale sessions kept admin access.** `guild_scoped` now asks the bot (the `auth.manage_guild`
+  bridge action) whether the actor still has Manage Server before any mutation. It fails closed:
+  while the bot is offline, settings, weather-subscription, persona and AI-history changes answer
+  503, and a revoked permission answers 403. Reads still use the session's guild list. Player
+  actions skip the extra check (`@bot_authorizes`) because the bot authorizes each one itself.
+- **Bridge timeout for slow actions.** `player.play` and `playlist.load` now wait up to 20s
+  (`SLOW_ACTION_TIMEOUT`, under gunicorn's 30s worker timeout); every other action keeps 5s.
+- **Serial cache retries.** A failed `TTLCache` load is now shared with every waiter instead of
+  being retried by each in turn.
+- **SQLite foreign keys.** AI purges and compaction delete revisions, labels and annotations
+  explicitly, as `delete_playlist` already did, so nothing relies on the inert cascade.
+  `PRAGMA foreign_keys` stays off because batch Alembic migrations rebuild tables with
+  `DROP TABLE`, which would fire the cascades.
 
 ---
 
-# Phase 8 — UX correctness
+# Phase 8 — UX correctness *(shipped)*
+
+All six items below are fixed; the text is kept as the record of what was wrong. 8.2 also
+covered the volume slider, which had the same per-step bug despite the note below, and the
+pitch slider's minimum now matches the bot's 0.5.
 
 Dead controls and controls that behave wrongly. None of these need a design decision; each
 has one correct answer. All six are S-sized and concentrated on `/weather` and
@@ -428,7 +432,7 @@ widened deliberately.
 
 ## Suggested order
 
-1. **Phase 8** — the six correctness bugs. All S, all unambiguous.
+1. ~~**Phase 8** — the six correctness bugs.~~ Shipped.
 2. **9.1** — the toast host. Everything after it gets to use it, and 8.4 wants it.
 3. **9.2–9.6** — units and vocabulary; the cheapest visible quality gain in the app.
 4. **10.1** — the list measure cap. One rule, fixes every screen on desktop.

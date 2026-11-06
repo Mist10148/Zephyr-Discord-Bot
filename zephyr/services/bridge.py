@@ -12,9 +12,10 @@ Three separate mechanisms, in increasing order of liveness:
   answers, correlated by a per-command id.
 
 The bot remains the authority.  A command carries the actor's Discord id and
-**the bot re-validates that actor's live permissions before executing** -- the
-web tier's own checks are UX, not security, and are allowed to be stale because
-they can only ever over-restrict.
+**the bot re-validates that actor's live permissions before executing**.  Changes
+the web tier makes itself, with no bot step, first ask ``auth.manage_guild`` (see
+``website.api.guard.guild_scoped``), because the session's guild list is only as
+fresh as the sign-in.
 
 No ``import discord`` -- callers pass plain dicts -- so the web tier can import
 this without pulling the gateway library into a Flask worker.  The protocol lives

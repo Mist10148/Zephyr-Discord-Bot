@@ -101,22 +101,29 @@ Status pill is live data, not decoration — its three states must stay visually
 ### Content
 1. `LargeTitleHeader` — **"Weather"** / *"Search any city for live conditions and the week ahead."*
 2. **Search input** (`.search-input`, `aria-label="Search city"`), default query `Iloilo City`,
-   placeholder "Search a city…". Typing clears the selected place.
-3. **Results list** (only while no place is picked) — `ListGroup` of `ListRow`s, label `Name, Country`,
+   placeholder "Search a city…". Typing clears the selected place. The geocode query is keyed on
+   the input debounced by 250ms (`useDebouncedValue`, `lib/debounce.ts`).
+3. **Location and saved places** — a **"Use my location"** button (10s timeout; a denied
+   permission or a failed fix shows an error `CapsuleToast`), then up to six saved places as
+   `.saved-place` chips with a remove `×`. The place being shown is marked with
+   `aria-current` and the accent tone.
+4. **Results list** (only while no place is picked) — `ListGroup` of `ListRow`s, label `Name, Country`,
    trailing **"Use"** button. Empty/short-query states:
    - `< 2` chars → row "Type at least two letters"
+   - typing or in flight → row "Searching…"
    - no hits → row "No matching places"
-4. **Loading** → `Skeleton lines={5}`
-5. **Current conditions card** (`GlassSurface.current-weather`)
+   - failed lookup → `ErrorNote` with Try again
+5. **Loading** → `Skeleton lines={5}`; a failed forecast → `ErrorNote` with Try again
+6. **Current conditions card** (`GlassSurface.current-weather`)
    - Head: `<h2>` place name with a faint `, Country` suffix, `.current-desc` description,
      the 64px `SunCloudIcon`, then `.current-temp` = serif `31°`
    - **Chip strip**: `Feels like N°` · `Air quality · <band>` (when present) ·
      **`Heat index advisory`** in danger tone, from `class_suspension.level` — shown only
      for `possible` / `likely` / `certain`, with `reason` as the tooltip
-6. **7-day grid** (`.day-grid`) — one thin-glass `.day-card` per day: uppercase `.day-name`,
+7. **7-day grid** (`.day-grid`) — one thin-glass `.day-card` per day: uppercase `.day-name`,
    a 28px sun/cloud/rain glyph from `weatherGlyph(weather_code)`, serif `max°` with a
    `.day-low` ` / min°`, and a muted description.
-7. `BackLink` → `/`
+8. `BackLink` → `/`
 
 ### Design notes
 Two densities on one page: a hero-weight current card, then a uniform day grid.
@@ -279,12 +286,12 @@ should collapse it.
    All fire haptics (15 for stop, 8 otherwise).
 5. **Player controls list** (when `live`)
    - **Loop** → `SegmentedControl` `off | track | queue`
-   - **Volume** → `Slider`, detail `N%` (local value wins while dragging)
+   - **Volume** → `Slider`, detail `N%` (local value wins while dragging; one request on release)
    - **Autoplay** → `Toggle`, detail "Keep playing a YouTube Mix when the queue runs out"
 6. **Errors** — a 409 is a *refusal* (not in voice, no DJ role, nothing playing) shown inline
    with no retry; anything else gets a retry.
 7. **Queue** — `<h2>Queue (n)</h2>`; empty → "Nothing queued."; otherwise rows with
-   `title` / `uploader • duration` and per-row **Play** + **Remove**. Overflow line:
+   `title` / `uploader • duration` and per-row **Play next** + **Remove**. Overflow line:
    "and N more…" when the snapshot is truncated.
 8. **`PlaylistPanel`** (see §7b)
 
@@ -613,16 +620,14 @@ This inventory describes what each screen *contains*; the list below records whe
 current implementation is wrong. Task-level detail is in
 [`ENHANCEMENTS.md`](ENHANCEMENTS.md) Phases 8–12, and the ids match.
 
-**`/weather`** — geocode list renders "No matching places" while the query is pending, and
-fires one request per keystroke (8.3) · "Use my location" swallows every error (8.4) · no
-`isError` branch, so a failed forecast renders nothing at all (8.5) · saved places cannot be
-removed and are visually identical to the action button beside them (8.6) · wind and
+Phase 8 (8.1–8.6) has shipped and is no longer listed here.
+
+**`/weather`** — wind and
 precipitation print without units, ambiguous now that imperial shipped (9.2) · the hourly
 strip uses text emoji instead of the icon set, and its precipitation bars have no baseline
 (9.6) · carries a "Back home" link despite being a root tab destination (11.3).
 
-**`/g/:guildId/music`** — the queue row's "Play" button has no `onClick` (8.1) · effects
-sliders mutate on every `onChange` (8.2) · queueing a track gives no confirmation, and the
+**`/g/:guildId/music`** — queueing a track gives no confirmation, and the
 undo affordance renders inline after the queue where it is usually below the fold (9.1) ·
 effect names print as `sixteen_d` / `slownrev` (9.4) · the art fallback renders the literal
 words "track art" (9.5) · nine control groups in one column at every width (10.2) · generic

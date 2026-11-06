@@ -61,10 +61,13 @@ Player snapshot is rewritten on every state change **and** every 5s while playin
 PUBLISH zephyr:cmd  {id, guild_id, actor_id, action, args, issued_at}
 PUBLISH zephyr:res:{id}  {ok, error?, data?}
 ```
-Flask awaits `zephyr:res:{id}` with a 5s timeout and returns 504 on miss.
+Flask awaits `zephyr:res:{id}` with a 5s timeout (20s for `player.play` and `playlist.load`,
+which resolve tracks through yt-dlp) and returns 504 on miss.
 
 **Non-negotiable:** the bot re-validates `actor_id`'s guild permissions against the live
-Discord cache before executing. Web-side permission checks are UX, not security.
+Discord cache before executing. Mutations the web tier performs itself (settings, weather
+subscriptions, personas, AI history) have no bot step to do that, so `guild_scoped` first sends
+`auth.manage_guild` over the bridge and refuses the change (503) when the bot does not answer.
 
 ---
 
@@ -273,7 +276,7 @@ parallel. #5, #6 and #7 are also mutually independent once auth lands.
 **Phases 8–12 are post-release polish**, opened after a read-through of the shipped
 frontend found dead controls, silent mutations and a desktop layout that only works at
 phone width. They are independent of each other except that **9.1 (the toast host) unblocks
-8.4**, so do Phase 8 first and 9.1 immediately after. Task-level detail — symptom, fix,
+8.4**; Phase 8 has shipped, so 9.1 is next. Task-level detail — symptom, fix,
 files and done-when for every item — lives in
 [`ENHANCEMENTS.md`](ENHANCEMENTS.md), which is the working reference; the summaries below
 exist so this document stays the authority on what phases exist.
@@ -314,7 +317,7 @@ a11y pass (keyboard path for the widget grid — drag-and-drop needs a menu fall
 perf pass (budget concurrent `backdrop-filter` elements), rate limiting,
 audit log surfacing, tests for the bridge and the scheduler.
 
-**Phase 8 — UX correctness** *(do first)*
+**Phase 8 — UX correctness** *(shipped)*
 Six bugs on `/weather` and `/g/:id/music`: a queue button with no handler, effects sliders
 that fire a mutation per drag step (and can exhaust `PLAYER_RATE_LIMIT` in one drag), a
 geocode list that renders "no results" while loading, a geolocation failure with no error
@@ -596,3 +599,8 @@ code differs and why. It is appended to as phases land, and §§1–7 are not re
 50. **Migrations run in a Render `preDeployCommand`, not `startCommand`.** `alembic upgrade head` runs
     once between build and release — a single process, so the two gunicorn workers never race it, which
     is exactly why it was deferred out of the worker start in the first place.
+51. **Guild mutations re-check Manage Server with the bot, and fail closed.** The session's guild
+    list was captured at sign-in and lived for weeks, so someone who lost Manage Server kept writing
+    settings, weather subscriptions and AI data from the dashboard. `guild_scoped` now sends
+    `auth.manage_guild` for every non-GET request; a refusal is 403 and no answer is 503. Player
+    actions opt out with `@bot_authorizes` because the bot already authorizes them.

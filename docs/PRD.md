@@ -356,7 +356,7 @@ Opened after a read-through of the shipped frontend. Task-level detail (symptom,
 done-when) is in [`ENHANCEMENTS.md`](ENHANCEMENTS.md); scope summaries are in
 [`WEB_DASHBOARD_PLAN.md`](WEB_DASHBOARD_PLAN.md) §6.
 
-- [ ] **Phase 8** — UX correctness: six bugs on `/weather` and the music screen — a queue
+- [x] **Phase 8** — UX correctness: six bugs on `/weather` and the music screen — a queue
       button with no handler, effects sliders that mutate per drag step, a "no results"
       state that shows while loading, a silent geolocation failure, a missing `isError`
       branch, and undeletable saved locations. *Do first.*
@@ -391,7 +391,8 @@ done-when) is in [`ENHANCEMENTS.md`](ENHANCEMENTS.md); scope summaries are in
 
 **Bridge.** `zephyr:presence` and `zephyr:player:{guild_id}` snapshots, plus a `zephyr:cmd` →
 `zephyr:res:{id}` command channel. The bot re-validates every actor against its live Discord cache
-before acting; the web tier's checks are UX only. `/api/v1/status` stops returning a hardcoded
+before acting. Changes the web tier makes on its own (settings, weather subscriptions, AI data)
+first ask the bot whether the actor still has Manage Server, and are refused while it is offline. `/api/v1/status` stops returning a hardcoded
 `false`.
 
 **Music.** Persistent playlists (`/save`, `/load`, `/playlists`, `/playlist-delete`) with lazy
