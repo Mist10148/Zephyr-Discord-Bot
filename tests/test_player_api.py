@@ -120,9 +120,15 @@ class TestPostPlayerAction:
     def test_a_missing_csrf_token_is_rejected(self, client, logged_in, fake_redis):
         assert client.post("/api/v1/guilds/1/player/skip").status_code == 403
 
-    def test_the_player_is_rate_limited_per_session(self, client, logged_in, fake_redis):
+    def test_the_player_is_rate_limited_per_session(self, client, logged_in, fake_redis, monkeypatch):
+        from types import SimpleNamespace
+
+        from website.api import guard
         from website.api.player import PLAYER_RATE_LIMIT
 
+        # Pin the clock: the limiter keys on the current window, and a slow run
+        # that crosses a window boundary would otherwise get a fresh budget.
+        monkeypatch.setattr(guard, "time", SimpleNamespace(time=lambda: 1_000_000.0))
         _answer(fake_redis, data={})
         statuses = [
             client.post("/api/v1/guilds/1/player/skip", headers=_headers(logged_in)).status_code
