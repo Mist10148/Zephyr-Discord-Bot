@@ -1028,3 +1028,13 @@ select.text-input { appearance: auto; }
     -webkit-backdrop-filter: none !important;
   }
 }
+
+/* Saved weather places: data, so chips rather than buttons, set apart from the
+   "Use my location" action, with the one being shown marked. */
+.saved-places { display: flex; flex-wrap: wrap; gap: 8px; margin: -6px 0 14px; padding: 0; list-style: none; }
+.saved-place { padding: 0; gap: 0; }
+.saved-place button { background: none; border: 0; color: inherit; font: inherit; cursor: pointer; }
+.saved-place-pick { padding: 7px 4px 7px 13px; border-radius: var(--radius-pill) 0 0 var(--radius-pill); }
+.saved-place-remove { padding: 7px 11px 7px 6px; border-radius: 0 var(--radius-pill) var(--radius-pill) 0; opacity: .7; }
+.saved-place-remove:hover { opacity: 1; }
+.saved-place.active { background: var(--accent-soft); color: var(--accent-strong); font-weight: 600; }
