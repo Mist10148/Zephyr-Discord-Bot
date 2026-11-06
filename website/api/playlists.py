@@ -7,7 +7,7 @@ always, and to anyone in the guild it was saved in when it is public.
 
 from flask import current_app, g, jsonify, request
 
-from website.api import api, error
+from website.api import api, error, is_row_id, is_snowflake
 from website.api.guard import current_session, require_session
 from zephyr.db import playlists as repo
 from zephyr.services import spotify
@@ -26,7 +26,7 @@ def _owned(playlist_id: str):
     as well as "not there": whether a playlist id exists is not something a
     stranger should be able to probe.
     """
-    if not str(playlist_id).isdigit():
+    if not is_row_id(playlist_id):
         return None, error("not_found", "No such playlist.", 404)
     playlist = repo.get_playlist(int(playlist_id), database_url=_database_url())
     if playlist is None or playlist["owner_id"] != current_session().user_id:
@@ -44,7 +44,7 @@ def _target_guild(raw):
     if raw is None or raw == "":
         return None, None
     guild_id = str(raw)
-    if not guild_id.isdigit():
+    if not is_snowflake(guild_id):
         return None, error("invalid_guild_id", "That is not a Discord guild id.", 400)
     if guild_id not in current_session().manageable_ids():
         return None, error("forbidden", "You do not manage that server.", 403)
@@ -79,7 +79,7 @@ def _clean_tracks(raw) -> list[dict]:
 @require_session
 def list_playlists():
     guild_id = request.args.get("guild_id")
-    if guild_id and not guild_id.isdigit():
+    if guild_id and not is_snowflake(guild_id):
         return error("invalid_guild_id", "That is not a Discord guild id.", 400)
     session = current_session()
     # Same rule as GET /playlists/<id>: another guild's public playlists are only
@@ -114,6 +114,8 @@ def create_playlist():
     guild_id, problem = _target_guild(body.get("guild_id"))
     if problem is not None:
         return problem
+    if body.get("name") is not None and not isinstance(body.get("name"), str):
+        return error("invalid_value", "name must be text.", 400)
     try:
         saved = repo.save_playlist(
             current_session().user_id,
@@ -131,7 +133,7 @@ def create_playlist():
 @api.get("/playlists/<playlist_id>")
 @require_session
 def get_playlist(playlist_id: str):
-    if not str(playlist_id).isdigit():
+    if not is_row_id(playlist_id):
         return error("not_found", "No such playlist.", 404)
     playlist = repo.get_playlist(int(playlist_id), database_url=_database_url())
     session = current_session()
@@ -160,11 +162,16 @@ def patch_playlist(playlist_id: str):
     if unknown:
         return error("unknown_fields", f"Cannot set: {', '.join(unknown)}.", 400, unknown)
 
+    if "name" in body and not isinstance(body["name"], str):
+        return error("invalid_value", "name must be text.", 400)
+    if "is_public" in body and not isinstance(body["is_public"], bool):
+        return error("invalid_value", "is_public must be true or false.", 400)
+
     try:
-        if "tracks" in body:
-            # A whole-list rewrite, which is also how a reorder arrives: position
-            # is half the primary key, so there is no "move one row" to express.
-            repo.replace_tracks(playlist["id"], _clean_tracks(body["tracks"]), database_url=_database_url())
+        # Validate everything before writing anything: replace_tracks and
+        # update_playlist commit separately, so a rename that fails after the
+        # tracks were replaced would leave half the change applied.
+        tracks = _clean_tracks(body["tracks"]) if "tracks" in body else None
         if "name" in body or "is_public" in body:
             repo.update_playlist(
                 playlist["id"],
@@ -172,6 +179,10 @@ def patch_playlist(playlist_id: str):
                 is_public=body.get("is_public"),
                 database_url=_database_url(),
             )
+        if tracks is not None:
+            # A whole-list rewrite, which is also how a reorder arrives: position
+            # is half the primary key, so there is no "move one row" to express.
+            repo.replace_tracks(playlist["id"], tracks, database_url=_database_url())
     except (ValueError, repo.PlaylistError) as exc:
         return error("invalid_value", str(exc), 400)
 
@@ -252,11 +263,13 @@ def load_playlist(playlist_id: str):
     """Queue a playlist up in a guild, via the bot."""
     from website.api.player import bridge_call
 
-    if not str(playlist_id).isdigit():
+    if not is_row_id(playlist_id):
         return error("not_found", "No such playlist.", 404)
-    body = request.get_json(silent=True) or {}
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return error("invalid_body", "Send a JSON object.", 400)
     guild_id = str(body.get("guild_id") or "")
-    if not guild_id.isdigit():
+    if not is_snowflake(guild_id):
         return error("invalid_guild_id", "Send the guild to load it into.", 400)
     if guild_id not in current_session().manageable_ids():
         return error("forbidden", "You do not manage that server.", 403)

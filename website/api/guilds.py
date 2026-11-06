@@ -8,7 +8,7 @@ path, which is why the overview was never put there.
 from flask import current_app, g, jsonify, request
 
 from website import discord_api
-from website.api import api, error
+from website.api import api, error, is_row_id, is_snowflake
 from website.api.guard import guild_scoped
 from zephyr.db import audit
 from zephyr.db.guild_settings import read_guild_settings, write_guild_settings
@@ -76,15 +76,22 @@ def get_guild_settings(guild_id: str):
 # explicit table rather than "whatever keys arrived": a PATCH body is user input,
 # and enabled_cogs in particular is derived from deployment configuration and
 # must not become writable just because it is returned by the GET.
+def _require_text(value, message):
+    # str(None) is "None", which passes a length check and gets saved.
+    if not isinstance(value, str):
+        raise ValueError(message)
+    return value.strip()
+
+
 def _clean_prefix(value):
-    text = str(value).strip()
+    text = _require_text(value, "A prefix must be 1 to 5 characters.")
     if not 1 <= len(text) <= 5:
         raise ValueError("A prefix must be 1 to 5 characters.")
     return text
 
 
 def _clean_locale(value):
-    text = str(value).strip()
+    text = _require_text(value, "That is not a locale.")
     if not 2 <= len(text) <= 10:
         raise ValueError("That is not a locale.")
     return text
@@ -93,7 +100,7 @@ def _clean_locale(value):
 def _clean_timezone(value):
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-    text = str(value).strip()
+    text = _require_text(value, "That is not an IANA timezone name.")
     try:
         ZoneInfo(text)
     except (ZoneInfoNotFoundError, ValueError, ModuleNotFoundError):
@@ -102,6 +109,8 @@ def _clean_timezone(value):
 
 
 def _clean_volume(value):
+    if isinstance(value, bool):
+        raise ValueError("Default volume must be a number.")
     try:
         volume = int(value)
     except (TypeError, ValueError):
@@ -115,7 +124,7 @@ def _clean_snowflake(value):
     if value in (None, ""):
         return None
     text = str(value)
-    if not text.isdigit():
+    if not is_snowflake(text):
         raise ValueError("That is not a Discord id.")
     return text
 
@@ -204,7 +213,7 @@ def guild_audit(guild_id: str):
         raw = request.args.get(name)
         if raw is None or raw == "":
             return None
-        if not raw.isdigit():
+        if not is_row_id(raw):
             raise ValueError(name)
         return int(raw)
 

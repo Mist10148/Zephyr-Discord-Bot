@@ -8,7 +8,7 @@ easier and wrong.
 
 from flask import current_app, g, jsonify, request
 
-from website.api import api, error
+from website.api import api, error, is_row_id, is_snowflake
 from website.api.cache import TTLCache
 from website.api.guard import guild_scoped
 from zephyr.db import audit
@@ -68,24 +68,28 @@ def _clean_thresholds(value):
 def _clean_common(body: dict, *, partial: bool) -> dict:
     values = {}
     if "kind" in body:
-        if body["kind"] not in repo.KINDS:
+        if not isinstance(body["kind"], str) or body["kind"] not in repo.KINDS:
             raise ValueError(f"kind must be one of {', '.join(repo.KINDS)}.")
         values["kind"] = body["kind"]
     if "channel_id" in body:
-        if not str(body["channel_id"]).isdigit():
+        if not is_snowflake(body["channel_id"]):
             raise ValueError("channel_id must be a Discord id.")
         values["channel_id"] = str(body["channel_id"])
     if "units" in body:
-        if body["units"] not in {"metric", "imperial"}:
+        if not isinstance(body["units"], str) or body["units"] not in {"metric", "imperial"}:
             raise ValueError("units must be metric or imperial.")
         values["units"] = body["units"]
     if "tz" in body:
+        if not isinstance(body["tz"], str):
+            raise ValueError("tz must be an IANA timezone name, like Asia/Manila.")
         zone_name, accepted = repo.normalise_zone(body["tz"])
         if not accepted:
             raise ValueError("tz must be an IANA timezone name, like Asia/Manila.")
         values["tz"] = zone_name
     if "schedule_local_time" in body:
         raw = body["schedule_local_time"]
+        if raw is not None and not isinstance(raw, str):
+            raise ValueError("schedule_local_time must look like 08:00.")
         values["schedule_local_time"] = repo.parse_local_time(raw).strftime("%H:%M") if raw else None
     if "thresholds" in body:
         values["thresholds"] = _clean_thresholds(body["thresholds"])
@@ -126,7 +130,8 @@ def create_sub(guild_id: str):
     except (ValueError, repo.SubscriptionError) as exc:
         return error("invalid_value", str(exc), 400)
 
-    location = str(body.get("location") or "").strip()
+    location = body.get("location")
+    location = location.strip() if isinstance(location, str) else ""
     if not location:
         return error("invalid_value", "Send a place to watch.", 400)
     try:
@@ -165,7 +170,7 @@ def create_sub(guild_id: str):
 
 
 def _owned(guild_id: str, sub_id: str):
-    if not str(sub_id).isdigit():
+    if not is_row_id(sub_id):
         return None, error("not_found", "No such subscription.", 404)
     row = repo.get(int(sub_id), database_url=_database_url())
     # Guild-scoped, because ids are sequential across the whole database and a
@@ -194,7 +199,10 @@ def patch_sub(guild_id: str, sub_id: str):
         return error("invalid_value", str(exc), 400)
 
     if "location" in body:
-        location = str(body["location"]).strip()
+        # str(None) would geocode the literal word "None".
+        location = body["location"].strip() if isinstance(body["location"], str) else ""
+        if not location:
+            return error("invalid_value", "Send a place to watch.", 400)
         try:
             places = geocode_search(location, 1)
         except WeatherProviderError as exc:
@@ -214,6 +222,9 @@ def patch_sub(guild_id: str, sub_id: str):
     if not values:
         return error("invalid_body", "Nothing to change.", 400)
     updated = repo.update_sub(int(sub_id), values, database_url=_database_url())
+    if updated is None:
+        # Deleted between the ownership check and the write.
+        return error("not_found", "No such subscription.", 404)
     audit.record("weather_sub.update", actor_id=g.zephyr_session.user_id, guild_id=guild_id,
                  payload={"id": int(sub_id), **{key: values[key] for key in sorted(values)}},
                  source="web", database_url=_database_url())

@@ -28,12 +28,18 @@ def _time_payload(time_local: str | None, offset: int) -> dict:
     return {"time_local": time_local, "time_epoch": int(local.timestamp())}
 
 
+def _small_int(name: str, default: int) -> int:
+    """A non-negative integer query arg, or the default for anything else."""
+    raw = request.args.get(name, "")
+    return int(raw) if raw.isascii() and raw.isdigit() and len(raw) <= 6 else default
+
+
 @api.get("/weather")
 def weather():
     lat, lon = _number("lat"), _number("lon")
     units = request.args.get("units", "metric")
-    hours = int(request.args.get("hours", 48)) if request.args.get("hours", "48").isdigit() else 48
-    days = int(request.args.get("days", 7)) if request.args.get("days", "7").isdigit() else 7
+    hours = _small_int("hours", 48)
+    days = _small_int("days", 7)
     if lat is None or lon is None or not (-90 <= lat <= 90 and -180 <= lon <= 180):
         return error("invalid_coordinates", "lat and lon must be valid coordinates", 400)
     if units not in {"metric", "imperial"}: return error("invalid_units", "units must be metric or imperial", 400)
@@ -63,7 +69,7 @@ def weather():
 def geocode():
     query = (request.args.get("q") or "").strip()
     if len(query) < 2: return error("invalid_query", "q must contain at least two characters", 400)
-    count = min(max(int(request.args.get("count", 8)), 1), 10) if request.args.get("count", "8").isdigit() else 8
+    count = min(max(_small_int("count", 8), 1), 10)
     try:
         results = cache.get_or_load(f"geocode:{query.lower()}:{count}", 86400, lambda: geocode_search(query, count))
         return jsonify({"results": [{"id": f"{item.get('id', '')}", "name": item.get("name"), "country": item.get("country"), "admin1": item.get("admin1"), "latitude": item.get("latitude"), "longitude": item.get("longitude"), "timezone": item.get("timezone"), "population": item.get("population"), "kind": item.get("feature_code")} for item in results]})

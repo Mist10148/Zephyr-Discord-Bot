@@ -1,7 +1,7 @@
 """Manager-only AI dashboard resources."""
 from flask import current_app, g, jsonify, request
 
-from website.api import api, error
+from website.api import api, error, is_row_id
 from website.api.guard import guild_scoped, require_session
 from website.api.player import bridge_call
 from zephyr.db import ai as ai_db
@@ -47,7 +47,7 @@ def _history_int(name):
     raw = request.args.get(name)
     if raw is None or raw == "":
         return None
-    if not raw.isdigit():
+    if not is_row_id(raw):
         raise ValueError(f"{name} must be a positive integer.")
     return int(raw)
 

@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 
 from flask import current_app, g, request
 
-from website.api import api, error
+from website.api import api, error, is_snowflake
 from website.session import SessionStoreError, load_session
 from zephyr.services import redis_client
 
@@ -74,7 +74,7 @@ def guild_scoped(view):
     @wraps(view)
     @require_session
     def wrapper(guild_id, *args, **kwargs):
-        if not str(guild_id).isdigit():
+        if not is_snowflake(guild_id):
             return error("invalid_guild_id", "That is not a Discord guild id.", 400)
         session = current_session()
         guild = next((entry for entry in session.guilds if str(entry["id"]) == str(guild_id)), None)
