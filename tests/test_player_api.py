@@ -213,3 +213,45 @@ class TestGuildMeta:
     def test_an_offline_bot_is_504(self, client, logged_in, fake_redis, monkeypatch):
         monkeypatch.setattr(bridge, "COMMAND_TIMEOUT", 0.05)
         assert client.get("/api/v1/guilds/1/meta").status_code == 504
+
+
+class TestSlowActionTimeout:
+    """yt-dlp resolution outlives the default 5s; a 504 there queued the track
+    anyway and a retry queued it twice."""
+
+    @pytest.fixture
+    def captured(self, monkeypatch):
+        calls = []
+
+        def send_command(action, **kwargs):
+            calls.append((action, kwargs.get("timeout")))
+            return {}
+
+        monkeypatch.setattr(bridge, "send_command", send_command)
+        return calls
+
+    def test_play_waits_for_the_slow_timeout(self, client, logged_in, fake_redis, captured):
+        from website.api.player import SLOW_ACTION_TIMEOUT
+
+        client.post("/api/v1/guilds/1/player/play", json={"query": "song"}, headers=_headers(logged_in))
+
+        assert captured == [("player.play", SLOW_ACTION_TIMEOUT)]
+
+    def test_quick_actions_keep_the_default(self, client, logged_in, fake_redis, captured):
+        client.post("/api/v1/guilds/1/player/skip", headers=_headers(logged_in))
+
+        assert captured == [("player.skip", None)]
+
+    def test_loading_a_playlist_waits_for_the_slow_timeout(self, client, logged_in, fake_redis, captured):
+        from website.api.player import SLOW_ACTION_TIMEOUT
+
+        created = client.post(
+            "/api/v1/playlists",
+            json={"name": "Weekend", "tracks": [{"title": "A", "url": "https://youtu.be/a"}]},
+            headers=_headers(logged_in),
+        )
+        client.post(
+            f"/api/v1/playlists/{created.get_json()['id']}/load", json={"guild_id": "1"}, headers=_headers(logged_in)
+        )
+
+        assert captured == [("playlist.load", SLOW_ACTION_TIMEOUT)]

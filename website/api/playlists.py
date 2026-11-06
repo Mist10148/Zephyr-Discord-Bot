@@ -261,7 +261,7 @@ def import_spotify():
 @require_session
 def load_playlist(playlist_id: str):
     """Queue a playlist up in a guild, via the bot."""
-    from website.api.player import bridge_call
+    from website.api.player import SLOW_ACTION_TIMEOUT, bridge_call
 
     if not is_row_id(playlist_id):
         return error("not_found", "No such playlist.", 404)
@@ -279,4 +279,5 @@ def load_playlist(playlist_id: str):
         guild_id=guild_id,
         actor_id=g.zephyr_session.user_id,
         args={"playlist_id": int(playlist_id)},
+        timeout=SLOW_ACTION_TIMEOUT,
     )

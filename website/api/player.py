@@ -40,6 +40,13 @@ PLAYER_ACTIONS = {
 PLAYER_RATE_LIMIT = 30
 PLAYER_RATE_WINDOW = 10
 
+# Actions that resolve tracks through yt-dlp, which routinely takes longer than
+# the bridge's default 5s.  Timing out there reported a 504 for a track the bot
+# went on to queue, and the retry queued it twice.  Kept under gunicorn's 30s
+# default worker timeout so the worker is never killed mid-wait.
+SLOW_ACTIONS = {"play"}
+SLOW_ACTION_TIMEOUT = 20.0
+
 
 def bridge_call(action: str, *, guild_id=None, actor_id=None, args=None, timeout=None):
     """Send one bridge command and turn its outcome into an HTTP response.
@@ -112,7 +119,13 @@ def post_player_action(guild_id: str, action: str):
         return error("rate_limited", "Slow down a moment.", 429)
 
     actor_id = g.zephyr_session.user_id
-    response = bridge_call(f"player.{action}", guild_id=guild_id, actor_id=actor_id, args=body)
+    response = bridge_call(
+        f"player.{action}",
+        guild_id=guild_id,
+        actor_id=actor_id,
+        args=body,
+        timeout=SLOW_ACTION_TIMEOUT if action in SLOW_ACTIONS else None,
+    )
 
     # Only successes are audited.  A refusal is not a thing that happened to the
     # guild, and logging every rejected button press would drown the log in
