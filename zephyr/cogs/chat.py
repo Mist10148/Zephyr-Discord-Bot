@@ -66,10 +66,27 @@ def _check_image_gen_cooldown(user_id: int, guild_id):
 
 
 def _update_image_gen_cooldown(user_id: int, guild_id):
+    """Start the cooldown now.  Returns the previous deadlines, for a release."""
     now = datetime.now(timezone.utc).timestamp()
+    previous = (image_gen_user_cooldowns.get(user_id), image_gen_guild_cooldowns.get(guild_id) if guild_id else None)
     image_gen_user_cooldowns[user_id] = now + IMAGE_GEN_USER_COOLDOWN
     if guild_id:
         image_gen_guild_cooldowns[guild_id] = now + IMAGE_GEN_GUILD_COOLDOWN
+    return previous
+
+
+def _release_image_gen_cooldown(user_id: int, guild_id, previous) -> None:
+    """Undo a reservation whose generation failed: failures are not charged."""
+    user_before, guild_before = previous
+    if user_before is None:
+        image_gen_user_cooldowns.pop(user_id, None)
+    else:
+        image_gen_user_cooldowns[user_id] = user_before
+    if guild_id:
+        if guild_before is None:
+            image_gen_guild_cooldowns.pop(guild_id, None)
+        else:
+            image_gen_guild_cooldowns[guild_id] = guild_before
 
 
 # ---------------------------------------------------------------------------
@@ -422,12 +439,15 @@ class ChatCog(commands.Cog):
                 ephemeral=True
             )
             return
+        # Reserve the slot *before* the slow Gemini call.  Recording it only
+        # after a success let any number of concurrent requests through the
+        # check above while the first was still generating.
+        reservation = _update_image_gen_cooldown(user_id, guild_id)
 
         cached = _get_cached_image(prompt)
         if cached:
             files = [discord.File(io.BytesIO(data), filename=name) for name, data in cached["files"]]
             await interaction.followup.send(content=cached["text"] or None, files=files)
-            _update_image_gen_cooldown(user_id, guild_id)
             return
 
         try:
@@ -437,6 +457,7 @@ class ChatCog(commands.Cog):
                 config=types.GenerateContentConfig(response_modalities=["TEXT", "IMAGE"]),
             )
         except Exception as e:
+            _release_image_gen_cooldown(user_id, guild_id, reservation)
             await interaction.followup.send(f"Image generation failed: {e}")
             return
 
@@ -457,6 +478,7 @@ class ChatCog(commands.Cog):
                     text_parts.append(part.text)
 
         if not image_bytes_list:
+            _release_image_gen_cooldown(user_id, guild_id, reservation)
             await interaction.followup.send("No image was generated. Please try a different prompt.")
             return
 
@@ -464,7 +486,6 @@ class ChatCog(commands.Cog):
         files = [discord.File(io.BytesIO(data), filename=name) for name, data in image_bytes_list]
         await interaction.followup.send(content=text_content, files=files)
 
-        _update_image_gen_cooldown(user_id, guild_id)
         _cache_image(prompt, image_bytes_list, text_content)
 
 

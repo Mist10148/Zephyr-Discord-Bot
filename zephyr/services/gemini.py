@@ -6,7 +6,7 @@ minus the image-generation cooldown/cache block (which lives with the /image-gen
 command in cogs/chat.py).
 """
 
-import os
+import io
 import re
 import json
 import asyncio
@@ -850,11 +850,11 @@ async def send_response(destination, response_text, context_obj):
 
     if response_format == "txt" and len(response_text) > 1900:
         try:
-            file_path = f"response_{author.id}.txt"
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(response_text)
-            await destination.send(file=discord.File(file_path))
-            os.remove(file_path)
+            # In memory: a fixed response_<user>.txt in the working directory
+            # was overwritten by a concurrent reply to the same user, and left
+            # behind whenever send() raised.
+            payload = io.BytesIO(response_text.encode("utf-8"))
+            await destination.send(file=discord.File(payload, filename=f"response_{author.id}.txt"))
             return
         except Exception as e:
             await destination.send(f"An error occurred while creating the response file: {e}")
