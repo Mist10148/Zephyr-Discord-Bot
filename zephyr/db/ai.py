@@ -226,6 +226,10 @@ def compact_conversation(channel_id, summary, *, keep_messages=10, summarised_id
             old_ids = [message_id for message_id in old_ids if message_id in allowed]
         if not old_ids:
             return False
+        # Explicit rather than ON DELETE CASCADE, which SQLite ignores unless
+        # PRAGMA foreign_keys is on: the revisions would outlive their message
+        # and attach themselves to whichever message reuses its rowid.
+        conn.execute(delete(AIMessageRevision).where(AIMessageRevision.message_id.in_(old_ids)))
         conn.execute(delete(AIMessage).where(AIMessage.id.in_(old_ids)))
         conn.execute(update(AIConversation).where(AIConversation.id == conversation["id"]).values(rolling_summary=summary, token_count=max(0, len(summary) // 4)))
         return True
@@ -741,6 +745,11 @@ def purge_conversation(guild_id, channel_id, *, owner_id=None, database_url=None
     at all. Keeping it a scope rather than a bypass is what preserves the
     guarantee the web endpoint leans on: a guild caller still cannot reach another
     guild's channel or a DM, and a DM caller cannot reach a guild's channel.
+
+    Child rows (revisions, labels, annotations) are deleted explicitly rather
+    than left to ON DELETE CASCADE: SQLite enforces foreign keys only with
+    ``PRAGMA foreign_keys=ON``, which nothing sets, so on the default database
+    they would be orphaned and a conversation reusing the rowid would inherit them.
     """
     if owner_id is not None:
         scope = and_(AIConversation.guild_id.is_(None), AIConversation.owner_id == str(owner_id))
@@ -751,6 +760,10 @@ def purge_conversation(guild_id, channel_id, *, owner_id=None, database_url=None
         row = conn.execute(select(AIConversation.id).where(scope, AIConversation.channel_id == str(channel_id))).scalar_one_or_none()
         if row is None:
             return False
+        message_ids = select(AIMessage.id).where(AIMessage.conversation_id == row)
+        conn.execute(delete(AIMessageRevision).where(AIMessageRevision.message_id.in_(message_ids)))
+        conn.execute(delete(AIConversationLabel).where(AIConversationLabel.conversation_id == row))
+        conn.execute(delete(AIConversationAnnotation).where(AIConversationAnnotation.conversation_id == row))
         conn.execute(delete(AIMessage).where(AIMessage.conversation_id == row))
         return conn.execute(delete(AIConversation).where(AIConversation.id == row)).rowcount > 0
 
