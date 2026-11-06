@@ -165,7 +165,9 @@ def no_store_for_authenticated(response):
     Without this a CDN or corporate proxy could cache one user's /me -- including
     their CSRF token -- and hand it to somebody else.
     """
-    if g.get("zephyr_session") is not None:
+    session = g.get("zephyr_session")
+    if session is not None:
+        _slide_cookies(response, session)
         response.headers["Cache-Control"] = "no-store, private"
         vary = response.headers.get("Vary")
         if not vary:
@@ -173,6 +175,22 @@ def no_store_for_authenticated(response):
         elif "cookie" not in vary.lower():
             response.headers["Vary"] = f"{vary}, Cookie"
     return response
+
+
+def _slide_cookies(response, session) -> None:
+    """Renew the cookies' expiry alongside the session's sliding Redis TTL.
+
+    load_session extends the server-side TTL on every request, but the cookies
+    were only ever set at login with max_age=AUTH_SESSION_TTL -- so the browser
+    dropped them exactly that long after sign-in however active the user was,
+    and AUTH_SESSION_MAX_AGE could never be reached.  Skipped when the view has
+    already set or cleared a cookie itself (login, logout).
+    """
+    names = (current_app.config["AUTH_COOKIE_NAME"], current_app.config["CSRF_COOKIE_NAME"])
+    if any(header.split("=", 1)[0].strip() in names for header in response.headers.getlist("Set-Cookie")):
+        return
+    set_session_cookie(response, session.sid)
+    set_csrf_cookie(response, session.csrf)
 
 
 def set_session_cookie(response, sid: str) -> None:

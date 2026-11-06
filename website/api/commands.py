@@ -3,7 +3,7 @@
 import hashlib
 import json
 
-from flask import current_app, jsonify
+from flask import current_app, jsonify, request
 
 from website.api import api
 from zephyr.services import bridge
@@ -36,7 +36,8 @@ def commands():
     version = hashlib.sha256(json.dumps(entries, sort_keys=True).encode()).hexdigest()[:12]
     response = jsonify({"version": version, "count": len(entries), "commands": entries, "categories": [{"key": category.key, "title": category.title, "emoji": category.emoji} for category in HELP_CATEGORIES]})
     response.set_etag(version)
-    return response
+    # Without this the ETag was sent but If-None-Match never produced a 304.
+    return response.make_conditional(request)
 
 
 @api.get("/status")

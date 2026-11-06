@@ -24,7 +24,11 @@ class TTLCache:
     def get_or_load(self, key: str, ttl: int, loader: Callable[[], T]) -> T:
         with self._lock:
             item = self._items.get(key)
-            if item and item.expires_at > monotonic(): return item.value  # type: ignore[return-value]
+            if item and item.expires_at > monotonic():
+                # Least-recently-used eviction: without this a hot key kept its
+                # first-insertion slot and was the first to be evicted.
+                self._items.move_to_end(key)
+                return item.value  # type: ignore[return-value]
             waiter = self._waiters.get(key)
             if waiter is None:
                 waiter, owner = Event(), True
@@ -40,6 +44,7 @@ class TTLCache:
             value = loader()
             with self._lock:
                 self._items[key] = _Item(value, monotonic() + ttl)
+                self._items.move_to_end(key)
                 while len(self._items) > self.maxsize: self._items.popitem(last=False)
             return value
         except Exception:

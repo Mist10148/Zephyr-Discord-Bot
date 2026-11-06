@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from flask import Blueprint, current_app, send_from_directory
+from werkzeug.security import safe_join
 
 spa = Blueprint("spa", __name__)
 
@@ -19,8 +20,10 @@ def serve_spa(path: str):
 
         return error("not_found", "API route not found", 404)
     static_dir = _static_dir()
-    candidate = static_dir / path
-    if candidate.is_file():
+    # safe_join first: checking is_file() on the raw path answered 404 vs the
+    # SPA shell depending on whether a file *outside* static/ existed.
+    joined = safe_join(str(static_dir), path) if path else None
+    if joined is not None and Path(joined).is_file():
         response = send_from_directory(static_dir, path)
         if path.startswith("assets/"):
             response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
