@@ -20,9 +20,15 @@ from zephyr.cogs.weather_alerts import WeatherAlertsCog
 ALERT = {"kind": "severe", "title": "⚠️ Severe", "summary": "Windy", "fields": [], "fingerprint": "abc123"}
 
 
+class FakeGuild:
+    def __init__(self, guild_id):
+        self.id = guild_id
+
+
 class FakeChannel:
-    def __init__(self):
+    def __init__(self, guild_id=42):
         self.sent = []
+        self.guild = FakeGuild(guild_id)
 
     async def send(self, *, embed=None):
         self.sent.append(embed)
@@ -47,7 +53,7 @@ def fired(monkeypatch):
 
 def _sub(**over):
     base = {"id": 7, "lat": 10.0, "lon": 122.0, "units": "metric", "location": "X",
-            "kind": "severe", "channel_id": "555", "thresholds": None, "last_fingerprint": None}
+            "kind": "severe", "channel_id": "555", "guild_id": "42", "thresholds": None, "last_fingerprint": None}
     base.update(over)
     return base
 
@@ -106,6 +112,13 @@ class TestDigestDelivery:
         monkeypatch.setattr(cog_module, "get_openmeteo_bundle", boom)
         channel = FakeChannel()
         # Must not raise: one bad subscription cannot stop the batch.
+        _deliver(WeatherAlertsCog(FakeBot(channel)), _sub(), dedupe=True)
+        assert channel.sent == [] and fired == []
+
+    def test_a_channel_in_another_guild_is_never_posted_to(self, monkeypatch, fired):
+        """channel_id is only checked for shape; get_channel spans every guild."""
+        monkeypatch.setattr(cog_module, "evaluate", lambda *a, **k: ALERT)
+        channel = FakeChannel(guild_id=99)
         _deliver(WeatherAlertsCog(FakeBot(channel)), _sub(), dedupe=True)
         assert channel.sent == [] and fired == []
 

@@ -106,6 +106,25 @@ class TestPlaylistCrud:
         body = client.get(f"/api/v1/playlists/{theirs['id']}").get_json()
         assert body["mine"] is False
 
+    def test_a_playlist_can_be_saved_into_a_guild_you_manage(self, client, logged_in, fake_redis):
+        response = _create(client, logged_in, guild_id="1", is_public=True)
+        assert response.status_code == 201
+        assert client.get(f"/api/v1/playlists/{response.get_json()['id']}").get_json()["guild_id"] == "1"
+
+    def test_a_playlist_cannot_be_published_into_someone_elses_guild(self, client, logged_in, fake_redis):
+        """A public playlist is listed to the whole guild, so the id must be yours to use."""
+        response = _create(client, logged_in, guild_id="999", is_public=True)
+        assert response.status_code == 403
+
+    def test_listing_another_guilds_public_playlists_shows_only_your_own(self, app, client, logged_in, fake_redis):
+        from zephyr.db.playlists import save_playlist
+
+        save_playlist("777", "Elsewhere", [{"title": "A"}], guild_id="999", is_public=True,
+                      database_url=app.config["DATABASE_URL"])
+
+        listed = client.get("/api/v1/playlists?guild_id=999").get_json()["playlists"]
+        assert [row["name"] for row in listed] == []
+
     def test_signing_out_is_a_401(self, client, fake_redis):
         assert client.get("/api/v1/playlists").status_code == 401
 

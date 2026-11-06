@@ -153,6 +153,13 @@ class WeatherAlertsCog(commands.Cog):
         if channel is None:
             print(f"[WeatherAlerts] Channel {subscription['channel_id']} is not reachable.")
             return
+        # The dashboard only checks that channel_id looks like an id; get_channel
+        # finds a channel in *any* guild the bot is in.  Never post across guilds.
+        channel_guild = getattr(channel, "guild", None)
+        if channel_guild is None or str(channel_guild.id) != str(subscription["guild_id"]):
+            print(f"[WeatherAlerts] Channel {subscription['channel_id']} is not in guild "
+                  f"{subscription['guild_id']}; skipping subscription {subscription['id']}.")
+            return
         try:
             await channel.send(embed=alert_embed(alert))
         except discord.Forbidden:

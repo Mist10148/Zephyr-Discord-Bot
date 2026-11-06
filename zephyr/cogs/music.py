@@ -2580,8 +2580,12 @@ class MusicCog(commands.Cog):
         playlist = await asyncio.to_thread(get_playlist, playlist_id)
         if playlist is None:
             raise VoiceError("That playlist no longer exists.")
-        # A private playlist is loadable only by its owner, wherever it was saved.
-        if playlist['owner_id'] != str(member.id) and not playlist['is_public']:
+        # Your own playlists load anywhere; someone else's only when it is public
+        # *and* was shared in this guild -- otherwise sequential ids would let
+        # anyone pull other servers' public playlists.
+        if playlist['owner_id'] != str(member.id) and not (
+            playlist['is_public'] and str(playlist.get('guild_id') or '') == str(guild.id)
+        ):
             raise VoiceError("That playlist is not yours.")
 
         state = self.peek_voice_state(guild.id)

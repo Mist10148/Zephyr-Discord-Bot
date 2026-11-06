@@ -34,6 +34,23 @@ def _owned(playlist_id: str):
     return playlist, None
 
 
+def _target_guild(raw):
+    """Validate the guild a new playlist is saved into.
+
+    Returns ``(guild_id_or_None, None)`` or ``(None, response)``.  Only a guild
+    the caller manages is accepted: a public playlist is listed to everyone in
+    its guild, so an arbitrary id would let anyone publish into any server.
+    """
+    if raw is None or raw == "":
+        return None, None
+    guild_id = str(raw)
+    if not guild_id.isdigit():
+        return None, error("invalid_guild_id", "That is not a Discord guild id.", 400)
+    if guild_id not in current_session().manageable_ids():
+        return None, error("forbidden", "You do not manage that server.", 403)
+    return guild_id, None
+
+
 def _clean_tracks(raw) -> list[dict]:
     if not isinstance(raw, list):
         raise ValueError("tracks must be a list.")
@@ -65,6 +82,10 @@ def list_playlists():
     if guild_id and not guild_id.isdigit():
         return error("invalid_guild_id", "That is not a Discord guild id.", 400)
     session = current_session()
+    # Same rule as GET /playlists/<id>: another guild's public playlists are only
+    # listed to someone in that guild, not to anyone who guesses its id.
+    if guild_id and guild_id not in session.manageable_ids():
+        guild_id = None
     rows = repo.list_playlists(session.user_id, guild_id=guild_id, database_url=_database_url())
     return jsonify(
         {
@@ -90,15 +111,15 @@ def create_playlist():
     if not tracks:
         return error("invalid_value", "A playlist needs at least one track.", 400)
 
-    guild_id = body.get("guild_id")
-    if guild_id is not None and not str(guild_id).isdigit():
-        return error("invalid_guild_id", "That is not a Discord guild id.", 400)
+    guild_id, problem = _target_guild(body.get("guild_id"))
+    if problem is not None:
+        return problem
     try:
         saved = repo.save_playlist(
             current_session().user_id,
             str(body.get("name") or ""),
             tracks,
-            guild_id=str(guild_id) if guild_id else None,
+            guild_id=guild_id,
             is_public=bool(body.get("is_public")),
             database_url=_database_url(),
         )
@@ -208,15 +229,15 @@ def import_spotify():
     if not tracks:
         return error("invalid_value", "That Spotify link has no tracks.", 400)
 
-    guild_id = body.get("guild_id")
-    if guild_id is not None and not str(guild_id).isdigit():
-        return error("invalid_guild_id", "That is not a Discord guild id.", 400)
+    guild_id, problem = _target_guild(body.get("guild_id"))
+    if problem is not None:
+        return problem
     try:
         saved = repo.save_playlist(
             current_session().user_id,
             str(body.get("name") or name),
             tracks,
-            guild_id=str(guild_id) if guild_id else None,
+            guild_id=guild_id,
             is_public=bool(body.get("is_public")),
             database_url=_database_url(),
         )
