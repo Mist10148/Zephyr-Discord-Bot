@@ -12,8 +12,8 @@ self-contained cogs.
 Zephyr started life as a single 3,000-line script and was rebuilt into a maintainable package:
 
 - **Weather** — current conditions, forecasts, air quality, typhoon alerts, and a heat-index
-  "class suspension" predictor. Every weather command works as both a slash command and a classic
-  prefix command, and `/setlocation` gives each person their own default city.
+  "class suspension" predictor. The core lookups also work as classic `/`-prefixed text commands,
+  and `/setlocation` gives each person their own default city.
 - **Weather subscriptions** — daily digests on a schedule you choose, plus severe-weather and
   class-suspension watches that stay quiet until there is something worth saying.
 - **Music** — a Groovy-style player streaming from **YouTube** and **Spotify**, with a queue,
@@ -26,7 +26,8 @@ Zephyr started life as a single 3,000-line script and was rebuilt into a maintai
 - **Dashboard** — a React PWA: a public weather page for anyone, and for server admins a live
   music remote, weather subscriptions and editable settings, signed in with Discord.
 
-> The bot exposes **75 slash commands** and **13 prefix commands** across these features.
+> The bot exposes **78 slash commands** and **14 prefix commands** (the 13 weather lookups below
+> plus discord.py's built-in `help`; the prefix is `/`) across these features.
 
 ---
 
@@ -57,7 +58,7 @@ Zephyr-Discord-Bot/
 ├── wsgi.py                   # production WSGI entry point
 ├── Dockerfile                # container image for bot or website
 ├── docker-compose.yml        # local orchestration: Postgres + Redis + bot + website
-├── Procfile                  # Render/Heroku process definitions
+├── Procfile                  # Heroku-style process definitions (Render uses render.yaml)
 ├── render.yaml               # Render Blueprint
 ├── alembic.ini               # migration config (see docs/DEPLOYMENT.md)
 ├── requirements.txt
@@ -76,7 +77,7 @@ Zephyr-Discord-Bot/
 │   └── cogs/                 # weather, weather_alerts, music, chat, voice_tts, help
 └── website/                  # Flask API + React SPA
     ├── __init__.py           # create_app factory
-    ├── api/                  # /api/v1 (auth, me, guilds, player, playlists, weather, weather_subs)
+    ├── api/                  # /api/v1 (auth, me, guilds, player, playlists, weather, weather_subs, ai, commands)
     ├── security.py           # CSP + security headers
     ├── session.py            # Redis-backed sessions
     ├── spa.py                # serves the built SPA
@@ -88,21 +89,27 @@ Zephyr-Discord-Bot/
 
 ## 🤖 Commands
 
-### 🌦️ Weather  *(available as both `/slash` and prefix commands)*
+### 🌦️ Weather
+
+Every lookup takes an optional city; without one it uses your `/setlocation` default, then Iloilo.
+The lookups (`/weather`, `/forecast`, `/temperature`, `/description`, `/humidity`, `/pressure`,
+`/windspeed`, `/air`, `/precipitation`, `/typhoon`, `/search`, `/use`, `/helpweather`) also work
+as `/`-prefixed text messages; the rest are slash-only.
+
 | Command | Description |
 |---------|-------------|
-| `/weather <city>` | Current weather, air quality & precipitation |
-| `/forecast <city>` | Paginated 3-day forecast |
-| `/temperature <city>` | Current temperature |
-| `/description <city>` | Weather description |
-| `/humidity <city>` | Humidity |
-| `/pressure <city>` | Atmospheric pressure |
-| `/windspeed <city>` | Wind speed |
-| `/air <city>` | Air quality index & pollutants |
-| `/precipitation <city>` | Rain/snow details |
+| `/weather [city]` | Current weather, air quality & precipitation |
+| `/forecast [city]` | Paginated 3-day forecast |
+| `/temperature [city]` | Current temperature |
+| `/description [city]` | Weather description |
+| `/humidity [city]` | Humidity |
+| `/pressure [city]` | Atmospheric pressure |
+| `/windspeed [city]` | Wind speed |
+| `/air [city]` | Air quality index & pollutants |
+| `/precipitation [city]` | Rain/snow details |
 | `/typhoon` | Latest typhoon alert for Iloilo City |
 | `/class` | Class-suspension forecast based on heat index |
-| `/search <city>` | Quick weather lookup |
+| `/search [city]` | Quick weather lookup |
 | `/setlocation [city]` | Set your default city (leave empty to clear it) |
 | `/mylocation` | Show your default city |
 | `/weather-subscribe <kind> <location>` | Post weather to a channel on a schedule or a watch |
@@ -132,6 +139,8 @@ Zephyr-Discord-Bot/
 | `/settings` | Choose the Gemini model & response format |
 | `/output` | Quickly toggle embed vs. plain-text replies |
 | `/token` | Show this session's Gemini usage / rate-limit status |
+| `/summarize [messages]` | Privately summarize the last 5–100 messages in this channel |
+| `/translate <text> <target_language>` | Translate text into another language |
 | `/image-gen <prompt>` | Generate an image with Gemini |
 | `/generate <prompt>` | Optional image-generator hook (stub by default) |
 | `/say <text>` | Speak text in your voice channel |
@@ -148,10 +157,12 @@ You can also just **@mention**, **reply to**, or **DM** the bot to chat with it 
 ## 📋 Requirements
 
 - **Python 3.13+**
+- **Node.js 22+** — only to build the dashboard (`website/frontend`)
 - **FFmpeg** — required for all voice/music/TTS audio. The bot looks for it in this order:
-  1. the `FFMPEG_PATH` value in your `.env`,
-  2. a bundled `ffmpeg/` folder next to the project,
-  3. FFmpeg on your system `PATH`.
+  1. an `ffmpeg/` folder inside a PyInstaller build (only when running as a frozen executable),
+  2. the `FFMPEG_PATH` value in your `.env`,
+  3. a bundled `ffmpeg/` folder next to the project,
+  4. FFmpeg on your system `PATH`.
 
   The binaries aren't committed to this repo (they exceed GitHub's file-size limit), so either
   [install FFmpeg](https://ffmpeg.org/download.html) and add it to your `PATH`, drop
@@ -195,10 +206,17 @@ On startup it loads every cog, syncs the slash commands with Discord, and sets i
 
 ### Run the website
 ```bash
+npm --prefix website/frontend ci          # once
+npm --prefix website/frontend run build   # after every frontend change
 python run_web.py
 ```
-Then open **http://localhost:5000** — the home panel shows Iloilo City's forecast, and a second
-panel lets you search the weather for any city.
+Then open **http://127.0.0.1:5000**. Without the build step every page answers
+`503 spa_not_built`. Use `127.0.0.1` rather than `localhost`: the default OAuth redirect URI is on
+`127.0.0.1`, and the sign-in state cookie does not survive a hop between the two hosts.
+
+The home page introduces the bot; `/weather` is the public forecast page (Iloilo City until you
+search for somewhere else). For frontend work, `npm --prefix website/frontend run dev` serves the
+SPA on Vite with hot reload and proxies `/api` to the Flask server.
 
 ---
 
@@ -216,8 +234,8 @@ Zephyr can run locally **or** in the cloud. See [`docs/DEPLOYMENT.md`](docs/DEPL
 | Platform | Bot | Website | Notes |
 |----------|-----|---------|-------|
 | **Docker / Docker Compose** | ✅ | ✅ | `Dockerfile` + `docker-compose.yml`, with Postgres and Redis included. |
-| **Render** | ✅ | ✅ | Use the included `render.yaml` Blueprint. |
-| **Heroku** | ✅ | ✅ | Use the included `Procfile`. |
+| **Render** | ✅ | ✅ | Use the included `render.yaml` Blueprint. The native Python worker has no FFmpeg, Opus or Node, so music and TTS need the bot deployed from the `Dockerfile` instead. |
+| **Heroku** | ✅ | ⚠️ | The `Procfile` starts both processes, but nothing in it builds the SPA or runs migrations: add the Node.js buildpack with a build step, and a `release: alembic upgrade head` line. The bot also needs FFmpeg and a JavaScript runtime on the dyno. |
 | **AWS EC2 / ECS / Fargate** | ✅ | ✅ | Use the `Dockerfile`. |
 | **Vercel / AWS Lambda** | ❌ | ❌ | Serverless cannot hold the gateway or session connections. |
 
@@ -236,21 +254,23 @@ automatically. For the dashboard, also set `DISCORD_CLIENT_ID` and `DISCORD_CLIE
 ### Before going live
 
 - **Set `WEB_APP_URL`** to your deployed website, or `/use` will report that it is unconfigured.
-- **Run migrations** on an existing database: `alembic upgrade head` (a fresh one is created
-  automatically). See [Database migrations](docs/DEPLOYMENT.md#database-migrations).
+- **Run migrations** on an existing database: `alembic upgrade head`. Only the Render Blueprint
+  does this for you; Docker, Compose and the Procfile do not. A fresh database is created
+  automatically. See [Database migrations](docs/DEPLOYMENT.md#database-migrations).
 - **Serve over HTTPS.** Session cookies are marked `Secure` automatically for `https://` origins,
   and HSTS is only sent from one.
-- The website sends a Content-Security-Policy that allows images from `cdn.discordapp.com`. If you
-  add another image host, update [`website/security.py`](website/security.py) or those images will
-  be blocked.
+- The website sends a Content-Security-Policy that allows images from `cdn.discordapp.com`
+  (avatars, icons) and `*.ytimg.com`, `*.ggpht.com` and `*.scdn.co` (track artwork). If you add
+  another image host, update [`website/security.py`](website/security.py) or those images will be
+  blocked.
 
 ---
 
 ## 🗺️ Web dashboard
 
-> **Status: phases 0–6 shipped.** Sign-in, the servers you administer, editable settings, a live
-> music remote, weather subscriptions, and AI personas/memory all work today. Still to come:
-> hardening (phase 7).
+> **Status: phases 0–7 shipped.** Sign-in, the servers you administer, editable settings, a live
+> music remote, weather subscriptions, AI personas/memory, an audit log and private DM history all
+> work today. Further work is tracked in [`docs/ENHANCEMENTS.md`](docs/ENHANCEMENTS.md).
 
 - **Public** — a weather PWA with a ⌘K palette over every command, installable to a home screen.
 - **Auth** — Discord OAuth2; you see and manage only the servers you already administer.
@@ -261,8 +281,11 @@ automatically. For the dashboard, also set `DISCORD_CLIENT_ID` and `DISCORD_CLIE
   you prefer), or import one from Spotify.
 - **Weather subscriptions** — daily digests, severe-weather watches and class-suspension
   advisories, with a preview that runs the same code the scheduler does.
-- **Settings** — prefix, locale, timezone, default volume, DJ role and music channels, with
-  channel and role pickers answered by the bot in real time.
+- **Settings** — default volume, DJ role and music channels, with channel and role pickers
+  answered by the bot in real time. Prefix, locale and timezone are saved too, but the bot does not
+  use them yet.
+- **AI** — personas, per-channel memory you can inspect and purge, usage, an audit log, and a
+  private history of your own DMs with the bot.
 - **Postgres** replaces `settings.json`, so per-guild settings survive cloud deploys.
 
 Full architecture, data model, API surface, the 7-phase delivery plan and a running log of every
@@ -275,23 +298,27 @@ deliberate departure from it: [`docs/WEB_DASHBOARD_PLAN.md`](docs/WEB_DASHBOARD_
 | Variable | Required | Description |
 |----------|:--------:|-------------|
 | `DISCORD_TOKEN` | ✅ | Discord bot token |
-| `OPENWEATHER_API_KEY` | ✅ | OpenWeatherMap key (used by the bot *and* website) |
+| `OPENWEATHER_API_KEY` | ✅ | OpenWeatherMap key for the bot's weather commands. The website and alert scheduler use Open-Meteo and need no key |
 | `GEMINI_API_KEY` | ✅ | Google Gemini API key |
 | `SPOTIFY_CLIENT_ID` | ✅ | Spotify app client ID. Also set it on the website for the dashboard's playlist import |
 | `SPOTIFY_CLIENT_SECRET` | ✅ | Spotify app client secret |
 | `FFMPEG_PATH` | — | Explicit path to FFmpeg (otherwise auto-detected) |
 | `WEB_APP_URL` | — | URL shown by `/use`. **Not** the OAuth origin — see `WEB_PUBLIC_URL` |
-| `FLASK_HOST` / `FLASK_PORT` | — | Website host/port (default `0.0.0.0:5000`) |
-| `PORT` | — | Cloud-platform port override (overrides `FLASK_PORT`) |
-| `REDIS_URL` | — | Shared AI settings, **required for dashboard sessions**, and the bot↔web bridge the music remote runs on |
-| `SETTINGS_PATH` | — | Custom path for `settings.json` |
-| `FLASK_DEBUG` | — | Set to `1` to enable Flask debug mode |
-| `DATABASE_URL` | — | Postgres/SQLite URL (defaults to `data/zephyr.db`) |
+| `FLASK_HOST` / `FLASK_PORT` | — | `run_web.py` host/port (default `0.0.0.0:5000`) |
+| `PORT` | — | Cloud-platform port; overrides `FLASK_PORT`, and is what `run_web.py` actually binds |
+| `REDIS_URL` | — | **Required for dashboard sessions** and the bot↔web bridge the music remote runs on. `REDISCLOUD_URL` is accepted as an alias |
+| `FLASK_DEBUG` | — | `1` enables the Werkzeug debugger; it then binds to `127.0.0.1` unless `FLASK_HOST` is set |
+| `DATABASE_URL` | — | Postgres/SQLite URL (defaults to the SQLite file `data/zephyr.db`) |
+| `STORAGE_BACKEND` | — | Where AI settings live: `auto` (default: database URL, then Redis, then `data/zephyr.db`), `database`, `redis` or `file` |
+| `SETTINGS_PATH` | — | Path of the `settings.json` fallback, used only when the chosen backend is unreachable at startup |
+| `DB_AUTO_CREATE` | — | Create missing tables at startup (default `1`) |
+| `DB_ECHO` | — | Log every SQL statement (default `0`) |
 
 ### Dashboard (Discord OAuth)
 
-Leave all of these unset to serve only the public weather site. Setting some but not all
-of `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET` and `REDIS_URL` fails fast at startup.
+Leave all of these unset to serve only the public weather site. Setting only one of
+`DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET`, or both without `REDIS_URL`, fails fast at
+startup. `REDIS_URL` on its own is fine — it has other jobs.
 
 | Variable | Required | Description |
 |----------|:--------:|-------------|
@@ -304,10 +331,12 @@ of `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET` and `REDIS_URL` fails fast at st
 | `SESSION_MAX_AGE_SECONDS` | — | Hard cap no activity extends (default 30 days) |
 | `AUTH_COOKIE_SECURE` | — | Auto-on for `https://` origins |
 | `GUILDS_FRESH_SECONDS` | — | How long a session's guild list is trusted (default 1 hour) |
-| `TRUST_PROXY_HEADERS` | — | Trust `X-Forwarded-*`. Auto-on under Render |
+| `TRUST_PROXY_HEADERS` | — | Trust `X-Forwarded-*`. Auto-on under Render (which sets `RENDER`) |
+| `AUTH_COOKIE_NAME` / `CSRF_COOKIE_NAME` | — | Cookie names (default `zephyr_session` / `zephyr_csrf`) |
+| `DISCORD_INVITE_PERMISSIONS` | — | Permissions bitfield for the "Add Zephyr" invite link (default `3197952`) |
 
-`.env` is git-ignored and never committed. `settings.json` (per-context AI preferences) is also
-kept local unless you set `REDIS_URL`.
+`.env` is git-ignored and never committed. Per-context AI preferences live in the database
+(`data/zephyr.db` locally); `python -m scripts.import_settings` migrates an old `settings.json`.
 
 ---
 
@@ -320,7 +349,8 @@ kept local unless you set `REDIS_URL`.
   command is `/image-gen`.
 - Privileged intents must be enabled in the Discord Developer Portal for chat and some features to
   work.
-- When running multiple bot instances in the cloud, set `REDIS_URL` so AI settings stay in sync.
+- When running multiple bot instances in the cloud, point them at the same `DATABASE_URL` so AI
+  settings stay in sync.
 
 ---
 

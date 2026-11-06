@@ -7,7 +7,7 @@
 > **Shipped through Phase 7:** database-backed settings, the React dashboard with Discord OAuth,
 > the public weather PWA, the bot↔web bridge with persistent playlists and a music remote,
 > weather subscriptions, AI summarization, memory, personas, and translation, and the Phase 7
-> hardening pass (a11y, rate limiting, the audit-log reader, tests, and automated migrations).
+> hardening pass (a11y, rate limiting, the audit-log reader, tests, and a Render pre-deploy migration step).
 > Architecture, data model, API surface, phased delivery and the running log of
 > deliberate departures live in [`WEB_DASHBOARD_PLAN.md`](WEB_DASHBOARD_PLAN.md).
 > Sections 6–11 below describe the **currently shipped** product.
@@ -18,7 +18,7 @@
 
 Zephyr is a modular, multi-purpose Discord bot built for community servers. It bundles a weather service, a Groovy-style music player, a Google Gemini AI chat companion, text-to-speech, and a small Flask companion website — all organized into clean, self-contained cogs.
 
-The bot is written in Python 3.13 using `discord.py`, exposes **75 slash commands** (including aliases) and **13 prefix commands**, and runs on Windows, macOS, or Linux. It can be run locally, in Docker, or deployed to cloud platforms such as Render, Heroku, AWS, and Vercel.
+The bot is written in Python 3.13 using `discord.py`, exposes **78 slash commands** (including aliases) and **14 prefix commands** (13 weather lookups plus discord.py's built-in `help`), and runs on Windows, macOS, or Linux. It can be run locally, in Docker, or deployed to always-on hosts such as Render, Heroku or AWS. Serverless platforms (Vercel, Lambda) are not supported — see Entry points below.
 
 ---
 
@@ -78,7 +78,7 @@ project-root/
 ├── wsgi.py                 # Production WSGI entry point
 ├── Dockerfile              # Container image for bot or website
 ├── docker-compose.yml      # Local orchestration: Postgres + Redis + bot + website
-├── Procfile                # Render/Heroku process definitions
+├── Procfile                # Heroku-style process definitions (Render uses render.yaml)
 ├── render.yaml             # Render Blueprint
 ├── alembic.ini             # Migration config
 ├── requirements.txt
@@ -110,7 +110,7 @@ project-root/
 └── website/                # Flask API + React SPA
     ├── __init__.py         # create_app factory
     ├── api/                # /api/v1 blueprint
-    │                       #   auth, me, guilds, player, playlists, weather, weather_subs
+    │                       #   auth, me, guilds, player, playlists, weather, weather_subs, ai, commands
     ├── security.py         # CSP + security headers
     ├── session.py          # Redis-backed sessions
     ├── spa.py              # Serves the built SPA
@@ -123,7 +123,7 @@ project-root/
 
 ### Entry points
 - **Bot (local):** `python run_bot.py` → validates config → runs `ZephyrBot`.
-- **Website (local):** `python run_web.py` → validates web config → runs Flask on `FLASK_HOST:FLASK_PORT`.
+- **Website (local):** `python run_web.py` → validates web config → runs Flask on `FLASK_HOST:PORT` (`PORT` falls back to `FLASK_PORT`). Build the SPA first with `npm --prefix website/frontend run build`.
 - **Website (production WSGI):** `gunicorn wsgi:app`.
 - **Container:** `Dockerfile` installs Linux FFmpeg/Opus; default command runs the website; override to run the bot.
 - **Serverless: not supported.** The bot needs a persistent gateway connection and the website needs a
@@ -142,7 +142,7 @@ project-root/
 - **Class suspension forecast:** predicts whether classes are likely to be suspended using feels-like/apparent temperature.
 - **Personal default city:** `/setlocation` stores a per-user default, which every slash weather command falls back to before falling back to Iloilo.
 - **Data sources:** Open-Meteo is the primary source; OpenWeatherMap is used as a transparent fallback if Open-Meteo fails.
-- **Command formats:** every weather command works as a slash command; many also work as prefix commands.
+- **Command formats:** every weather command works as a slash command; the 13 lookups (`weather`, `forecast`, `temperature`, `description`, `humidity`, `pressure`, `windspeed`, `air`, `precipitation`, `typhoon`, `search`, `use`, `helpweather`) also work as `/`-prefixed text commands. The city argument is optional everywhere.
 
 ### 6.1a Weather subscriptions
 
@@ -193,8 +193,8 @@ the dashboard.
 - **Public:** a weather PWA with a ⌘K command palette over every command, and a `/status` panel
   reading the bot's own heartbeat.
 - **Signed in** (Discord OAuth): the servers you administer, and per server a music remote, weather
-  subscriptions, and editable settings (prefix, locale, timezone, default volume, DJ role, music
-  channels).
+  subscriptions, and editable settings. The bot applies the default volume, DJ role and music
+  channels; prefix, locale and timezone are stored but not yet used by the bot.
 - Channel and role pickers are answered by the bot in real time, because the web tier holds no
   Discord token and has no gateway connection.
 - Every mutating action is written to `audit_log` with its actor and source.
@@ -203,7 +203,7 @@ the dashboard.
 
 ## 7. Command Inventory
 
-### 7.1 Slash commands (75 total, including aliases)
+### 7.1 Slash commands (78 total, including aliases)
 
 | Category | Commands |
 |----------|----------|
@@ -214,7 +214,7 @@ the dashboard.
 | **Music — Playlists** | `/save`, `/load`, `/playlists`, `/playlist-delete` |
 | **Music — Effects & Audio** | `/volume`, `/bassboost`, `/bass_boost`, `/pitch`, `/nightcore`, `/vaporwave`, `/slowed`, `/reverb`, `/slownrev`, `/16d`, `/reset_effects` |
 | **Music — Voice & Connection** | `/join`, `/summon`, `/leave`, `/disconnect`, `/247` |
-| **Chat & AI** | `/prompt`, `/settings`, `/output`, `/token`, `/image-gen`, `/generate` |
+| **Chat & AI** | `/prompt`, `/forget`, `/settings`, `/output`, `/token`, `/summarize`, `/translate`, `/image-gen`, `/generate` |
 | **TTS & Voice** | `/say`, `/language`, `/disconnect` |
 | **Help** | `/help`, `/helpmusic`, `/helpchat`, `/helpweather` |
 
@@ -243,7 +243,7 @@ the dashboard.
 | Service | Used For | Auth |
 |---------|----------|------|
 | **Open-Meteo** | Daily forecast, current apparent temperature, geocoding | None |
-| **OpenWeatherMap** | Legacy/current weather, forecast fallback, website data, prefix weather commands | API key |
+| **OpenWeatherMap** | The bot's current-weather, air-quality and typhoon commands, and the forecast fallback. The website uses Open-Meteo only | API key |
 | **Google Gemini** | AI chat, image generation | API key |
 | **Spotify Web API** | Track/playlist/album metadata; the dashboard's playlist import | Client ID + Secret |
 | **YouTube** | Audio streaming (via `yt-dlp`) | None |
@@ -259,7 +259,7 @@ All secrets live in `.env` (see `.env.example`).
 | Variable | Required For | Description |
 |----------|--------------|-------------|
 | `DISCORD_TOKEN` | Bot | Discord bot token |
-| `OPENWEATHER_API_KEY` | Bot fallback + Website | OpenWeatherMap API key |
+| `OPENWEATHER_API_KEY` | Bot | OpenWeatherMap API key. The website never reads it |
 | `GEMINI_API_KEY` | Bot | Google Gemini API key |
 | `SPOTIFY_CLIENT_ID` | Bot + Website | Spotify app client ID. The website needs it only for the dashboard's playlist import, which answers 503 without it |
 | `SPOTIFY_CLIENT_SECRET` | Bot + Website | Spotify app client secret |
@@ -267,10 +267,12 @@ All secrets live in `.env` (see `.env.example`).
 | `WEB_APP_URL` | Optional | URL shown by `/use`. Not the OAuth origin |
 | `FLASK_HOST` / `FLASK_PORT` | Optional | Website bind address |
 | `PORT` | Optional | Cloud-platform port override |
-| `REDIS_URL` | Optional + **Dashboard** + **Music remote** | Shared AI settings, dashboard sessions, and the bot↔web bridge. Without it the remote answers 503 and `/status` reports the bot offline |
-| `SETTINGS_PATH` | Optional | Custom `settings.json` path |
-| `FLASK_DEBUG` | Optional | Enable Flask debug mode |
-| `DATABASE_URL` | Optional | Postgres/SQLite URL (defaults to `data/zephyr.db`) |
+| `REDIS_URL` | Optional + **Dashboard** + **Music remote** | Dashboard sessions and the bot↔web bridge (`REDISCLOUD_URL` is an alias). Without it the remote answers 503 and `/status` reports the bot offline |
+| `FLASK_DEBUG` | Optional | Enable the Werkzeug debugger (binds to `127.0.0.1` unless `FLASK_HOST` is set) |
+| `DATABASE_URL` | Optional | Postgres/SQLite URL (defaults to the SQLite file `data/zephyr.db`) |
+| `STORAGE_BACKEND` | Optional | AI-settings store: `auto` (database URL → Redis → `data/zephyr.db`), `database`, `redis`, `file` |
+| `SETTINGS_PATH` | Optional | `settings.json` fallback path, used only when the chosen backend is unreachable at startup |
+| `DB_AUTO_CREATE` / `DB_ECHO` | Optional | Create missing tables at startup (default on) / log SQL (default off) |
 | `DISCORD_CLIENT_ID` | Dashboard | OAuth2 client ID (same application as the bot) |
 | `DISCORD_CLIENT_SECRET` | Dashboard | OAuth2 client secret |
 | `WEB_PUBLIC_URL` | Optional | Public dashboard origin; Render supplies `RENDER_EXTERNAL_URL` |
@@ -278,12 +280,16 @@ All secrets live in `.env` (see `.env.example`).
 | `SESSION_TTL_SECONDS` / `SESSION_MAX_AGE_SECONDS` | Optional | Sliding lifetime and hard cap |
 | `AUTH_COOKIE_SECURE` | Optional | Auto-on for `https://` origins |
 | `GUILDS_FRESH_SECONDS` | Optional | Guild-list freshness window |
-| `TRUST_PROXY_HEADERS` | Optional | Trust `X-Forwarded-*`; auto-on under Render |
+| `TRUST_PROXY_HEADERS` | Optional | Trust `X-Forwarded-*`; auto-on under Render (`RENDER` is set) |
+| `AUTH_COOKIE_NAME` / `CSRF_COOKIE_NAME` | Optional | Cookie names (default `zephyr_session` / `zephyr_csrf`) |
+| `DISCORD_INVITE_PERMISSIONS` | Optional | Permissions bitfield for the invite link |
 
-Leaving all three dashboard variables unset serves the public weather site only. Setting some but not
-all of them raises at startup.
+Leaving `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET` unset serves the public weather site only.
+Setting just one of them, or both without `REDIS_URL`, raises at startup; `REDIS_URL` alone does not.
 
-`settings.json` stores per-server/DM AI preferences locally; when `REDIS_URL` is set, the same JSON payload is stored in Redis for shared cloud state.
+Per-server/DM AI preferences are stored in the database (`ai_settings`), which is the SQLite file
+`data/zephyr.db` unless `DATABASE_URL` is set. `settings.json` is only a fallback, and
+`python -m scripts.import_settings` migrates an old one.
 
 ---
 
@@ -316,13 +322,13 @@ Detailed scope per phase: [`WEB_DASHBOARD_PLAN.md`](WEB_DASHBOARD_PLAN.md) §6.
 
 **Committed — phased build (tracked as tasks #1–#8)**
 
-- [x] Support local and cloud deployment (Docker, Render, Vercel, AWS).
-- [ ] **Phase 0** — Move `settings.json` to Postgres (SQLAlchemy 2.0 + Alembic). *Fixes a live
+- [x] Support local and cloud deployment (Docker, Render, Heroku, AWS). Serverless was dropped.
+- [x] **Phase 0** — Move `settings.json` to Postgres (SQLAlchemy 2.0 + Alembic). *Fixes a live
       bug: the file does not survive an ephemeral filesystem, so per-guild settings are lost on
       every cloud deploy.*
-- [ ] **Phase 1** — React + Vite + TypeScript + Tailwind v4 + shadcn frontend with an
+- [x] **Phase 1** — React + Vite + TypeScript + Tailwind v4 + shadcn frontend with an
       iOS-style design system (materials, stacked shadows, spring physics, widget grid).
-- [ ] **Phase 2** — Versioned JSON API (`/api/v1/*`), migrate the website to Open-Meteo,
+- [x] **Phase 2** — Versioned JSON API (`/api/v1/*`), migrate the website to Open-Meteo,
       ship the public weather PWA with a ⌘K palette over every command.
 - [x] **Phase 3** — Discord OAuth2 login, Redis sessions, per-guild settings dashboard.
       *Ships sign-in, the guild picker and a **read-only** guild overview. Editing settings
@@ -341,7 +347,8 @@ Detailed scope per phase: [`WEB_DASHBOARD_PLAN.md`](WEB_DASHBOARD_PLAN.md) §6.
       per-session + `/summarize` per-user/guild cooldown), audit log reader
       (`GET /guilds/:id/audit` + dashboard view), tests (audit repo/API, `/summarize` cooldown,
       weather-scheduler delivery, and a Vitest frontend runner), and deployment cleanup
-      (automated `alembic upgrade head` pre-deploy step).
+      (an `alembic upgrade head` pre-deploy step in the Render Blueprint; other platforms run it
+      by hand).
 
 **Committed — post-release UX/UI phases**
 
@@ -405,7 +412,9 @@ keyboard-accessible reordering, Spotify import), `/g/:id/weather-alerts` (CRUD p
 time over the bridge.
 
 **Schema.** `playlists`, `playlist_tracks`, `audit_log` (Alembic `0002`); `weather_subs`,
-`bot_users` (Alembic `0003`). Guild settings moved to `zephyr/db/guild_settings.py` now that the bot
+`bot_users` (Alembic `0003`). Later revisions: AI conversations, messages and personas (`0004`),
+history management (`0005`), labels and annotations (`0006`), DM conversation ownership (`0007`) and
+a data migration claiming legacy DMs (`0008`). Guild settings moved to `zephyr/db/guild_settings.py` now that the bot
 reads `dj_role_id` too.
 
 Deliberate departures from the plan are recorded in
@@ -463,8 +472,8 @@ Deliberate departures from the plan are recorded in
 
 ## Appendix: Counts at a Glance
 
-- **Slash commands:** 75 (including aliases)
-- **Prefix commands:** 13
+- **Slash commands:** 78 (including aliases)
+- **Prefix commands:** 14 (13 weather lookups + `help`)
 - **Cogs:** 6
-- **Entry points:** 2 (`run_bot.py`, `run_web.py`)
+- **Entry points:** 3 (`run_bot.py`, `run_web.py`, `wsgi.py`)
 - **External data providers:** 3 (Open-Meteo, OpenWeatherMap, Google Gemini)
