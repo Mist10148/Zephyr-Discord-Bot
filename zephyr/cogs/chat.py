@@ -127,6 +127,15 @@ def _cache_image(prompt: str, files, text):
     image_gen_cache_order.append(prompt)
 
 
+def _not_saved_embed() -> discord.Embed:
+    # Previously "✅ Settings Updated!" was shown whether or not the save worked.
+    return discord.Embed(
+        title="⚠️ Not saved",
+        description="This change applies until the bot restarts, but it could not be stored. Try again later.",
+        color=discord.Color.orange(),
+    )
+
+
 class ChatCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -187,7 +196,10 @@ class ChatCog(commands.Cog):
                 user_id=interaction.user.id,
                 settings={"ai_model": ai_model.value, "response_format": response_format.value},
             )
-            await asyncio.to_thread(save_user_settings)
+            saved = await asyncio.to_thread(save_user_settings)
+        if not saved:
+            await interaction.followup.send(embed=_not_saved_embed(), ephemeral=True)
+            return
         embed = discord.Embed(
             title="✅ Settings Updated!",
             description="Your preferences have been saved for this context (Server or DM).",
@@ -213,7 +225,10 @@ class ChatCog(commands.Cog):
             current = get_context_settings(server_id, interaction.user.id)
             current["response_format"] = format.value
             set_context_settings(server_id=server_id, user_id=interaction.user.id, settings=current)
-            await asyncio.to_thread(save_user_settings)
+            saved = await asyncio.to_thread(save_user_settings)
+        if not saved:
+            await interaction.followup.send(embed=_not_saved_embed(), ephemeral=True)
+            return
         await interaction.followup.send(
             embed=discord.Embed(
                 title="✅ Output Format Updated",

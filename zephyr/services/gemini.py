@@ -142,8 +142,14 @@ def normalize_context_settings(settings):
     return normalized
 
 
+# False until a load has succeeded.  While False, save_user_settings refuses to
+# write: save() replaces the whole stored document, so saving an in-memory copy
+# that was never loaded would delete every other context's settings.
+_settings_loaded = False
+
+
 def load_user_settings():
-    global settings_store, user_settings
+    global settings_store, user_settings, _settings_loaded
     settings_store = {}
     user_settings = {}
     try:
@@ -151,19 +157,46 @@ def load_user_settings():
     except Exception as exc:
         print(f"Failed to load settings: {exc}")
         settings_store = {}
+        _settings_loaded = False
         return
+    _settings_loaded = True
+    _absorb_stored_settings(settings_store)
 
-    nested = settings_store.get("user_settings", {})
+
+def _absorb_stored_settings(store, *, keep_existing=False):
+    """Copy the contexts in a stored document into ``user_settings``.
+
+    ``keep_existing`` leaves contexts already in memory alone -- those are
+    changes made while storage was unreachable, and they are newer.
+    """
+    def put(key, value):
+        if keep_existing and key in user_settings:
+            return
+        user_settings[key] = normalize_context_settings(value)
+
+    nested = store.get("user_settings", {})
     if isinstance(nested, dict):
         for key, value in nested.items():
-            user_settings[key] = normalize_context_settings(value)
-    for key, value in settings_store.items():
+            put(key, value)
+    for key, value in store.items():
         if isinstance(value, dict) and ("ai_model" in value or "response_format" in value):
-            user_settings[key] = normalize_context_settings(value)
+            put(key, value)
 
 
-def save_user_settings():
-    global settings_store
+def save_user_settings() -> bool:
+    """Persist every context's settings.  Returns False when nothing was saved."""
+    global settings_store, _settings_loaded
+    if not _settings_loaded:
+        # Boot-time load failed.  Try again now, and merge what is stored under
+        # the changes made since, rather than overwriting it with them.
+        try:
+            stored = storage.load()
+        except Exception as exc:
+            print(f"Refusing to save settings: the stored settings could not be read ({exc}).")
+            return False
+        settings_store = stored if isinstance(stored, dict) else {}
+        _absorb_stored_settings(settings_store, keep_existing=True)
+        _settings_loaded = True
     payload = dict(settings_store) if isinstance(settings_store, dict) else {}
     nested = payload.get("user_settings", {})
     if not isinstance(nested, dict):
@@ -174,9 +207,11 @@ def save_user_settings():
     payload["user_settings"] = nested
     try:
         storage.save(payload)
-        settings_store = payload
     except Exception as e:
         print(f"Failed to save settings: {e}")
+        return False
+    settings_store = payload
+    return True
 
 
 def get_context_key(server_id=None, user_id=None):

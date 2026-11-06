@@ -2,6 +2,11 @@
 
 All implementations intentionally expose the same small synchronous interface:
 ``load()`` returns a settings document and ``save()`` replaces it completely.
+
+Both *raise* on failure.  They used to log and return ``{}`` / ``None``, which
+made an unreachable database at boot indistinguishable from an empty one --
+and because ``save()`` replaces the whole document, the next settings change
+then wiped every other guild's stored settings.
 The bot imports this module before an event loop exists, so the database layer
 must remain synchronous.
 """
@@ -50,23 +55,20 @@ class FileStorage(BaseStorage):
     def load(self) -> dict:
         if not os.path.exists(self.path):
             return {}
-        try:
-            with open(self.path, "r", encoding="utf-8") as file:
-                data = json.load(file)
-            return data if isinstance(data, dict) else {}
-        except Exception as exc:
-            print(f"[Storage] Failed to load {self.path}: {exc}")
-            return {}
+        with open(self.path, "r", encoding="utf-8") as file:
+            data = json.load(file)
+        return data if isinstance(data, dict) else {}
 
     def save(self, data: dict) -> None:
-        try:
-            directory = os.path.dirname(self.path)
-            if directory:
-                os.makedirs(directory, exist_ok=True)
-            with open(self.path, "w", encoding="utf-8") as file:
-                json.dump(data, file, indent=4)
-        except Exception as exc:
-            print(f"[Storage] Failed to save {self.path}: {exc}")
+        directory = os.path.dirname(self.path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        # Write-then-rename, so a crash mid-write cannot leave a truncated file
+        # that the next load() would refuse.
+        temporary = f"{self.path}.tmp"
+        with open(temporary, "w", encoding="utf-8") as file:
+            json.dump(data, file, indent=4)
+        os.replace(temporary, self.path)
 
 
 class RedisStorage(BaseStorage):
@@ -81,20 +83,14 @@ class RedisStorage(BaseStorage):
         self.client.ping()
 
     def load(self) -> dict:
-        try:
-            raw = self.client.get(self.KEY)
-            if not raw:
-                return {}
-            return json.loads(raw.decode("utf-8"))
-        except Exception as exc:
-            print(f"[Storage] Failed to load from Redis: {exc}")
+        raw = self.client.get(self.KEY)
+        if not raw:
             return {}
+        data = json.loads(raw.decode("utf-8"))
+        return data if isinstance(data, dict) else {}
 
     def save(self, data: dict) -> None:
-        try:
-            self.client.set(self.KEY, json.dumps(data, indent=4))
-        except Exception as exc:
-            print(f"[Storage] Failed to save to Redis: {exc}")
+        self.client.set(self.KEY, json.dumps(data, indent=4))
 
     def close(self) -> None:
         try:
@@ -153,43 +149,36 @@ class DatabaseStorage(BaseStorage):
             pass
 
     def load(self) -> dict:
-        try:
-            with self.engine.connect() as connection:
-                contexts = connection.execute(
-                    select(AISettings.context_key, AISettings.data).order_by(AISettings.context_key)
-                ).all()
-                state = connection.execute(
-                    select(AppState.key, AppState.data).order_by(AppState.key)
-                ).all()
-            if not contexts and not state:
-                return {}
-            nested = {key: copy.deepcopy(value) for key, value in contexts}
-            result: dict[str, object] = {"user_settings": copy.deepcopy(nested)}
-            result.update({key: copy.deepcopy(value) for key, value in state})
-            result.update(copy.deepcopy(nested))
-            return result
-        except Exception as exc:
-            print(f"[Storage] Failed to load from database: {exc}")
+        with self.engine.connect() as connection:
+            contexts = connection.execute(
+                select(AISettings.context_key, AISettings.data).order_by(AISettings.context_key)
+            ).all()
+            state = connection.execute(
+                select(AppState.key, AppState.data).order_by(AppState.key)
+            ).all()
+        if not contexts and not state:
             return {}
+        nested = {key: copy.deepcopy(value) for key, value in contexts}
+        result: dict[str, object] = {"user_settings": copy.deepcopy(nested)}
+        result.update({key: copy.deepcopy(value) for key, value in state})
+        result.update(copy.deepcopy(nested))
+        return result
 
     def save(self, data: dict) -> None:
-        try:
-            contexts, app_state = self._decompose(data)
-            with self.engine.begin() as connection:
-                connection.execute(delete(AISettings))
-                connection.execute(delete(AppState))
-                if contexts:
-                    connection.execute(
-                        AISettings.__table__.insert(),
-                        [{"context_key": key, "data": value} for key, value in contexts.items()],
-                    )
-                if app_state:
-                    connection.execute(
-                        AppState.__table__.insert(),
-                        [{"key": key, "data": value} for key, value in app_state.items()],
-                    )
-        except Exception as exc:
-            print(f"[Storage] Failed to save to database: {exc}")
+        contexts, app_state = self._decompose(data)
+        with self.engine.begin() as connection:
+            connection.execute(delete(AISettings))
+            connection.execute(delete(AppState))
+            if contexts:
+                connection.execute(
+                    AISettings.__table__.insert(),
+                    [{"context_key": key, "data": value} for key, value in contexts.items()],
+                )
+            if app_state:
+                connection.execute(
+                    AppState.__table__.insert(),
+                    [{"key": key, "data": value} for key, value in app_state.items()],
+                )
 
     def close(self) -> None:
         self.engine.dispose()
