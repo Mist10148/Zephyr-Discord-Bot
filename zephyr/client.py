@@ -312,12 +312,28 @@ class ZephyrBot(commands.Bot):
                 await channel.send(embed=welcome_embed)
                 break
 
+    def _addresses_bot(self, message) -> bool:
+        """Whether a guild message is actually talking to the bot.
+
+        Not ClientUser.mentioned_in(): that is True for every @everyone/@here,
+        which made the bot answer (and spend Gemini quota on) every
+        announcement in every server.  And reference.resolved can be a
+        DeletedReferencedMessage, which has no .author -- replying to a deleted
+        message used to crash this handler before commands were processed.
+        """
+        if self.user in message.mentions:
+            return True
+        me = message.guild.me if message.guild else None
+        if me is not None and any(role in me.roles for role in message.role_mentions):
+            return True
+        resolved = message.reference.resolved if message.reference else None
+        return isinstance(resolved, discord.Message) and resolved.author == self.user
+
     async def on_message(self, message):
         if message.author == self.user:
             return
-        is_reply_to_bot = message.reference and message.reference.resolved and message.reference.resolved.author == self.user
         in_dm = isinstance(message.channel, discord.DMChannel)
-        if not (self.user.mentioned_in(message) or is_reply_to_bot or in_dm):
+        if not (self._addresses_bot(message) or in_dm):
             await self.process_commands(message)
             return
 
@@ -330,7 +346,7 @@ class ZephyrBot(commands.Bot):
                 if attachment.content_type and attachment.content_type.startswith("image/"):
                     image_url = attachment.url
                 elif attachment.filename.endswith(".txt"):
-                    text_content = (await attachment.read()).decode("utf-8")
+                    text_content = (await attachment.read()).decode("utf-8", errors="replace")
             clean_message = message.content.replace(f"<@!{self.user.id}>", "").replace(f"<@{self.user.id}>", "").strip()
             final_message = text_content or clean_message
             if not final_message and not image_url:
