@@ -1,5 +1,6 @@
 """Shared Open-Meteo helpers used by both Discord and the public API."""
 
+import re
 from datetime import datetime, timezone, timedelta
 import threading
 from typing import Any
@@ -54,6 +55,35 @@ def get_tcws_description(wind_speed):
     if wind_speed >= 62: return "TCWS Level 2: Threatening Typhoon"
     if wind_speed >= 30: return "TCWS Level 1: Tropical Cyclone Winds"
     return "No Tropical Cyclone Wind Signal"
+
+
+_TCWS_LABELS = {
+    1: "TCWS Level 1: Tropical Cyclone Winds",
+    2: "TCWS Level 2: Threatening Typhoon",
+    3: "TCWS Level 3: Destructive Typhoon",
+    4: "TCWS Level 4: Very Destructive",
+    5: "TCWS Level 5: Extremely Dangerous",
+}
+_TCWS_PATTERN = re.compile(
+    r"(?:signal\s*(?:no\.?|number|#)\s*|tcws\s*(?:no\.?|#|level)?\s*)([1-5])",
+    re.IGNORECASE,
+)
+
+
+def tcws_from_alert(alert: dict) -> str:
+    """The wind signal an alert announces, read from its own text.
+
+    OpenWeatherMap alerts carry no wind speed, so the old code passed 0 (or a
+    field that does not exist) to get_tcws_description and every typhoon alert
+    -- however severe -- said "No Tropical Cyclone Wind Signal".  PAGASA
+    bulletins name the signal ("Signal No. 3", "TCWS #2"); use the highest one
+    mentioned, and say so honestly when none is.
+    """
+    text = f"{alert.get('event', '')} {alert.get('description', '')}"
+    levels = [int(match) for match in _TCWS_PATTERN.findall(text)]
+    if levels:
+        return _TCWS_LABELS[max(levels)]
+    return "Signal level not stated in this alert; check the latest PAGASA bulletin."
 
 
 def _format_datetime_pht(timestamp: int) -> str:
