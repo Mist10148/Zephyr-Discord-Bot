@@ -133,7 +133,7 @@ async def test_compaction_replaces_summary_instead_of_appending(monkeypatch, iso
     summarizer_inputs = []
     monkeypatch.setattr(gemini.ai_db, "load_conversation", lambda channel_id: _conversation(22, "old summary"))
     monkeypatch.setattr(gemini.ai_db, "append_exchange", lambda *args, **kwargs: None)
-    monkeypatch.setattr(gemini.ai_db, "compact_conversation", lambda channel_id, summary: compacted.append(summary))
+    monkeypatch.setattr(gemini.ai_db, "compact_conversation", lambda channel_id, summary, **kwargs: compacted.append(summary))
     monkeypatch.setattr(gemini, "count_input_tokens", _one_token)
 
     async def respond(model_name, contents, input_tokens, system_personality):
@@ -182,7 +182,7 @@ async def test_failed_summarization_keeps_previous_summary(monkeypatch, isolated
     compacted = []
     monkeypatch.setattr(gemini.ai_db, "load_conversation", lambda channel_id: _conversation(22, "old summary"))
     monkeypatch.setattr(gemini.ai_db, "append_exchange", lambda *args, **kwargs: None)
-    monkeypatch.setattr(gemini.ai_db, "compact_conversation", lambda channel_id, summary: compacted.append(summary))
+    monkeypatch.setattr(gemini.ai_db, "compact_conversation", lambda channel_id, summary, **kwargs: compacted.append(summary))
     monkeypatch.setattr(gemini, "count_input_tokens", _one_token)
 
     async def respond(model_name, contents, input_tokens, system_personality):
@@ -246,3 +246,41 @@ async def test_empty_response_logs_reason(monkeypatch, capsys):
 
     assert result["empty_response"] is True
     assert "model-x: empty response (block_reason=PROHIBITED_CONTENT finish_reason=SAFETY)" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_a_compaction_failure_does_not_discard_a_stored_reply(monkeypatch, isolated_generation):
+    """The exchange is already durable by then; the user should get the answer."""
+    monkeypatch.setattr(gemini.ai_db, "load_conversation", lambda channel_id: _conversation(22, "old"))
+    monkeypatch.setattr(gemini.ai_db, "append_exchange", lambda *args, **kwargs: None)
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(gemini.ai_db, "compact_conversation", explode)
+    monkeypatch.setattr(gemini, "count_input_tokens", _one_token)
+
+    async def respond(model_name, contents, input_tokens, system_personality):
+        return {"ok": True, "response_text": "merged" if system_personality.startswith("Merge") else "answer"}
+
+    monkeypatch.setattr(gemini, "try_generate_with_model", respond)
+
+    assert await gemini.generate_gemini_response(None, 5, "hi", channel_id="dm-6") == "answer"
+
+
+@pytest.mark.asyncio
+async def test_a_persona_lookup_failure_still_answers(monkeypatch, isolated_generation):
+    def explode(*args, **kwargs):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(gemini.ai_db, "get_default_persona", explode)
+    monkeypatch.setattr(gemini.ai_db, "load_conversation", lambda channel_id: None)
+    monkeypatch.setattr(gemini.ai_db, "append_exchange", lambda *args, **kwargs: None)
+    monkeypatch.setattr(gemini, "count_input_tokens", _one_token)
+
+    async def respond(model_name, contents, input_tokens, system_personality):
+        return {"ok": True, "response_text": "answer"}
+
+    monkeypatch.setattr(gemini, "try_generate_with_model", respond)
+
+    assert await gemini.generate_gemini_response(1, 5, "hi", channel_id="7") == "answer"

@@ -442,7 +442,7 @@ def _clear_bot_memory_cache(guild_id, channel_id):
     if not redis_url:
         return
     try:
-        bridge.send_command("ai.memory.purge", guild_id=guild_id, actor_id=g.zephyr_session.user_id, args={"channel_id": str(channel_id)}, timeout=MEMORY_CACHE_TIMEOUT, url=redis_url)
+        bridge.send_command("ai.memory.purge", guild_id=guild_id, actor_id=g.zephyr_session.user_id, args={"scope": "guild", "channel_id": str(channel_id)}, timeout=MEMORY_CACHE_TIMEOUT, url=redis_url)
     except Exception as exc:
         print(f"[AI] Could not clear the bot's memory buffer for channel {channel_id}: {exc}")
 

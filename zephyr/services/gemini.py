@@ -600,8 +600,13 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
 
     # A guild persona is additive: it can shape the reply but does not replace
     # the bot's baseline instructions or a user's selected model/output format.
+    persona = None
     if server_id:
-        persona = await asyncio.to_thread(ai_db.get_default_persona, server_id)
+        try:
+            persona = await asyncio.to_thread(ai_db.get_default_persona, server_id)
+        except Exception as exc:
+            # A database blip must not cost the user their reply entirely.
+            print(f"[Gemini warning] Could not load the persona for guild {server_id}: {exc}")
         if persona:
             system_personality += "\n\nGuild persona (follow when compatible with higher-priority instructions):\n" + persona["system_prompt"]
 
@@ -643,23 +648,20 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
                     {"role": "model", "text": bot_response},
                 ]
                 if channel_id:
+                    # A failed durable write still fails the reply (see
+                    # test_durable_write_error_does_not_publish_in_memory_turn):
+                    # history must never hold a turn the user never saw.
                     await asyncio.to_thread(
                         ai_db.append_exchange, channel_id, server_id, user_input or "", bot_response,
                         owner_id=str(user_id), token_count=input_tokens,
                     )
-                    # Keep durable context bounded. The generated summary retains
-                    # the older discussion without treating ordinary channel chat
-                    # as memory or repeatedly sending an unbounded transcript.
-                    conversation = await asyncio.to_thread(ai_db.load_conversation, channel_id)
-                    if conversation and len(conversation["messages"]) > MEMORY_COMPACTION_MESSAGES:
-                        prior = conversation.get("rolling_summary") or ""
-                        old = conversation["messages"][:-MAX_HISTORY_MESSAGES]
-                        summary = await summarize_conversation_memory(server_id, user_id, prior, old)
-                        if summary:
-                            await asyncio.to_thread(ai_db.compact_conversation, channel_id, summary)
-                        else:
-                            # Keep the old turns and summary; the next exchange retries.
-                            print(f"[Gemini warning] Memory compaction skipped for channel {channel_id}: summarization failed")
+                    # Compaction, though, runs after the turn is already stored,
+                    # so its failure must not turn a delivered answer into an error.
+                    try:
+                        await _compact_memory(channel_id, server_id, user_id)
+                    except Exception as exc:
+                        print(f"[Gemini warning] Memory compaction failed for channel {channel_id}: {exc}")
+                        traceback.print_exc()
                 save_history_for_context(server_id, user_id, updated_history)
                 return bot_response
             if result.get("message"):
@@ -674,6 +676,28 @@ async def generate_gemini_response(server_id, user_id, user_input, image_url=Non
         print(f"[Gemini error] {selected_model}: {exc}")
         traceback.print_exc()
         return "An unexpected error occurred while generating a response. Please try again in a moment."
+
+
+async def _compact_memory(channel_id, server_id, user_id):
+    # Keep durable context bounded. The generated summary retains the older
+    # discussion without treating ordinary channel chat as memory or
+    # repeatedly sending an unbounded transcript.
+    conversation = await asyncio.to_thread(ai_db.load_conversation, channel_id)
+    if conversation and len(conversation["messages"]) > MEMORY_COMPACTION_MESSAGES:
+        prior = conversation.get("rolling_summary") or ""
+        old = conversation["messages"][:-MAX_HISTORY_MESSAGES]
+        summary = await summarize_conversation_memory(server_id, user_id, prior, old)
+        if summary:
+            # Delete only what the summary covers: exchanges appended while it
+            # was being generated would otherwise be dropped unsummarised.
+            ids = [message.get("id") for message in old]
+            await asyncio.to_thread(
+                ai_db.compact_conversation, channel_id, summary,
+                summarised_ids=ids if all(ids) else None,
+            )
+        else:
+            # Keep the old turns and summary; the next exchange retries.
+            print(f"[Gemini warning] Memory compaction skipped for channel {channel_id}: summarization failed")
 
 
 async def reset_conversation(server_id, user_id, channel_id):

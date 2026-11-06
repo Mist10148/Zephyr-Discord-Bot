@@ -219,3 +219,41 @@ def test_dm_summary_edit_is_owner_scoped_and_bounded(db_url):
 
     assert ai.set_dm_summary("30", "100", "   ", database_url=db_url)["rolling_summary"] is None
     assert ai.load_conversation("30", database_url=db_url)["rolling_summary"] is None
+
+
+def test_compaction_only_deletes_the_turns_that_were_summarised(db_url):
+    """Exchanges appended while the summary was being generated must survive."""
+    for index in range(6):
+        ai.append_exchange("60", "1", f"question {index}", f"answer {index}", database_url=db_url)
+    snapshot = ai.load_conversation("60", database_url=db_url)["messages"]
+    summarised = [message["id"] for message in snapshot[:-4]]  # 8 oldest
+
+    # Two more exchanges land while Gemini is summarising.
+    for index in range(6, 8):
+        ai.append_exchange("60", "1", f"question {index}", f"answer {index}", database_url=db_url)
+
+    assert ai.compact_conversation("60", "Summary", keep_messages=4, summarised_ids=summarised, database_url=db_url)
+    remaining = [message["content"] for message in ai.load_conversation("60", database_url=db_url)["messages"]]
+    # The 4 turns that were "recent" at snapshot time were never summarised, so
+    # they are kept even though they are now outside the newest-4 window.
+    assert remaining[:2] == ["question 4", "answer 4"]
+    assert len(remaining) == 8
+
+
+def test_a_racing_first_message_does_not_lose_the_exchange(db_url, monkeypatch):
+    """The loser of a concurrent first insert retries instead of raising."""
+    from sqlalchemy.exc import IntegrityError
+
+    real = ai._append_exchange_once
+    calls = {"count": 0}
+
+    def flaky(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise IntegrityError("insert", {}, Exception("UNIQUE constraint failed"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(ai, "_append_exchange_once", flaky)
+    ai.append_exchange("61", "1", "hello", "hi", database_url=db_url)
+
+    assert len(ai.load_conversation("61", database_url=db_url)["messages"]) == 2

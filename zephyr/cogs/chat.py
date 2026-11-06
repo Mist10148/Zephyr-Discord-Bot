@@ -142,10 +142,16 @@ class ChatCog(commands.Cog):
         dashboard purge is undone by the next message in the guild, because the
         read path falls back to the buffer whenever a channel has no row.
         """
-        if guild is None:
+        # Branch on the scope the caller *asked* for, never on guild being None:
+        # get_guild() is also None when the bot has left (or not yet cached) the
+        # guild, and treating that as a DM purge wiped the admin's own DM memory.
+        if args.get("scope") == "dm":
             if not actor_id:
                 raise LookupError("A DM owner is required.")
             return {"cleared": clear_history_for_context(None, int(actor_id))}
+        if guild is None:
+            # Not in that guild, so there is no buffer for it to drop.
+            return {"cleared": False}
         return {"cleared": clear_history_for_context(guild.id, None)}
 
     async def _bridge_usage(self, guild, actor_id, args):

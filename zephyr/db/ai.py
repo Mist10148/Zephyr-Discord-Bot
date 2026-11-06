@@ -1,6 +1,7 @@
 """Persistence for AI conversations, history management, and guild personas."""
 
 from sqlalchemy import and_, delete, desc, exists, func, insert, select, update
+from sqlalchemy.exc import IntegrityError
 
 from zephyr.db.models import (
     AIConversation,
@@ -133,6 +134,21 @@ def append_exchange(
     token_count=0,
     database_url=None,
 ):
+    # Two first messages in a new channel can both see "no conversation" and
+    # both insert one; the loser hits the unique channel_id.  Retry once, when
+    # the winner's row is visible, rather than throwing away a generated reply.
+    for attempt in range(2):
+        try:
+            return _append_exchange_once(
+                channel_id, guild_id, user_text, model_text,
+                owner_id=owner_id, token_count=token_count, database_url=database_url,
+            )
+        except IntegrityError:
+            if attempt:
+                raise
+
+
+def _append_exchange_once(channel_id, guild_id, user_text, model_text, *, owner_id, token_count, database_url):
     engine = get_engine(database_url)
     with engine.begin() as conn:
         row = conn.execute(select(AIConversation).where(AIConversation.channel_id == str(channel_id))).mappings().first()
@@ -190,8 +206,14 @@ def claim_dm_conversation(channel_id, owner_id, *, database_url=None):
         ).rowcount > 0
 
 
-def compact_conversation(channel_id, summary, *, keep_messages=10, database_url=None):
-    """Atomically retain the recent dialogue and replace older turns by a summary."""
+def compact_conversation(channel_id, summary, *, keep_messages=10, summarised_ids=None, database_url=None):
+    """Atomically retain the recent dialogue and replace older turns by a summary.
+
+    ``summarised_ids`` are the message ids the summary was actually built from.
+    Summarising takes seconds, and exchanges appended meanwhile shift the
+    "older than the last keep_messages" window; without this, rows that were
+    never summarised were deleted and lost.
+    """
     engine = get_engine(database_url)
     with engine.begin() as conn:
         conversation = conn.execute(select(AIConversation).where(AIConversation.channel_id == str(channel_id))).mappings().first()
@@ -199,6 +221,9 @@ def compact_conversation(channel_id, summary, *, keep_messages=10, database_url=
             return False
         rows = conn.execute(select(AIMessage.id).where(AIMessage.conversation_id == conversation["id"]).order_by(AIMessage.created_at, AIMessage.id)).all()
         old_ids = [row.id for row in rows[:-keep_messages]]
+        if summarised_ids is not None:
+            allowed = {int(message_id) for message_id in summarised_ids}
+            old_ids = [message_id for message_id in old_ids if message_id in allowed]
         if not old_ids:
             return False
         conn.execute(delete(AIMessage).where(AIMessage.id.in_(old_ids)))
@@ -463,6 +488,16 @@ def edit_message(
             raise AIConflictError("This message was edited by someone else. Reload it and try again.")
         if content == row["content"]:
             return dict(row)
+        # Compare-and-set: the version check above is a plain read, so a
+        # concurrent editor can win between it and here.  Only record the
+        # revision once this write is known to be the one that landed.
+        changed = conn.execute(
+            update(AIMessage)
+            .where(AIMessage.id == row["id"], AIMessage.version == row["version"])
+            .values(content=content, version=row["version"] + 1, edited_at=func.now())
+        ).rowcount
+        if changed != 1:
+            raise AIConflictError("This message was edited by someone else. Reload it and try again.")
         conn.execute(
             insert(AIMessageRevision).values(
                 message_id=row["id"],
@@ -471,11 +506,6 @@ def edit_message(
                 replacement_content=content,
                 reason=reason,
             )
-        )
-        conn.execute(
-            update(AIMessage)
-            .where(AIMessage.id == row["id"], AIMessage.version == row["version"])
-            .values(content=content, version=row["version"] + 1, edited_at=func.now())
         )
         updated = conn.execute(
             select(AIMessage).where(AIMessage.id == row["id"])
@@ -525,16 +555,7 @@ def redact_message(guild_id, channel_id, message_id, *, editor_id, reason=None, 
             return None
         if row["redacted_at"] is not None:
             return dict(row)
-        conn.execute(
-            insert(AIMessageRevision).values(
-                message_id=row["id"],
-                editor_id=str(editor_id),
-                previous_content=row["content"],
-                replacement_content=REDACTED_CONTENT,
-                reason=reason or "Administrative redaction",
-            )
-        )
-        conn.execute(
+        changed = conn.execute(
             update(AIMessage)
             .where(AIMessage.id == row["id"], AIMessage.version == row["version"])
             .values(
@@ -542,6 +563,17 @@ def redact_message(guild_id, channel_id, message_id, *, editor_id, reason=None, 
                 version=row["version"] + 1,
                 edited_at=func.now(),
                 redacted_at=func.now(),
+            )
+        ).rowcount
+        if changed != 1:
+            raise AIConflictError("This message was edited by someone else. Reload it and try again.")
+        conn.execute(
+            insert(AIMessageRevision).values(
+                message_id=row["id"],
+                editor_id=str(editor_id),
+                previous_content=row["content"],
+                replacement_content=REDACTED_CONTENT,
+                reason=reason or "Administrative redaction",
             )
         )
         updated = conn.execute(select(AIMessage).where(AIMessage.id == row["id"])).mappings().one()

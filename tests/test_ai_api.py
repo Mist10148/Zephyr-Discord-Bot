@@ -45,7 +45,8 @@ class TestPurgeMemory:
         assert ai_db.load_conversation("10", database_url=db_url) is None
         assert [command["action"] for command in seen] == ["ai.memory.purge"]
         assert seen[0]["guild_id"] == "1"
-        assert seen[0]["args"] == {"channel_id": "10"}
+        # Explicit scope: the bot must never infer "DM" from a guild it cannot see.
+        assert seen[0]["args"] == {"scope": "guild", "channel_id": "10"}
 
     def test_an_offline_bot_does_not_undo_a_completed_purge(self, client, logged_in, fake_redis, db_url):
         """Nothing answers the bridge, but the row is already gone, so this is a 204."""
