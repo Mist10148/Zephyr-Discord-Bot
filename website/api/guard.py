@@ -13,7 +13,7 @@ from flask import current_app, g, request
 
 from website.api import api, error, is_snowflake
 from website.session import SessionStoreError, load_session
-from zephyr.services import redis_client
+from zephyr.services import bridge, redis_client
 
 CSRF_HEADER = "X-Zephyr-CSRF"
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
@@ -59,6 +59,43 @@ def require_session(view):
     return wrapper
 
 
+BOT_AUTHORIZES = "_zephyr_bot_authorizes"
+
+
+def bot_authorizes(view):
+    """Mark a guild-scoped mutation that the bot authorizes itself.
+
+    Such a view sends its change over the bridge, and the bot checks the
+    actor's live permissions before acting, so a second round trip from
+    ``guild_scoped`` would only add latency.  Apply it *below* ``guild_scoped``.
+    """
+    setattr(view, BOT_AUTHORIZES, True)
+    return view
+
+
+def confirm_still_admin(guild_id, actor_id):
+    """Ask the bot whether the actor still has Manage Server.
+
+    Returns ``None`` when they do, otherwise the error response to send.  This
+    fails closed: the session's guild list was captured at sign-in and lives up
+    to AUTH_SESSION_MAX_AGE, so without the bot there is no current answer, and
+    someone who lost the permission would keep it for weeks.
+    """
+    redis_url = current_app.config["REDIS_URL"]
+    if not redis_url:
+        return error("bridge_not_configured", "This deployment has no Redis, so the bot cannot be reached.", 503)
+    try:
+        bridge.send_command("auth.manage_guild", guild_id=guild_id, actor_id=actor_id, url=redis_url)
+    except bridge.BridgeTimeout:
+        return error("bot_unreachable", "Zephyr must be online to change server settings.", 503)
+    except bridge.BridgeError as exc:
+        return error("forbidden", str(exc), 403)
+    except Exception as exc:
+        print(f"[Guard] Could not confirm Manage Server for {actor_id} in {guild_id}: {exc}")
+        return error("bridge_unavailable", "Could not reach Zephyr to confirm your permissions.", 503)
+    return None
+
+
 def guild_scoped(view):
     """Require a session and a guild the caller administers.
 
@@ -66,10 +103,13 @@ def guild_scoped(view):
     every per-guild endpoint was otherwise going to repeat: validate the id,
     load the session, check membership, hand the view the guild.
 
-    The membership check is UX, not authorization -- the plan is explicit that
-    the bot re-validates the actor against its live Discord cache before doing
-    anything.  A stale session here can only ever over-restrict.
+    Reads trust the session's guild list.  Mutations also ask the bot, via
+    ``confirm_still_admin``: the web tier writes settings, weather subscriptions
+    and AI data on its own authority, and the list is only as fresh as the
+    sign-in.  Views marked ``bot_authorizes`` skip that, because the bot checks
+    the actor itself before acting on them.
     """
+    live_check = not getattr(view, BOT_AUTHORIZES, False)
 
     @wraps(view)
     @require_session
@@ -80,6 +120,10 @@ def guild_scoped(view):
         guild = next((entry for entry in session.guilds if str(entry["id"]) == str(guild_id)), None)
         if guild is None:
             return error("forbidden", "You do not manage that server.", 403)
+        if live_check and request.method not in SAFE_METHODS:
+            refusal = confirm_still_admin(guild_id, session.user_id)
+            if refusal is not None:
+                return refusal
         g.zephyr_guild = guild
         return view(guild_id, *args, **kwargs)
 

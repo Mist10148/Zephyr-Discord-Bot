@@ -10,7 +10,7 @@ and is passed through verbatim, because the bot's reason is the true one.
 from flask import current_app, g, jsonify, request
 
 from website.api import api, error
-from website.api.guard import guild_scoped, rate_limit
+from website.api.guard import bot_authorizes, guild_scoped, rate_limit
 from zephyr.db import audit
 from zephyr.services import bridge
 
@@ -103,6 +103,7 @@ def get_player(guild_id: str):
 
 @api.post("/guilds/<guild_id>/player/<action>")
 @guild_scoped
+@bot_authorizes
 def post_player_action(guild_id: str, action: str):
     allowed = PLAYER_ACTIONS.get(action)
     if allowed is None:

@@ -246,6 +246,17 @@ def empty_api_caches():
         cache.clear()
 
 
+@pytest.fixture(autouse=True)
+def bot_confirms_admins(monkeypatch):
+    """Treat every guild mutation's live Manage Server check as passed.
+
+    ``guild_scoped`` asks the bot over the bridge before any change, and most
+    tests are about the change rather than that check, which has its own tests
+    in test_live_admin_check.py (they restore the real function).
+    """
+    monkeypatch.setattr("website.api.guard.confirm_still_admin", lambda guild_id, actor_id: None)
+
+
 @pytest.fixture
 def fake_redis(monkeypatch):
     """Route every get_client() call at one shared FakeRedis.

@@ -175,7 +175,7 @@ class ZephyrBot(commands.Bot):
         without a restart -- the cost is a dictionary build per command, which is
         nothing next to the round trip that produced it.
         """
-        actions = {"meta.guild": self._bridge_guild_meta}
+        actions = {"meta.guild": self._bridge_guild_meta, "auth.manage_guild": self._bridge_confirm_manager}
         for cog in self.cogs.values():
             provider = getattr(cog, "bridge_actions", None)
             if callable(provider):
@@ -207,6 +207,26 @@ class ZephyrBot(commands.Bot):
                 )
             except Exception as publish_error:
                 print(f"⚠️ Could not answer bridge command {command_id}: {publish_error}")
+
+    async def _bridge_confirm_manager(self, guild, actor_id, args):
+        """Confirm the actor still has Manage Server, from the live member cache.
+
+        The web tier's guild list is captured at sign-in and kept for the life
+        of the session, so it asks this before any change it makes on its own
+        authority.  Owners and administrators resolve to every permission, so
+        ``manage_guild`` covers them too.  An uncached member is refused rather
+        than fetched, as in the music cog: fetching would let an arbitrary id
+        force a Discord API call per request.
+        """
+        if guild is None:
+            raise LookupError("Zephyr is not in that server.")
+        try:
+            member = guild.get_member(int(actor_id))
+        except (TypeError, ValueError):
+            member = None
+        if member is None or not member.guild_permissions.manage_guild:
+            raise PermissionError("You no longer manage that server.")
+        return {"manage_guild": True}
 
     async def _bridge_guild_meta(self, guild, actor_id, args):
         """Text channels and roles, for the dashboard's pickers.
