@@ -818,6 +818,11 @@ class VoiceState:
         self._volume = 0.5
         self.skip_votes = set()
         self.manual_stop = False
+        # The source restart_current replaced.  Its after-callback still fires
+        # (on the player thread, at a time we do not control) and must be
+        # ignored whenever it arrives -- a boolean consumed by "the next
+        # callback" raced with fast restarts and skipped the track instead.
+        self._retired_source = None
         # The AudioPlayer after-callback runs in a worker thread.  It records a
         # failed FFmpeg source here before waking audio_player_task on the event
         # loop; the task owns the retry and all Discord API calls.
@@ -1097,28 +1102,39 @@ class VoiceState:
             if self._autoplay_enabled and not len(self.songs) and self.loop == 'off':
                 await self._extend_with_radio()
 
-            try:
-                if self.loop == 'track' and self.current:
-                    track = self.current            # replay the same track
-                else:
+            if self.loop == 'track' and self.current:
+                track = self.current            # replay the same track
+            else:
+                # Only the wait for a *queued* track is the idle timeout.  The
+                # extraction below raises asyncio.TimeoutError too (and on 3.11+
+                # so does a socket timeout); catching both in one handler made a
+                # slow YouTube lookup disconnect the bot and drop the queue.
+                try:
                     async with timeout(180 if not self._247_enabled else None):
                         track = await self.songs.get()
-                    self.current = track
-                    if self.loop == 'queue' and track:
-                        # Re-queue it so it plays again after everything else.
-                        self.songs.put_nowait(track)
+                except asyncio.TimeoutError:
+                    # cancel_player=False because we are *inside* the player
+                    # task: cancelling and awaiting ourselves only works by accident.
+                    await self.stop(cancel_player=False)
+                    self.exists = False
+                    return
+                self.current = track
+                if self.loop == 'queue' and track:
+                    # Re-queue it so it plays again after everything else.
+                    self.songs.put_nowait(track)
+
+            try:
                 source = await YTDLSource.from_track(track, ffmpeg_options=self.get_ffmpeg_options(),
                                                      volume=self._volume, loop=self.bot.loop)
-            except asyncio.TimeoutError:
-                # Idle timeout. cancel_player=False because we are *inside* the player
-                # task: cancelling and awaiting ourselves only works by accident.
-                await self.stop(cancel_player=False)
-                self.exists = False
-                return
             except Exception as e:
-                await self._notify(embed=discord.Embed(description=f'❌ Failed to load next track: {e}',
+                reason = 'the lookup timed out' if isinstance(e, asyncio.TimeoutError) else str(e)
+                await self._notify(embed=discord.Embed(description=f'❌ Failed to load **{track.title}**: {reason}',
                                                        color=discord.Color.red()))
                 traceback.print_exc()
+                # A track that cannot be loaded must not come round again: in
+                # queue-loop mode its re-queued copy kept the queue non-empty
+                # forever, re-extracting the dead video every few seconds.
+                self._remove_queued_track(track)
                 self.current = None
                 continue
 
@@ -1134,8 +1150,6 @@ class VoiceState:
             except Exception as e:
                 # The source owns a live ffmpeg process; if play() never took ownership
                 # of it, nothing else will ever clean it up.
-                if self.source is source:
-                    self.source = None
                 try:
                     source.cleanup()
                 except Exception:
@@ -1143,6 +1157,8 @@ class VoiceState:
                 await self._notify(content=f'An error occurred while playing: {e}')
                 traceback.print_exc()
                 self.play_next_song(e, source=source, track=track)
+                if self.source is source:
+                    self.source = None
 
             await self.next.wait()
 
@@ -1180,9 +1196,14 @@ class VoiceState:
         marshalled back onto the loop.  Calling it directly happened to work most of
         the time, which is the worst kind of bug.
 
-        ``manual_stop`` is read cross-thread too; it is safe only because
-        ``restart_current`` sets it *before* calling ``voice.stop()``.
+        ``_retired_source`` is read cross-thread too; it is safe because
+        ``restart_current`` sets it *before* calling ``voice.stop()`` and it is
+        matched by identity, so it does not matter when the callback lands.
         """
+        if source is not None and source is self._retired_source:
+            # The callback of a source restart_current replaced; not a track end.
+            self._retired_source = None
+            return
         if self.manual_stop:
             self.manual_stop = False
             return
@@ -1249,9 +1270,10 @@ class VoiceState:
             return
         elapsed = self.elapsed if preserve_position else 0.0
         track = self.current
-        # manual_stop must be set *before* voice.stop(), or the after-callback fires
-        # first and advances the queue instead of letting us replace the source.
-        self.manual_stop = True
+        # Retire the old source *before* voice.stop(), so its after-callback --
+        # whenever the player thread gets round to it -- is recognised and
+        # ignored instead of advancing the queue.
+        self._retired_source = self.source
         self.voice.stop()
         try:
             # The old source is reaped by discord.py: AudioPlayer.run cleans it up in a
@@ -1262,11 +1284,14 @@ class VoiceState:
             self.source = source
             self._current_position = elapsed
             self._current_start_time = time.time()
-            self.voice.play(source, after=self.play_next_song)
-            self.manual_stop = False
-        except Exception as e:
-            self.manual_stop = False
-            raise e
+            self.voice.play(source, after=lambda error: self.play_next_song(error, source=source, track=track))
+        except Exception:
+            # Nothing is playing now and the old callback is being ignored, so
+            # nobody else will wake audio_player_task: without this it waited on
+            # self.next forever and the guild stayed silent until /leave.
+            self.source = None
+            self.next.set()
+            raise
 
 
 class MusicCog(commands.Cog):
