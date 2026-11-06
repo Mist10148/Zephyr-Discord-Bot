@@ -123,5 +123,38 @@ class TestDigestDelivery:
         assert channel.sent == [] and fired == []
 
 
+class TestLoopSurvival:
+    """An exception escaping a tasks.loop body ends that loop for every guild."""
+
+    def test_an_evaluator_crash_is_contained(self, monkeypatch, fired):
+        def boom(*a, **k):
+            raise TypeError("'>=' not supported between 'float' and 'str'")
+
+        monkeypatch.setattr(cog_module, "evaluate", boom)
+        asyncio.run(WeatherAlertsCog(FakeBot(FakeChannel()))._deliver_safely(_sub(), dedupe=True))
+
+    def test_a_mark_fired_failure_is_contained(self, monkeypatch):
+        monkeypatch.setattr(cog_module, "get_openmeteo_bundle", lambda *a, **k: {"ok": True})
+        monkeypatch.setattr(cog_module, "evaluate", lambda *a, **k: ALERT)
+
+        def boom(*a, **k):
+            raise RuntimeError("database is locked")
+
+        monkeypatch.setattr(cog_module, "mark_fired", boom)
+        channel = FakeChannel()
+        asyncio.run(WeatherAlertsCog(FakeBot(channel))._deliver_safely(_sub(), dedupe=True))
+        assert len(channel.sent) == 1
+
+    def test_one_bad_row_does_not_stop_the_batch(self, monkeypatch, fired):
+        monkeypatch.setattr(cog_module, "evaluate", lambda *a, **k: ALERT)
+        channel = FakeChannel()
+        monkeypatch.setattr(cog_module, "list_watched", lambda: [_sub(id=1, channel_id="²"), _sub(id=2)])
+
+        asyncio.run(WeatherAlertsCog._watch_loop.coro(WeatherAlertsCog(FakeBot(channel))))
+
+        assert len(channel.sent) == 1
+        assert fired == [(2, "abc123")]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

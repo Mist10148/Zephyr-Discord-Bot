@@ -94,7 +94,7 @@ class WeatherAlertsCog(commands.Cog):
             print(f"[WeatherAlerts] Could not claim due subscriptions: {exc}")
             return
         for subscription in due:
-            await self._deliver(subscription)
+            await self._deliver_safely(subscription)
 
     @tasks.loop(minutes=15)
     async def _watch_loop(self):
@@ -109,12 +109,26 @@ class WeatherAlertsCog(commands.Cog):
             print(f"[WeatherAlerts] Could not read watched subscriptions: {exc}")
             return
         for subscription in watched:
-            await self._deliver(subscription, dedupe=True)
+            await self._deliver_safely(subscription, dedupe=True)
 
     @_digest_loop.before_loop
     @_watch_loop.before_loop
     async def _before_loops(self):
         await self.bot.wait_until_ready()
+
+    async def _deliver_safely(self, subscription: dict, *, dedupe: bool = False) -> None:
+        """_deliver, with a backstop the docstring below always promised.
+
+        An exception escaping a tasks.loop body stops that loop for good, so
+        one bad row (a malformed threshold, a transient error in mark_fired)
+        used to end severe-weather watches -- or daily digests -- for every
+        guild until the bot restarted.
+        """
+        try:
+            await self._deliver(subscription, dedupe=dedupe)
+        except Exception:
+            print(f"[WeatherAlerts] Subscription {subscription.get('id')} failed; continuing with the rest.")
+            traceback.print_exc()
 
     async def _deliver(self, subscription: dict, *, dedupe: bool = False) -> None:
         """Evaluate one subscription and post it if there is anything to say.
@@ -149,7 +163,12 @@ class WeatherAlertsCog(commands.Cog):
         if dedupe and alert["fingerprint"] == subscription.get("last_fingerprint"):
             return
 
-        channel = self.bot.get_channel(int(subscription["channel_id"]))
+        try:
+            channel_id = int(str(subscription["channel_id"]))
+        except (TypeError, ValueError):
+            print(f"[WeatherAlerts] Subscription {subscription['id']} has an invalid channel id.")
+            return
+        channel = self.bot.get_channel(channel_id)
         if channel is None:
             print(f"[WeatherAlerts] Channel {subscription['channel_id']} is not reachable.")
             return
