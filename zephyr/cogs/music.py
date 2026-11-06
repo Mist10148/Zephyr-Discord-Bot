@@ -823,6 +823,13 @@ class VoiceState:
         # ignored whenever it arrives -- a boolean consumed by "the next
         # callback" raced with fast restarts and skipped the track instead.
         self._retired_source = None
+        # One-shot intents for the next loop iteration.  A skip must move on
+        # even when loop=track (which otherwise replays self.current), and a
+        # stop must not be undone by loop=track or by autoplay refilling the
+        # queue it just cleared.
+        self._skip_requested = False
+        self._halt_requested = False
+        self._stopping = False
         # The AudioPlayer after-callback runs in a worker thread.  It records a
         # failed FFmpeg source here before waking audio_player_task on the event
         # loop; the task owns the retry and all Discord API calls.
@@ -1096,13 +1103,17 @@ class VoiceState:
         while True:
             self.next.clear()
             self.skip_votes.clear()
+            skipped, halted = self._skip_requested, self._halt_requested
+            self._skip_requested = self._halt_requested = False
+            if halted:
+                self.current = None
 
             # Refill before the idle timer starts, not after it fires: waiting
             # would disconnect the bot three minutes into an autoplay session.
-            if self._autoplay_enabled and not len(self.songs) and self.loop == 'off':
+            if self._autoplay_enabled and not halted and not len(self.songs) and self.loop == 'off':
                 await self._extend_with_radio()
 
-            if self.loop == 'track' and self.current:
+            if self.loop == 'track' and self.current and not skipped:
                 track = self.current            # replay the same track
             else:
                 # Only the wait for a *queued* track is the idle timeout.  The
@@ -1227,9 +1238,27 @@ class VoiceState:
             pass
 
     def skip(self):
+        """End the current track and move on -- even under loop=track."""
         self.skip_votes.clear()
         if self.is_playing:
+            self._skip_requested = True
             self.voice.stop()
+
+    def halt(self) -> bool:
+        """Stop playing and clear the queue, but stay connected.
+
+        Returns whether anything was playing.  Before this, /stop cleared the
+        queue and stopped the source, and the loop then replayed the current
+        track under loop=track, or refilled the queue from autoplay.
+        """
+        self.songs.clear()
+        self.skip_votes.clear()
+        if not self.is_playing:
+            self.current = None
+            return False
+        self._halt_requested = True
+        self.voice.stop()
+        return True
 
     async def stop(self, *, cancel_player: bool = True):
         """Clear the queue and disconnect.
@@ -1239,6 +1268,15 @@ class VoiceState:
         task, which only worked because the CancelledError happened to be delivered
         at that await and swallowed below.
         """
+        if self._stopping:
+            return
+        self._stopping = True
+        try:
+            await self._stop(cancel_player=cancel_player)
+        finally:
+            self._stopping = False
+
+    async def _stop(self, *, cancel_player: bool):
         self.songs.clear()
         self._loop_mode = 'off'
         self.manual_stop = False
@@ -1304,6 +1342,40 @@ class MusicCog(commands.Cog):
         self._dj_role_ids: dict[int, str] = {}
         creds = SpotifyClientCredentials(client_id=SPOTIFY_CLIENT_ID, client_secret=SPOTIFY_CLIENT_SECRET)
         self.sp = spotipy.Spotify(client_credentials_manager=creds)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        """Every music command needs a guild; in a DM ctx.guild.id raised."""
+        if interaction.guild is None:
+            await interaction.response.send_message("Music commands only work in a server.", ephemeral=True)
+            return False
+        return True
+
+    async def cog_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        """Give a failed check a readable reply rather than a silent failure."""
+        if isinstance(error, app_commands.CheckFailure):
+            if not interaction.response.is_done():
+                message = ("❌ You need the **Manage Server** permission for that."
+                           if isinstance(error, app_commands.MissingPermissions)
+                           else "❌ You can't use that here.")
+                await interaction.response.send_message(message, ephemeral=True)
+
+    @commands.Cog.listener()
+    async def on_voice_state_update(self, member, before, after):
+        """Tear the player down when the bot itself is disconnected from voice.
+
+        Without this a kick (or a channel deletion) left audio_player_task
+        running: every queued track was extracted, failed with "Not connected
+        to voice", retried once and dropped, two error messages apiece.
+        """
+        if self.bot.user is None or member.id != self.bot.user.id:
+            return
+        if before.channel is None or after.channel is not None:
+            return
+        state = self.peek_voice_state(member.guild.id)
+        if state is None or state.voice is None:
+            return
+        await state.stop()
+        state.exists = False
 
     def _get_voice_lock(self, guild_id: int) -> asyncio.Lock:
         return self._voice_connect_locks.setdefault(guild_id, asyncio.Lock())
@@ -1391,8 +1463,15 @@ class MusicCog(commands.Cog):
         guilds with a live state are published -- an idle bot writes nothing.
         """
         for guild_id in list(self.voice_states):
-            if self.peek_voice_state(guild_id) is not None:
-                await self.publish_state(guild_id)
+            state = self.peek_voice_state(guild_id)
+            if state is None:
+                continue
+            if state.voice is None and state.current is None and not len(state.songs):
+                # A state created by a read-only command (/queue, /volume...)
+                # in a guild that never played anything.  Publishing it every
+                # three seconds forever was exactly the "idle bot writes" case.
+                continue
+            await self.publish_state(guild_id)
 
     @_snapshot_loop.before_loop
     async def _before_snapshot_loop(self):
@@ -1568,9 +1647,7 @@ class MusicCog(commands.Cog):
     async def _bridge_stop(self, guild, actor_id, args):
         self._authorize(guild, actor_id)
         state = self._require_state(guild.id)
-        state.songs.clear()
-        if state.is_playing:
-            state.voice.stop()
+        state.halt()
         return {'stopped': True}
 
     async def _bridge_clear(self, guild, actor_id, args):
@@ -2029,9 +2106,7 @@ class MusicCog(commands.Cog):
     async def stop(self, interaction: discord.Interaction):
         ctx = await self._interaction_ctx(interaction)
         state = self.get_voice_state(ctx)
-        state.songs.clear()
-        if state.is_playing:
-            state.voice.stop()
+        if state.halt():
             await interaction.response.send_message(embed=discord.Embed(description='⏹️ Stopped and cleared queue.', color=discord.Color.red()))
         elif state.voice and state.voice.is_connected():
             await interaction.response.send_message(embed=discord.Embed(description='🧹 Queue cleared.', color=discord.Color.orange()))
@@ -2463,7 +2538,12 @@ class MusicCog(commands.Cog):
         The current track is included because "save this" means what is playing
         plus what is coming, not just the part nobody has heard yet.
         """
-        tracks = ([state.current] if state.current else []) + list(state.songs)
+        upcoming = list(state.songs)
+        if state.current is not None and state.loop == 'queue':
+            # Queue-loop re-appends the current track to the queue as it starts,
+            # so it is already in `upcoming`; listing it twice saved it twice.
+            upcoming = [track for track in upcoming if track is not state.current]
+        tracks = ([state.current] if state.current else []) + upcoming
         return [
             {'title': track.title, 'url': track.url,
              'duration_s': track.duration_seconds, 'source': track.source}
