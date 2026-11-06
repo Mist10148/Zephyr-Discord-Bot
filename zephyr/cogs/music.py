@@ -33,7 +33,7 @@ from spotipy.oauth2 import SpotifyClientCredentials
 
 from zephyr.config import REDIS_URL, SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET
 from zephyr.core.ffmpeg import FFMPEG_PATH
-from zephyr.db.guild_settings import read_dj_roles
+from zephyr.db.guild_settings import read_dj_roles, read_music_settings
 from zephyr.db.playlists import (
     PlaylistError,
     delete_playlist,
@@ -1340,13 +1340,27 @@ class MusicCog(commands.Cog):
         # guild id -> DJ role id.  Absent means "no DJ role configured", which is
         # a different rule rather than a stricter one; see _authorize.
         self._dj_role_ids: dict[int, str] = {}
+        # guild id -> {"default_volume": int|None, "music_channel_ids": [str]},
+        # from the dashboard's settings page.  Absent means bot defaults.
+        self._music_settings: dict[int, dict] = {}
         creds = SpotifyClientCredentials(client_id=SPOTIFY_CLIENT_ID, client_secret=SPOTIFY_CLIENT_SECRET)
         self.sp = spotipy.Spotify(client_credentials_manager=creds)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        """Every music command needs a guild; in a DM ctx.guild.id raised."""
+        """Every music command needs a guild, and the guild's music channels.
+
+        No guild: in a DM ctx.guild.id raised.  Music channels: the dashboard
+        saved them but nothing enforced them.  Members who can manage the
+        server are exempt, so a misconfigured list cannot lock admins out.
+        """
         if interaction.guild is None:
             await interaction.response.send_message("Music commands only work in a server.", ephemeral=True)
+            return False
+        allowed = self._music_settings.get(interaction.guild.id, {}).get('music_channel_ids') or []
+        permissions = getattr(interaction, 'permissions', None)
+        if allowed and str(interaction.channel_id) not in allowed and not (permissions and permissions.manage_guild):
+            mentions = ', '.join(f'<#{channel_id}>' for channel_id in allowed[:10])
+            await interaction.response.send_message(f"Music commands are limited to {mentions} here.", ephemeral=True)
             return False
         return True
 
@@ -1394,6 +1408,10 @@ class MusicCog(commands.Cog):
         state = self.voice_states.get(int(guild_id))
         if not state or not state.exists:
             state = VoiceState(self.bot, guild_id, channel_id=channel_id)
+            default_volume = self._music_settings.get(int(guild_id), {}).get('default_volume')
+            if default_volume is not None:
+                # The dashboard stores 0-200 (percent); the player uses a factor.
+                state._volume = max(0, min(int(default_volume), 200)) / 100
             state.on_change = self.publish_state
             state.np_view_factory = functools.partial(NowPlayingView, self, int(guild_id))
             self.voice_states[int(guild_id)] = state
@@ -1594,9 +1612,20 @@ class MusicCog(commands.Cog):
         except Exception as exc:
             print(f"[Music] Could not read DJ roles: {exc}")
 
+    async def reload_music_settings(self) -> None:
+        """Refresh the cached default volume and music channels."""
+        try:
+            self._music_settings = {
+                int(guild_id): values
+                for guild_id, values in (await asyncio.to_thread(read_music_settings)).items()
+            }
+        except Exception as exc:
+            print(f"[Music] Could not read music settings: {exc}")
+
     @tasks.loop(minutes=10)
     async def _settings_loop(self):
         await self.reload_dj_roles()
+        await self.reload_music_settings()
 
     @_settings_loop.before_loop
     async def _before_settings_loop(self):
@@ -1604,6 +1633,7 @@ class MusicCog(commands.Cog):
 
     async def _bridge_reload_settings(self, guild, actor_id, args):
         await self.reload_dj_roles()
+        await self.reload_music_settings()
         return {'reloaded': True}
 
     def _require_state(self, guild_id) -> VoiceState:

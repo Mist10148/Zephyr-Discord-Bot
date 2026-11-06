@@ -89,6 +89,29 @@ def read_dj_role_id(guild_id: str, *, database_url: str | None = None) -> str | 
         ).scalar_one_or_none()
 
 
+def read_music_settings(*, database_url: str | None = None) -> dict[str, dict]:
+    """The dashboard's music settings, keyed by guild id.
+
+    Only guilds that set a default volume or limited music to some channels
+    appear; everyone else gets the bot's defaults.  Read in one query and
+    cached by the bot, for the same reason as ``read_dj_roles``.
+    """
+    engine = get_engine(database_url)
+    with engine.connect() as connection:
+        rows = connection.execute(
+            select(Guild.id, Guild.default_volume, Guild.music_channel_ids).where(
+                Guild.default_volume.is_not(None) | Guild.music_channel_ids.is_not(None)
+            )
+        ).all()
+    settings = {}
+    for row in rows:
+        channels = [str(channel) for channel in (row.music_channel_ids or []) if channel]
+        if row.default_volume is None and not channels:
+            continue
+        settings[str(row.id)] = {"default_volume": row.default_volume, "music_channel_ids": channels}
+    return settings
+
+
 def read_dj_roles(*, database_url: str | None = None) -> dict[str, str]:
     """Every configured DJ role, keyed by guild id.
 
