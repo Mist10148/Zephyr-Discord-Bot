@@ -103,7 +103,8 @@ Each existed as an unwritten assumption and was broken somewhere because of that
 ## Layout
 
 - `AppShell` renders the sticky glass top bar above every page (wordmark, contextual
-  Servers link, command-palette trigger, theme toggle); pages keep their own
+  Servers link, "My AI history" when signed in, "Appearance", command-palette trigger, theme
+  toggle); pages keep their own
   `<main className="app">` beneath it. `.app` is `container-type: inline-size`, so
   headings clamp against the column they occupy rather than the viewport.
 - **The breakpoint is 860px**, used consistently for the tab bar, the guild rail, the

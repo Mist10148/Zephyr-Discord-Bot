@@ -36,6 +36,26 @@ no feedback, machine values shown raw, and a layout that only really works at ph
 
 ---
 
+## Known issues deferred from the 2026-11 audit
+
+Found during a code audit and left open on purpose, because each needs a design decision rather
+than a local fix:
+
+- **Stale sessions keep admin access.** A session's guild list is captured at login, and the web
+  tier writes settings, weather subscriptions and AI data on its strength without asking the bot.
+  Someone who loses Manage Server keeps those rights until the session expires (up to 30 days).
+  Fix: re-validate the actor over the bridge for mutations, or force a guild refresh first.
+- **Bridge timeout for slow actions.** `play` and `playlist.load` can take longer than the 5s
+  bridge timeout while yt-dlp resolves tracks; the dashboard then reports 504 although the bot
+  queues the track, and a retry duplicates it. Fix: acknowledge immediately and finish async.
+- **Cache retries after a failed load are serial.** When `TTLCache`'s loader fails with no stale
+  value, each waiting request retries in turn rather than sharing one retry.
+- **SQLite does not enforce foreign keys.** Nothing sets `PRAGMA foreign_keys=ON`, so
+  `ON DELETE CASCADE` is inert on the default database: purged conversations leave orphaned
+  labels, annotations and revisions that a reused rowid can later inherit. Postgres is unaffected.
+
+---
+
 # Phase 8 — UX correctness
 
 Dead controls and controls that behave wrongly. None of these need a design decision; each

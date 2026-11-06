@@ -4,7 +4,9 @@ Every route in the SPA, what is on it, and the design contract it must keep.
 Source of truth: `website/frontend/src/App.tsx` (route table), `src/routes/*` (screens),
 `src/components/ios/index.tsx` (primitives), `src/styles/theme.css` (tokens).
 
-**12 screens** — 4 public, 7 authenticated (1 list + 6 per-server), 1 catch-all.
+**15 screens** — 6 public, 8 authenticated (servers list, your AI history, 6 per-server), 1
+catch-all. `/commands`, `/settings` and `/account/ai-history` were added after this inventory was
+written and are summarised in §13.
 Plus 4 global chrome layers (top bar, mobile tab bar, command palette, sheets) that render
 *over* or *around* screens.
 
@@ -18,10 +20,10 @@ Wraps every route. Renders above the page's own `<main className="app">`.
 | Slot | Content |
 | --- | --- |
 | Left | Wordmark link to `/` — glyph `❍` (`.brand-mark`) + "Zephyr" (`.brand-name`) |
-| Right | "Servers" link → `/g` (**only** when `pathname` starts with `/g`), the ⌘K palette trigger (hidden on `/login`), then `ThemeToggle` |
+| Right | "Servers" link → `/g` (**only** when `pathname` starts with `/g`), "My AI history" → `/account/ai-history` (signed in only), "Appearance" → `/settings` (hidden on `/login`), the ⌘K palette trigger (hidden on `/login`), then `ThemeToggle` |
 
-- Glass surface (regular tier) so the aurora shows through it. Sticky, full-bleed, inner
-  content constrained to 1080px.
+- Glass surface (regular tier) so the aurora shows through it. Sticky and full-bleed; the inner
+  row is unconstrained (`.appbar-inner { max-width: none }`).
 - Also renders the `.aurora` layer — three independently drifting blobs, fixed, `aria-hidden`.
 - `ThemeToggle`: single icon button, inline sun/moon SVG (`currentColor`, no icon dep),
   `aria-pressed`, spring `scale: .9` on tap, haptic on press.
@@ -29,7 +31,7 @@ Wraps every route. Renders above the page's own `<main className="app">`.
 ### 0.1b `TabBar` — mobile bottom navigation
 Rendered from `App.tsx`, below 860px only, hidden on `/login`.
 
-- Four tabs: **Home** `/` · **Weather** `/weather` · **Servers** `/g` · **System** `/kitchen-sink`.
+- Four tabs: **Home** `/` · **Weather** `/weather` · **Servers** `/g` · **System** `/settings`.
 - **Servers stays active anywhere under `/g`**, including guild sub-pages.
 - Sticky (not fixed) with thick glass and a safe-area-aware bottom pad; `#root` is a flex
   column so it can be the last item in normal flow.
@@ -250,6 +252,9 @@ so it must stay legible. Tri-state, not boolean.
 6. Footer link "All servers"
 
 ### Design notes
+> **Resolved** in the redesign — see [Fixed in the redesign](#fixed-in-the-redesign). The note
+> below describes the screen as it was, and is kept for context.
+
 Three stacked densities (widgets → read-only facts → navigation) with no visual separation
 between groups 3 and 4 today. That's the weakest hierarchy in the app — worth fixing.
 The caveat card renders even when both conditions are false (empty glass box) — a redesign
@@ -284,6 +289,9 @@ should collapse it.
 8. **`PlaylistPanel`** (see §7b)
 
 ### Design notes
+> **Resolved** in the redesign — see [Fixed in the redesign](#fixed-in-the-redesign). The note
+> below describes the screen as it was, and is kept for context.
+
 Densest screen in the app. The transport uses **text glyphs, not icons** (`❙❙ ▶︎ ⏭ 🔀 ⏹`) —
 the single highest-value redesign target. Queue rows carry two buttons each, which is where the
 row layout breaks on narrow viewports.
@@ -360,6 +368,9 @@ layout, which is a stretch. A redesign should give forms their own field primiti
    This cannot be undone." + **Confirm purge** / **Cancel**
 
 ### Design notes
+> **Resolved** in the redesign — see [Fixed in the redesign](#fixed-in-the-redesign). The note
+> below describes the screen as it was, and is kept for context.
+
 The least designed screen: the form uses **bare `<input>`/`<textarea>`** with no `.text-input`
 class, and the destructive confirmation is an inline block rather than a `Sheet` like every other
 modal flow. Both are inconsistencies a redesign should resolve.
@@ -385,6 +396,10 @@ modal flow. Both are inconsistencies a redesign should resolve.
 | Default volume | `Slider` | `N%` |
 | DJ role | select of roles (degrades to id input) | "Everyone can control the player until one is set" |
 
+The bot applies **Default volume** (new players start at it), **DJ role** and **Music channels**
+(music commands elsewhere are refused, except for members with Manage Server). **Prefix**,
+**Locale** and **Timezone** are stored but not yet read by the bot.
+
 4. **Music channels** — `<h2>`, then a checkbox row per channel (`#name`, detail "Zephyr cannot
    post here" when applicable). Bot unreachable → muted card: "…Music commands are allowed in
    every channel while this is unset."
@@ -392,6 +407,9 @@ modal flow. Both are inconsistencies a redesign should resolve.
 6. **Actions** — **Save changes** (disabled unless dirty; label → "Saving…") and **Discard**
 
 ### Design notes
+> **Resolved** in the redesign — see [Fixed in the redesign](#fixed-in-the-redesign). The note
+> below describes the screen as it was, and is kept for context.
+
 The only dirty-state screen. Field-level validation is currently expressed by **swapping the
 row's `detail` text** — no colour, no icon, no focus movement. That's the main accessibility gap
 here. The Save/Discard pair also isn't pinned, so on a long list it scrolls out of view.
@@ -433,6 +451,26 @@ viewer's own locale/zone. The most obvious place to add date grouping and a sour
 
 `LargeTitleHeader "Not found"` + "That page does not exist." + "Home" link.
 Deliberately not the marketing page — it catches things like `/g/1/musci`.
+
+---
+
+## 13. Screens added after this inventory
+
+Shorter entries; each follows the same primitives and rules as the screens above.
+
+- **`/commands` — Commands (public).** [Commands.tsx](website/frontend/src/routes/Commands.tsx),
+  data `GET /commands`. *"Every Zephyr command, grouped so you can find the right one quickly."*
+  One `ListGroup` per help category, rendered from the same registry as `/help` and the ⌘K palette.
+- **`/settings` — Website settings (public).**
+  [WebsiteSettings.tsx](website/frontend/src/routes/WebsiteSettings.tsx), no server data.
+  *"Make Zephyr feel right on this browser."* `SegmentedControl` rows over browser-local
+  preferences: theme, palette, density, text size, motion, units and dashboard layout. Reached from "Appearance" in the top bar and "System" in the
+  tab bar.
+- **`/account/ai-history` — My AI history (auth).** [DmHistory.tsx](website/frontend/src/routes/DmHistory.tsx),
+  data `/me/ai/history*`. Your own DM conversations with the bot: search, open a transcript, edit
+  or redact a message (with revision history), edit the summary, download a backup, and delete a
+  conversation behind a `Sheet` confirmation. Owner-scoped on the server; nobody else's DMs are
+  reachable.
 
 ---
 
@@ -593,7 +631,7 @@ words "track art" (9.5) · nine control groups in one column at every width (10.
 **`/g/:guildId`** — DJ role and music channels print as raw snowflakes and `enabled_cogs` as
 raw module names (9.3) · long channel lists overflow the row · generic skeleton (10.3).
 
-**`/commands`** — no entry point anywhere in the UI (11.1) · 73 rows in one scroll with no
+**`/commands`** — no entry point anywhere in the UI (11.1) · 76 rows in one scroll with no
 category jump list or result count, and aliases are searchable but never shown (11.5) ·
 carries a "Back home" link (11.3).
 

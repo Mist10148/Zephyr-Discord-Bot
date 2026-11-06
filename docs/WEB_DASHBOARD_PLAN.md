@@ -90,7 +90,12 @@ playlist_tracks     (playlist_id FK, position, title, url, duration_s, source)
 
 ai_conversations    (id PK, channel_id UNIQUE, guild_id NULL, owner_id NULL,
                      rolling_summary, token_count, updated_at)
-ai_messages         (id PK, conversation_id FK, role, content, tokens, created_at)
+ai_messages         (id PK, conversation_id FK, role, content, tokens, version,
+                     edited_at, redacted_at, created_at)
+ai_message_revisions (id PK, message_id FK, editor_id, previous_content,
+                     replacement_content, reason, created_at)
+ai_conversation_labels      (id PK, conversation_id FK, label, created_by, created_at)
+ai_conversation_annotations (id PK, conversation_id FK, author_id, note, created_at, updated_at)
 personas            (id PK, guild_id FK, name, system_prompt, is_default)
 
 audit_log           (id PK, guild_id, actor_id, action, payload JSONB,
@@ -115,11 +120,13 @@ current interface**; two chat handlers defer and move database writes off the ev
 | POST | `/auth/logout` | session | |
 | GET | `/me` | session | user + manageable guilds where the bot is present |
 | GET/PATCH | `/guilds/:id/settings` | MANAGE_GUILD | |
-| GET/PATCH | `/guilds/:id/ai` | MANAGE_GUILD | model, output, persona |
+| GET | `/guilds/:id/meta` | MANAGE_GUILD | channels and roles, answered live by the bot over the bridge |
+| CRUD | `/guilds/:id/ai/personas` | MANAGE_GUILD | + `POST /ai/personas/:id/default`. (The planned `GET/PATCH /guilds/:id/ai` for model/output was never built; those stay per-context `/settings` in Discord) |
+| GET/DELETE | `/guilds/:id/ai/memory[/:channel]` | MANAGE_GUILD | stored channel memory; DELETE also clears the bot's buffer |
 | GET | `/guilds/:id/player` | member | from `zephyr:player:{id}` |
 | POST | `/guilds/:id/player/:action` | member + DJ | play/pause/skip/seek/volume/effects → bridge |
-| CRUD | `/guilds/:id/weather-subs` | MANAGE_GUILD | |
-| CRUD | `/playlists` | owner | + `POST /playlists/import/spotify` |
+| CRUD | `/guilds/:id/weather-subs` | MANAGE_GUILD | + `GET /weather-subs/:id/preview` |
+| CRUD | `/playlists` | owner | + `POST /playlists/import/spotify`, `POST /playlists/:id/load` (queue it via the bot) |
 | GET | `/guilds/:id/ai/usage` | MANAGE_GUILD | RPM/TPM/RPD from the existing tracker |
 | GET/PATCH | `/guilds/:id/ai/history` | MANAGE_GUILD | searchable retained AI conversations, archive/category metadata |
 | PATCH/GET | `/guilds/:id/ai/history/:channel/messages/:message/revisions` | MANAGE_GUILD | versioned message edits and revision history |
@@ -128,11 +135,13 @@ current interface**; two chat handlers defer and move database writes off the ev
 | GET | `/me/ai/history` | session | private history for the signed-in user's DMs with Zephyr |
 | GET/PATCH | `/me/ai/history/:channel/messages/:message` | session | owner-scoped DM transcript and versioned edits |
 | POST | `/me/ai/history/:channel/messages/:message/redact` | session | owner-scoped DM redaction |
+| PUT | `/me/ai/history/:channel/summary` | session | owner-scoped edit of the rolling summary |
 | DELETE | `/me/ai/history/:channel` | session | purge the user's DM history and bot cache |
 | GET | `/guilds/:id/audit` | MANAGE_GUILD | paginated |
 
 Session: server-side, Redis-backed, `HttpOnly` + `Secure` + `SameSite=Lax`.
-Discord tokens are Fernet-encrypted at rest and **never** reach the browser.
+Discord tokens **never** reach the browser. (Fernet storage of refresh tokens was deferred — see §8;
+the web tier keeps no Discord token at all.)
 CSRF token required on all mutating calls. Per-session rate limit on `/player/*`.
 
 AI history contains only exchanges directed at Zephyr and its replies. Conversation
@@ -151,19 +160,18 @@ the bot's in-process DM context.
 
 ## 5. Frontend
 
+As built (the original plan's `lib/springs.ts`, `components/widgets/`, nested route folders and
+Zustand stores were not needed):
+
 ```
 website/frontend/
 ├── src/
 │   ├── styles/theme.css        # @theme tokens: materials, shadows, radii, type, springs
-│   ├── lib/{api.ts,haptics.ts,springs.ts,query.ts}
+│   ├── lib/                    # api, auth, query, player, preferences, theme, haptics, export…
 │   ├── types/api.ts            # hand-mirrored Flask contracts
 │   ├── components/ios/         # the design system (see below)
-│   ├── components/widgets/     # each widget = {id, size, render}
-│   ├── routes/
-│   │   ├── weather/            # public PWA
-│   │   ├── dashboard/          # widget grid
-│   │   └── g/$guildId/         # overview, music, ai, weather-alerts, settings, logs
-│   └── store/{layout,prefs}.ts # Zustand + localStorage
+│   ├── components/             # AppShell, TabBar, CommandPalette, GuildNav, PlaylistPanel…
+│   └── routes/                 # one file per screen (see docs/SCREENS.md)
 └── vite.config.ts              # outDir '../static', dev proxy → Flask :5000
 ```
 
@@ -281,7 +289,8 @@ primitive, `/kitchen-sink` review route. No features yet.
 
 **Phase 2 — Public weather PWA** *(first shippable slice)*
 `/api/v1/{weather,geocode,commands,status}`, Open-Meteo migration, widget grid,
-⌘K command palette over 62 unique commands, PWA manifest + service worker.
+⌘K command palette over every command (62 when this phase shipped; 76 unique today), PWA
+manifest + service worker.
 
 **Phase 3 — Auth**
 Discord OAuth, Redis sessions, `/me`, guild picker, read-only guild overview.
