@@ -164,3 +164,57 @@ async def test_someone_else_leaving_voice_is_ignored():
                                     SimpleNamespace(channel="vc"), SimpleNamespace(channel=None))
 
     state.stop.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_np_runs_the_now_command(monkeypatch):
+    """self.now is an app_commands.Command and is not callable; /np raised TypeError."""
+    called = []
+
+    async def fake_now(self, interaction):
+        called.append(interaction)
+
+    # Patched before the cog exists: a Cog copies its commands on creation.
+    monkeypatch.setattr(MusicCog.now, "_callback", fake_now)
+    cog = _cog()
+    interaction = MagicMock()
+    await MusicCog.np.callback(cog, interaction)
+
+    assert called == [interaction]
+
+
+def _error_interaction(done):
+    interaction = MagicMock()
+    interaction.response.is_done.return_value = done
+    interaction.response.send_message = AsyncMock()
+    interaction.followup.send = AsyncMock()
+    return interaction
+
+
+@pytest.mark.asyncio
+async def test_an_unexpected_command_error_is_answered():
+    """Only CheckFailure was handled; anything else left "Zephyr is thinking..."."""
+    from discord import app_commands
+
+    from zephyr.cogs.music import VoiceError
+
+    interaction = _error_interaction(done=True)
+    command = MagicMock()
+    error = app_commands.CommandInvokeError(command, VoiceError("Could not join General."))
+
+    await MusicCog.cog_app_command_error(_cog(), interaction, error)
+
+    interaction.followup.send.assert_awaited_once_with("❌ Could not join General.", ephemeral=True)
+
+
+@pytest.mark.asyncio
+async def test_a_bug_gets_a_generic_reply_before_any_response():
+    from discord import app_commands
+
+    interaction = _error_interaction(done=False)
+    error = app_commands.CommandInvokeError(MagicMock(), RuntimeError("secret internals"))
+
+    await MusicCog.cog_app_command_error(_cog(), interaction, error)
+
+    message = interaction.response.send_message.await_args.args[0]
+    assert "secret internals" not in message

@@ -30,14 +30,21 @@ class TTSCog(commands.Cog):
         if not vc:
             await interaction.response.send_message("I'm not in a voice channel!", ephemeral=True)
             return
+        # Defer first: tearing the music player down can outlast the three
+        # seconds Discord allows for a first response.
+        await interaction.response.defer(ephemeral=True)
         music_cog = self.bot.get_cog('MusicCog')
         if music_cog and interaction.guild.id in music_cog.voice_states:
             state = music_cog.voice_states[interaction.guild.id]
             await state.stop()
             music_cog.voice_states.pop(interaction.guild.id, None)
-        else:
-            await vc.disconnect()
-        await interaction.response.send_message("Disconnected!", ephemeral=True)
+        # A music state that never owned this connection (/say after /join
+        # drifted, or a state recreated after a reconnect) disconnects nothing,
+        # so make sure the client really is gone.
+        vc = interaction.guild.voice_client
+        if vc:
+            await vc.disconnect(force=True)
+        await interaction.followup.send("Disconnected!", ephemeral=True)
 
     @app_commands.command(name="say", description="Make the bot say something in voice chat.")
     @app_commands.describe(text="Text you want the bot to say")

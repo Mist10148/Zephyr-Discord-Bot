@@ -1457,13 +1457,30 @@ class MusicCog(commands.Cog):
         return True
 
     async def cog_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
-        """Give a failed check a readable reply rather than a silent failure."""
+        """Answer every failed command, not just failed checks.
+
+        Only CheckFailure used to be handled, so anything else -- a voice
+        connect that timed out, a bug -- left the user looking at "Zephyr is
+        thinking..." until Discord gave up on the interaction.
+        """
         if isinstance(error, app_commands.CheckFailure):
-            if not interaction.response.is_done():
-                message = ("❌ You need the **Manage Server** permission for that."
-                           if isinstance(error, app_commands.MissingPermissions)
-                           else "❌ You can't use that here.")
+            message = ("❌ You need the **Manage Server** permission for that."
+                       if isinstance(error, app_commands.MissingPermissions)
+                       else "❌ You can't use that here.")
+        else:
+            original = getattr(error, 'original', error)
+            if isinstance(original, (VoiceError, YTDLError)):
+                message = f'❌ {original}'
+            else:
+                traceback.print_exception(type(original), original, original.__traceback__)
+                message = '❌ Something went wrong running that command.'
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
                 await interaction.response.send_message(message, ephemeral=True)
+        except Exception as exc:
+            print(f"[Music] Could not report a command error: {exc}")
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member, before, after):
@@ -1989,9 +2006,12 @@ class MusicCog(commands.Cog):
         if not state.voice:
             await interaction.response.send_message("Not connected to any voice channel.", ephemeral=True)
             return
+        # Defer first: stop() cancels the player and disconnects, which can
+        # outlast the three seconds Discord allows for a first response.
+        await interaction.response.defer()
         await state.stop()
         self.voice_states.pop(ctx.guild.id, None)
-        await interaction.response.send_message(embed=discord.Embed(description='👋 Left voice channel.', color=discord.Color.green()))
+        await interaction.followup.send(embed=discord.Embed(description='👋 Left voice channel.', color=discord.Color.green()))
 
     # ---------------- Playback Control ----------------
 
@@ -2195,7 +2215,9 @@ class MusicCog(commands.Cog):
 
     @app_commands.command(name='np', description='Alias for /now.')
     async def np(self, interaction: discord.Interaction):
-        await self.now(interaction)
+        # self.now is an app_commands.Command, which is not callable; awaiting
+        # it raised TypeError on every /np.
+        await self.now.callback(self, interaction)
 
     @app_commands.command(name='pause', description='Pauses the currently playing song.')
     @app_commands.checks.has_permissions(manage_guild=True)
