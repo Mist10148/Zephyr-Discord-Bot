@@ -520,3 +520,46 @@ class TestTrack:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestInternalUrls:
+    @pytest.mark.parametrize("url", [
+        "http://localhost:6379/",
+        "http://127.0.0.1/admin",
+        "http://10.0.0.5/song.mp3",
+        "http://192.168.1.1/",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://[::1]/",
+        "http://printer.local/",
+    ])
+    def test_private_addresses_are_internal(self, url):
+        from zephyr.cogs.music import _is_internal_url
+        assert _is_internal_url(url)
+
+    @pytest.mark.parametrize("url", [
+        "https://www.youtube.com/watch?v=abc",
+        "https://8.8.8.8/song.mp3",
+        "https://cdn.example.com/a.mp3",
+    ])
+    def test_public_addresses_are_not(self, url):
+        from zephyr.cogs.music import _is_internal_url
+        assert not _is_internal_url(url)
+
+    @pytest.mark.asyncio
+    async def test_resolving_an_internal_link_is_refused(self):
+        with pytest.raises(YTDLError, match="private or local"):
+            await YTDLSource.resolve_tracks("http://127.0.0.1:8080/x.mp3", loop=asyncio.get_event_loop())
+
+
+@pytest.mark.asyncio
+async def test_a_hung_flat_lookup_times_out(monkeypatch):
+    import zephyr.cogs.music as music
+
+    monkeypatch.setattr(music, "FLAT_EXTRACT_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(YTDLSource.ytdl, "extract_info", lambda *a, **k: __import__("time").sleep(0.5))
+    with pytest.raises(YTDLError, match="timed out"):
+        await YTDLSource.resolve_tracks("anything", loop=asyncio.get_event_loop())
+
+
+def test_tls_verification_is_not_disabled():
+    assert not YTDLSource.YTDL_OPTIONS.get("nocheckcertificate")

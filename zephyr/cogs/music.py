@@ -10,6 +10,7 @@ import random
 import asyncio
 import dataclasses
 import functools
+import ipaddress
 import itertools
 import logging
 import shlex
@@ -18,6 +19,7 @@ import traceback
 import time
 import re
 from collections import deque
+from urllib.parse import urlsplit
 
 import aiohttp
 import requests
@@ -83,6 +85,35 @@ def _is_youtube_playlist(search: str) -> bool:
     return _is_youtube_url(search) and ("list=" in s or "/playlist" in s)
 
 
+def _is_internal_url(search: str) -> bool:
+    """Whether a URL points at this host or a private network.
+
+    yt-dlp's generic extractor and FFmpeg will fetch any http(s) URL, and the
+    dashboard lets anyone with a session submit one -- so without this the bot
+    could be pointed at services only reachable from its own network.  Only
+    literal addresses and local names are refused; resolving every hostname
+    would cost a DNS round trip per query for little extra protection.
+    """
+    try:
+        host = (urlsplit(_sanitize_search(search)).hostname or '').strip('[]').lower()
+    except ValueError:
+        return True
+    if not host:
+        return False
+    if host == 'localhost' or host.endswith(('.localhost', '.local', '.internal')):
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return not address.is_global
+
+
+def _refuse_internal(search: str) -> None:
+    if _is_url(search) and _is_internal_url(search):
+        raise YTDLError("Links to private or local addresses can't be played.")
+
+
 def _is_audio_file_url(search: str) -> bool:
     s = _sanitize_search(search).lower()
     return _is_url(search) and s.endswith((".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac", ".opus", ".wma"))
@@ -127,6 +158,11 @@ STREAM_AVAILABLE_MAX_WAIT_SECONDS = 30
 # these, FFmpeg treats the drop as a clean EOF and the song stops partway
 # through.  ``-reconnect_at_eof`` is deliberately absent: it can loop at the
 # genuine end of a track.
+# A flat (process=False) extraction lists a search or a playlist without
+# resolving any streams.  It is usually quick, but had no timeout at all, so a
+# stalled request held /play "thinking" forever.
+FLAT_EXTRACT_TIMEOUT_SECONDS = 60
+
 FFMPEG_RECONNECT_OPTIONS = '-reconnect 1 -reconnect_streamed 1 -reconnect_on_network_error 1 -reconnect_delay_max 5'
 
 # Speed effects, as the factor each one plays the source at.  They are applied
@@ -428,7 +464,6 @@ class YTDLSource(discord.PCMVolumeTransformer):
         'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
         'restrictfilenames': True,
         'noplaylist': False,
-        'nocheckcertificate': True,
         'ignoreerrors': False,
         'logtostderr': False,
         'quiet': True,
@@ -512,10 +547,10 @@ class YTDLSource(discord.PCMVolumeTransformer):
 
     @classmethod
     async def _extract(cls, query: str, *, loop, process: bool = True, timeout_s: int = 15):
+        _refuse_internal(query)
         partial = functools.partial(cls.ytdl.extract_info, query, download=False, process=process)
-        if process:
-            return await asyncio.wait_for(loop.run_in_executor(None, partial), timeout=timeout_s)
-        return await loop.run_in_executor(None, partial)
+        return await asyncio.wait_for(loop.run_in_executor(None, partial),
+                                      timeout=timeout_s if process else FLAT_EXTRACT_TIMEOUT_SECONDS)
 
     @classmethod
     async def resolve_tracks(cls, search: str, *, requester_id: int = 0, requester_mention: str = '',
@@ -532,6 +567,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
         loop = loop or asyncio.get_event_loop()
         search = _sanitize_search(search)
         as_url = _is_url(search)
+        _refuse_internal(search)
 
         # A direct audio file needs no yt-dlp round trip at all: FFmpeg can read the
         # URL itself. _is_audio_file_url was written for this and had no caller.
@@ -630,6 +666,8 @@ class YTDLSource(discord.PCMVolumeTransformer):
                                                   requester_id=requester_id,
                                                   requester_mention=requester_mention,
                                                   source='search')
+        except asyncio.TimeoutError:
+            raise YTDLError(f'Searching for `{search}` timed out.') from None
         except Exception as e:
             traceback.print_exc()
             raise YTDLError(f"Failed to search `{search}`: {e}")
@@ -656,6 +694,8 @@ class YTDLSource(discord.PCMVolumeTransformer):
 
         if track.source == 'file':
             # Direct media: hand the URL straight to FFmpeg, no extraction.
+            # Saved playlists are editable from the web, so check again here.
+            _refuse_internal(track.url or '')
             return cls._make_ffmpeg_source(track.url, data={'url': track.url, 'title': track.title},
                                            options=options, volume=volume)
 
