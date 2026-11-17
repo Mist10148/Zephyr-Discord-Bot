@@ -126,3 +126,93 @@ async def test_the_replaced_sources_callback_never_advances_the_queue(monkeypatc
     state.voice.after(None)
     await _spin(lambda: state.next.is_set())
     assert state.next.is_set()
+
+
+class PausableVoice(Voice):
+    def __init__(self, paused=False):
+        super().__init__()
+        self.paused = paused
+        self.playing_now = None
+
+    def play(self, source, *, after):
+        if self.playing_now is not None:
+            raise RuntimeError("Already playing audio.")
+        super().play(source, after=after)
+        self.playing_now = source
+        self.paused = False
+
+    def stop(self):
+        self.playing_now = None
+
+    def pause(self):
+        self.paused = True
+
+    def is_paused(self):
+        return self.paused
+
+
+@pytest.mark.asyncio
+async def test_overlapping_restarts_do_not_collide(monkeypatch):
+    """Two quick effect toggles: the second play() used to raise mid-playback."""
+    state = _state()
+    state.voice = PausableVoice()
+    state.current = Track(title="Playing")
+    state.source = MagicMock(stderr_tail="")
+    gate = asyncio.Event()
+
+    async def slow_lookup(track, **kwargs):
+        await gate.wait()
+        return MagicMock(stderr_tail="")
+
+    monkeypatch.setattr(YTDLSource, "from_track", slow_lookup)
+    first = asyncio.create_task(state.restart_current(preserve_position=True))
+    second = asyncio.create_task(state.restart_current(preserve_position=True))
+    await asyncio.sleep(0)
+    gate.set()
+    await asyncio.gather(first, second)
+
+    assert len(state.voice.played) == 2
+    assert not state.next.is_set()
+    # Both replaced sources are ignored whenever their callbacks land.
+    assert len(state._retired_sources) == 2
+
+
+@pytest.mark.asyncio
+async def test_restarting_a_paused_track_keeps_it_paused(monkeypatch):
+    state = _state()
+    state.voice = PausableVoice(paused=True)
+    state.current = Track(title="Paused")
+    state.source = MagicMock(stderr_tail="")
+    state._current_position, state._current_start_time = 42.0, None
+    monkeypatch.setattr(YTDLSource, "from_track", AsyncMock(return_value=MagicMock(stderr_tail="")))
+
+    await state.restart_current(preserve_position=True)
+
+    assert state.voice.paused is True
+    assert state._current_start_time is None
+    assert state.elapsed == 42.0
+
+
+@pytest.mark.asyncio
+async def test_a_skip_during_the_restart_lookup_still_skips(monkeypatch):
+    state = _state()
+    state.voice = PausableVoice()
+    state.current = Track(title="Playing")
+    state.source = MagicMock(stderr_tail="")
+    replacement = MagicMock(stderr_tail="")
+    gate = asyncio.Event()
+
+    async def slow_lookup(track, **kwargs):
+        await gate.wait()
+        return replacement
+
+    monkeypatch.setattr(YTDLSource, "from_track", slow_lookup)
+    restart = asyncio.create_task(state.restart_current(preserve_position=True))
+    await asyncio.sleep(0)
+    state.skip()
+    gate.set()
+    await restart
+
+    assert state.voice.played == []
+    replacement.cleanup.assert_called_once()
+    assert state.next.is_set()
