@@ -100,7 +100,9 @@ def fetch_playlist_metadata(client, url: str, *, limit: int = MAX_IMPORT_TRACKS)
         rows = _paginate(
             lambda offset: client.playlist_items(playlist_id, limit=100, offset=offset),
             limit=limit,
-            unwrap=lambda item: item.get("track"),
+            # Spotify's 2026 Web API renamed a playlist entry's "track" to
+            # "item"; read either so the change cannot empty every playlist.
+            unwrap=lambda item: item.get("track") or item.get("item"),
         )
         return playlist.get("name") or "Spotify playlist", rows
 

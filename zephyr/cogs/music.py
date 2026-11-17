@@ -28,8 +28,6 @@ from discord.ext import tasks
 from discord.ui import Button, View, Select
 from async_timeout import timeout
 import yt_dlp
-import spotipy
-from spotipy.oauth2 import SpotifyClientCredentials
 
 from zephyr.config import REDIS_URL, SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET
 from zephyr.core.ffmpeg import FFMPEG_PATH
@@ -43,7 +41,13 @@ from zephyr.db.playlists import (
     save_playlist,
 )
 from zephyr.services import bridge
-from zephyr.services.spotify import is_spotify_url, parse_spotify_id, resolve_short_link
+from zephyr.services.spotify import (
+    build_client as build_spotify_client,
+    fetch_playlist_metadata,
+    is_spotify_url,
+    parse_spotify_id,
+    resolve_short_link,
+)
 from zephyr.utils.time_utils import _parse_user_time, _format_timestamp
 
 
@@ -136,6 +140,9 @@ SPEED_EFFECTS = {
 }
 EFFECT_SAMPLE_RATE = 48000
 
+# Reading a Spotify playlist is a handful of API pages; this is generous.
+SPOTIFY_TIMEOUT_SECONDS = 60
+
 # Lower-cased fragments of FFmpeg stderr that mean "this source never played",
 # as opposed to a track that reached its end.
 FFMPEG_FAILURE_MARKERS = (
@@ -165,6 +172,15 @@ def _video_id(url: str | None) -> str | None:
 
 class VoiceError(Exception):
     pass
+
+
+def _link(track: 'Track') -> str:
+    """Markdown link to a track, or its bare title before it has a URL.
+
+    Spotify and imported tracks are resolved only when they play, and
+    ``[title](None)`` rendered as a broken link in /queue.
+    """
+    return f'[{track.title}]({track.url})' if track.url else track.title
 
 
 def _coerce_float(value, name: str) -> float:
@@ -292,6 +308,9 @@ class Track:
         return _format_duration(self.duration_seconds)
 
     def __str__(self):
+        if not self.uploader or self.uploader == 'Unknown':
+            # Unresolved Spotify/imported tracks: the title already names the artist.
+            return f'**{self.title}**'
         return f'**{self.title}** by **{self.uploader}**'
 
     @classmethod
@@ -341,7 +360,8 @@ class Track:
         embed.add_field(name='Duration', value=self.duration, inline=True)
         embed.add_field(name='Requested by', value=self.requester_mention or 'Unknown', inline=True)
         embed.add_field(name='Uploader', value=f'[{self.uploader}]({self.uploader_url})', inline=True)
-        embed.add_field(name='URL', value=f'[Click]({self.url})', inline=True)
+        if self.url:
+            embed.add_field(name='URL', value=f'[Click]({self.url})', inline=True)
         if self.thumbnail:
             embed.set_thumbnail(url=self.thumbnail)
         if self.repaired_from:
@@ -1435,8 +1455,7 @@ class MusicCog(commands.Cog):
         # guild id -> {"default_volume": int|None, "music_channel_ids": [str]},
         # from the dashboard's settings page.  Absent means bot defaults.
         self._music_settings: dict[int, dict] = {}
-        creds = SpotifyClientCredentials(client_id=SPOTIFY_CLIENT_ID, client_secret=SPOTIFY_CLIENT_SECRET)
-        self.sp = spotipy.Spotify(client_credentials_manager=creds)
+        self.sp = build_spotify_client(SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         """Every music command needs a guild, and the guild's music channels.
@@ -1894,8 +1913,7 @@ class MusicCog(commands.Cog):
         self._ensure_np_channel(state, guild)
         state.start_player()
 
-        tracks = await YTDLSource.resolve_tracks(
-            query, requester_id=member.id, requester_mention=member.mention, loop=self.bot.loop)
+        tracks = await self._resolve_query(query, requester_id=member.id, requester_mention=member.mention)
         if not tracks:
             raise VoiceError("Nothing found for that query.")
         if str(args.get('mode')) == 'next':
@@ -1917,6 +1935,43 @@ class MusicCog(commands.Cog):
     def _require_voice(self, interaction: discord.Interaction):
         if not interaction.user.voice or not interaction.user.voice.channel:
             raise VoiceError("You are not connected to any voice channel.")
+
+    async def _resolve_query(self, query: str, *, requester_id: int, requester_mention: str) -> list[Track]:
+        """Turn whatever a user typed into queue entries.  Shared by /play and the dashboard.
+
+        Spotify links are read as **metadata only**: a title and a duration per
+        track, with no YouTube lookup.  ``YTDLSource.from_track`` already
+        searches by title when a track with no URL comes up -- which is how
+        imported playlists work -- so each track costs a lookup only if it is
+        actually played.  The old path made a Spotify call, a YouTube search
+        and an extraction per track up front, so a 200-track playlist took
+        longer than Discord's 15-minute interaction token lasts.  The dashboard
+        handed Spotify links straight to yt-dlp, which cannot read them at all.
+        """
+        query = _sanitize_search(query)
+        if not _is_spotify_url(query):
+            return await YTDLSource.resolve_tracks(
+                query, requester_id=requester_id, requester_mention=requester_mention, loop=self.bot.loop)
+
+        if self.sp is None:
+            raise YTDLError("Spotify links are not available on this bot.")
+        try:
+            _, rows = await asyncio.wait_for(
+                asyncio.to_thread(fetch_playlist_metadata, self.sp, query), timeout=SPOTIFY_TIMEOUT_SECONDS)
+        except ValueError as exc:
+            raise YTDLError(str(exc)) from None
+        except asyncio.TimeoutError:
+            raise YTDLError("Spotify took too long to answer.") from None
+        except Exception as exc:
+            LOGGER.warning("Spotify lookup failed for %s: %s", query, exc)
+            raise YTDLError("Spotify could not read that link. Private playlists cannot be played.") from None
+        if not rows:
+            raise YTDLError("That Spotify link has no playable tracks.")
+        return [
+            Track(title=row['title'], url=None, duration_seconds=row['duration_s'] or 0,
+                  requester_id=requester_id, requester_mention=requester_mention, source='spotify')
+            for row in rows
+        ]
 
     async def _connect(self, state: VoiceState, guild: discord.Guild, destination) -> None:
         """Make sure ``state`` owns a live voice connection, joining ``destination`` if not.
@@ -2105,46 +2160,10 @@ class MusicCog(commands.Cog):
             search = _sanitize_search(search)
             is_playlist_input = _is_youtube_playlist(search) or _is_spotify_playlist_input(search)
 
-            if _is_spotify_url(search):
-                track_ids = await self._get_spotify_tracks(search)
-                if not track_ids:
-                    await _edit_status('❌ Could not extract track information from the Spotify URL.')
-                    return
-
-                if len(track_ids) > 1:
-                    await _edit_status(f'🔎 Resolving **{len(track_ids)}** Spotify tracks...')
-
-                last_update = time.time()
-                for i, track_id in enumerate(track_ids):
-                    try:
-                        track_info = await self.bot.loop.run_in_executor(
-                            None, functools.partial(self.sp.track, track_id)
-                        )
-                        youtube_url = await self._search_youtube(track_info)
-                        if youtube_url:
-                            songs.extend(await YTDLSource.resolve_tracks(
-                                youtube_url, requester_id=requester_id, requester_mention=requester_mention,
-                                loop=self.bot.loop, max_entries=1))
-                    except Exception as e:
-                        print(f"[Spotify Track Error] {e}")
-                        continue
-
-                    # Throttle progress edits to once per second.
-                    if len(track_ids) > 1 and time.time() - last_update >= 1:
-                        await _edit_status(f'🔎 Resolved **{len(songs)} / {len(track_ids)}** Spotify tracks...')
-                        last_update = time.time()
-
-                for track in songs:
-                    track.source = 'spotify'
-
-                if not songs:
-                    await _edit_status('❌ No tracks could be processed from Spotify.')
-                    return
-            else:
-                if is_playlist_input:
-                    await _edit_status('🔎 Resolving playlist, this may take a moment...')
-                songs = await YTDLSource.resolve_tracks(
-                    search, requester_id=requester_id, requester_mention=requester_mention, loop=self.bot.loop)
+            if is_playlist_input:
+                await _edit_status('🔎 Resolving playlist, this may take a moment...')
+            songs = await self._resolve_query(
+                search, requester_id=requester_id, requester_mention=requester_mention)
 
             if not songs:
                 await _edit_status('❌ No tracks found.')
@@ -2406,7 +2425,7 @@ class MusicCog(commands.Cog):
         embed = discord.Embed(title='🎶 Music Queue', color=discord.Color.blurple())
         if state.is_playing:
             embed.add_field(name='Currently Playing',
-                            value=f"[{state.current.title}]({state.current.url})\n"
+                            value=f"{_link(state.current)}\n"
                                   f"Requested by {state.current.requester_mention} • `{state.current.duration}`",
                             inline=False)
             embed.add_field(name='Loop Mode', value=state.loop.capitalize(), inline=True)
@@ -2415,7 +2434,7 @@ class MusicCog(commands.Cog):
         upcoming = list(state.songs)[start:end]
         if upcoming:
             queue_text = '\n'.join(
-                f'`{i + 1}.` [{song.title}]({song.url}) • {song.duration} • {song.requester_mention}'
+                f'`{i + 1}.` {_link(song)} • {song.duration} • {song.requester_mention}'
                 for i, song in enumerate(upcoming, start=start)
             )
             embed.add_field(name=f'Up Next ({total} total)', value=queue_text, inline=False)
@@ -2876,90 +2895,10 @@ class MusicCog(commands.Cog):
 
     # ---------------- Spotify Helpers ----------------
 
-    # The two former staticmethods now live at module level (see the predicates at
-    # the top of this file).  These aliases keep the ~4 existing `self.` call sites
-    # working without touching them.
+    # Kept as aliases for anything that still reaches them through the cog;
+    # resolution itself is _resolve_query, via zephyr/services/spotify.py.
     _resolve_spotify_short_link = staticmethod(_resolve_spotify_short_link)
     _parse_spotify_id = staticmethod(_parse_spotify_id)
-
-    async def _get_spotify_tracks(self, url: str):
-        url = _sanitize_search(url)
-        if 'spotify.link' in url:
-            url = await asyncio.get_event_loop().run_in_executor(None, functools.partial(self._resolve_spotify_short_link, url))
-
-        track_ids = []
-        loop = asyncio.get_event_loop()
-
-        try:
-            track_id = self._parse_spotify_id(url, 'track')
-            if track_id:
-                track_ids.append(track_id)
-                return track_ids
-
-            playlist_id = self._parse_spotify_id(url, 'playlist')
-            if playlist_id:
-                offset = 0
-                limit = 100
-                while True:
-                    results = await loop.run_in_executor(
-                        None, functools.partial(self.sp.playlist_tracks, url, limit=limit, offset=offset)
-                    )
-                    items = results.get('items', [])
-                    if not items:
-                        break
-                    for item in items:
-                        track = item.get('track')
-                        if track and track.get('id'):
-                            track_ids.append(track['id'])
-                    if len(items) < limit:
-                        break
-                    offset += limit
-                    if len(track_ids) >= 200:
-                        break
-                return track_ids
-
-            album_id = self._parse_spotify_id(url, 'album')
-            if album_id:
-                offset = 0
-                limit = 50
-                while True:
-                    results = await loop.run_in_executor(
-                        None, functools.partial(self.sp.album_tracks, url, limit=limit, offset=offset)
-                    )
-                    items = results.get('items', [])
-                    if not items:
-                        break
-                    for item in items:
-                        if item.get('id'):
-                            track_ids.append(item['id'])
-                    if len(items) < limit:
-                        break
-                    offset += limit
-                    if len(track_ids) >= 200:
-                        break
-        except Exception as e:
-            print(f"[Spotify Error] {e}")
-        return track_ids
-
-    async def _search_youtube(self, track_info: dict):
-        """Search YouTube for a Spotify track dict and return the best result URL."""
-        try:
-            name = track_info.get('name', '')
-            artists = ' '.join(a.get('name', '') for a in track_info.get('artists', []))
-            query = f"ytsearch:{name} {artists}".strip()
-            loop = asyncio.get_event_loop()
-            partial = functools.partial(YTDLSource.ytdl.extract_info, query, download=False, process=False)
-            data = await loop.run_in_executor(None, partial)
-            if data and 'entries' in data and data['entries']:
-                entry = data['entries'][0]
-                return entry.get('url') or entry.get('webpage_url') or (
-                    f"https://www.youtube.com/watch?v={entry['id']}" if entry.get('id') else None
-                )
-            elif data and 'url' in data:
-                return data['url']
-        except Exception:
-            pass
-        return None
 
     # ---------------- Lyrics ----------------
 
