@@ -28,9 +28,11 @@ PLAYER_ACTIONS = {
     "seek": {"position"},
     "volume": {"volume"},
     "loop": {"mode"},
-    "jump": {"index"},
-    "remove": {"index"},
-    "move": {"from", "to"},
+    # expect: the track the browser believes is at that index ({url, title}),
+    # so a queue that moved on since the last poll is not edited blindly.
+    "jump": {"index", "expect"},
+    "remove": {"index", "expect"},
+    "move": {"from", "to", "expect"},
     "effects": {"reset", "pitch", "bass_boost", "nightcore", "vaporwave", "reverb", "slowed", "slownrev", "sixteen_d"},
     "autoplay": {"enabled"},
 }

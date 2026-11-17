@@ -1891,12 +1891,41 @@ class MusicCog(commands.Cog):
         state.loop = mode
         return {'loop': mode}
 
+    @staticmethod
+    def _locate(state: VoiceState, index: int, expect) -> int:
+        """The queue position the browser meant, not just the one it sent.
+
+        The dashboard's snapshot is up to a few seconds old.  If a track
+        finished in that time every index shifted by one, and clicking × on
+        row 3 removed what had been row 4.  The browser now says which track it
+        means; the nearest matching row wins, and if the track is gone the
+        request is refused rather than applied to a neighbour.
+        """
+        size = len(state.songs)
+        if not isinstance(expect, dict):
+            if not 0 <= index < size:
+                raise VoiceError("That track is not in the queue.")
+            return index
+
+        want_url = expect.get('url') or None
+        want_title = str(expect.get('title') or '')
+
+        def matches(track: Track) -> bool:
+            if want_url is not None:
+                return track.url == want_url
+            return track.title == want_title
+
+        if 0 <= index < size and matches(state.songs[index]):
+            return index
+        candidates = [position for position, track in enumerate(state.songs) if matches(track)]
+        if not candidates:
+            raise VoiceError("The queue changed and that track is no longer in it.")
+        return min(candidates, key=lambda position: abs(position - index))
+
     async def _bridge_jump(self, guild, actor_id, args):
         self._authorize(guild, actor_id)
         state = self._require_state(guild.id)
-        index = int(_coerce_float(args.get('index'), 'index'))
-        if not 0 <= index < len(state.songs):
-            raise VoiceError("That track is not in the queue.")
+        index = self._locate(state, int(_coerce_float(args.get('index'), 'index')), args.get('expect'))
         state.songs.move(index, 0)
         state.skip()
         return {'jumped_to': index}
@@ -1904,9 +1933,7 @@ class MusicCog(commands.Cog):
     async def _bridge_remove(self, guild, actor_id, args):
         self._authorize(guild, actor_id)
         state = self._require_state(guild.id)
-        index = int(_coerce_float(args.get('index'), 'index'))
-        if not 0 <= index < len(state.songs):
-            raise VoiceError("That track is not in the queue.")
+        index = self._locate(state, int(_coerce_float(args.get('index'), 'index')), args.get('expect'))
         removed = state.songs[index].title
         state.songs.remove(index)
         return {'removed': removed}
@@ -1914,7 +1941,7 @@ class MusicCog(commands.Cog):
     async def _bridge_move(self, guild, actor_id, args):
         self._authorize(guild, actor_id)
         state = self._require_state(guild.id)
-        source = int(_coerce_float(args.get('from'), 'from'))
+        source = self._locate(state, int(_coerce_float(args.get('from'), 'from')), args.get('expect'))
         target = int(_coerce_float(args.get('to'), 'to'))
         try:
             state.songs.move(source, target)

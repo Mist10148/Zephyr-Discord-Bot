@@ -261,6 +261,43 @@ class TestBridgeActions:
         assert await cog._bridge_remove(guild, "42", {"index": 0}) == {"removed": "A"}
 
     @pytest.mark.asyncio
+    async def test_a_shifted_queue_removes_the_track_the_user_meant(self):
+        """A track ended since the last poll: index 1 now holds what was index 2."""
+        state = _state()
+        for name in ("B", "C", "D"):
+            state.songs.put_nowait(Track(title=name, url=f"http://{name.lower()}"))
+        cog = _cog({1: state})
+        guild = _guild(_member(manage_guild=True))
+
+        result = await cog._bridge_remove(guild, "42", {"index": 2, "expect": {"url": "http://c", "title": "C"}})
+
+        assert result == {"removed": "C"}
+        assert [track.title for track in state.songs] == ["B", "D"]
+
+    @pytest.mark.asyncio
+    async def test_a_track_that_left_the_queue_is_not_replaced_by_a_neighbour(self):
+        state = _state()
+        state.songs.put_nowait(Track(title="B", url="http://b"))
+        cog = _cog({1: state})
+        guild = _guild(_member(manage_guild=True))
+
+        with pytest.raises(VoiceError, match="queue changed"):
+            await cog._bridge_remove(guild, "42", {"index": 0, "expect": {"url": "http://gone", "title": "Gone"}})
+        assert len(state.songs) == 1
+
+    @pytest.mark.asyncio
+    async def test_move_follows_the_expected_track(self):
+        state = _state()
+        for name in ("A", "B", "C"):
+            state.songs.put_nowait(Track(title=name, url=None))
+        cog = _cog({1: state})
+        guild = _guild(_member(manage_guild=True))
+
+        await cog._bridge_move(guild, "42", {"from": 1, "to": 0, "expect": {"url": None, "title": "C"}})
+
+        assert [track.title for track in state.songs] == ["C", "A", "B"]
+
+    @pytest.mark.asyncio
     async def test_state_is_readable_without_a_connection_or_a_permission(self):
         """The dashboard must be able to render "nothing is playing"."""
         cog = _cog()
