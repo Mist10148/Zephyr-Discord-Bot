@@ -125,6 +125,18 @@ STREAM_AVAILABLE_MAX_WAIT_SECONDS = 30
 # genuine end of a track.
 FFMPEG_RECONNECT_OPTIONS = '-reconnect 1 -reconnect_streamed 1 -reconnect_on_network_error 1 -reconnect_delay_max 5'
 
+# Speed effects, as the factor each one plays the source at.  They are applied
+# as one resample so they compose, and the product is also what the position
+# clock runs at (see VoiceState.elapsed).
+SPEED_EFFECTS = {
+    '_nightcore_enabled': 1.25,
+    '_vaporwave_enabled': 0.8,
+    '_slowed_enabled': 0.9,
+    '_slownrev_enabled': 0.9,
+}
+EFFECT_SAMPLE_RATE = 48000
+REVERB_FILTER = 'aecho=0.8:0.88:60:0.4'
+
 _VIDEO_ID_RE = re.compile(r'(?:v=|youtu\.be/|/shorts/|/embed/)([A-Za-z0-9_-]{11})')
 
 
@@ -908,6 +920,14 @@ class VoiceState:
             return self._current_position
         return self._current_position + (time.time() - self._current_start_time)
 
+    def playback_rate(self) -> float:
+        """How fast the effect chain plays the source: 1.0 is normal speed."""
+        rate = 1.0
+        for attribute, factor in SPEED_EFFECTS.items():
+            if getattr(self, attribute):
+                rate *= factor
+        return rate
+
     def get_ffmpeg_options(self, seek_position: float = None):
         options = {
             'before_options': FFMPEG_RECONNECT_OPTIONS,
@@ -916,18 +936,21 @@ class VoiceState:
         if seek_position is not None and seek_position > 0:
             options['before_options'] += f' -ss {seek_position}'
         filters = []
+        rate = self.playback_rate()
+        if rate != 1.0:
+            # Resample to a known rate first: asetrate reinterprets whatever rate
+            # the input has, so a fixed target was a no-op on YouTube's 48 kHz
+            # opus and a different effect on 44.1 kHz m4a.  Scaling a known
+            # rate changes speed and pitch together, which is the effect.
+            filters.append(f"aresample={EFFECT_SAMPLE_RATE},"
+                           f"asetrate={round(EFFECT_SAMPLE_RATE * rate)},"
+                           f"aresample={EFFECT_SAMPLE_RATE}")
         if self._16d_enabled:
             filters.append("apulsator=hz=0.08")
-        if self._nightcore_enabled:
-            filters.append("atempo=1.3,asetrate=48000")
-        elif self._vaporwave_enabled:
-            filters.append("atempo=0.7,asetrate=32000")
-        if self._reverb_enabled:
-            filters.append("reverb=reverbdry=50:reverbwet=50")
-        if self._slowed_enabled:
-            filters.append("atempo=0.98,asetrate=44100,aresample=44100")
-        if self._slownrev_enabled:
-            filters.append("atempo=0.98,asetrate=44100,aresample=44100,reverb=reverbdry=50:reverbwet=50")
+        if self._reverb_enabled or self._slownrev_enabled:
+            # FFmpeg has no "reverb" filter (that is SoX syntax); asking for one
+            # made FFmpeg exit before producing a sample, on every track.
+            filters.append(REVERB_FILTER)
         if self._pitch != 1.0:
             filters.append(f"rubberband=pitch={self._pitch}")
         if self._bass_boost is not None:
