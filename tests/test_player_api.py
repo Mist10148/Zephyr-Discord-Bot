@@ -237,6 +237,44 @@ class TestSlowActionTimeout:
 
         assert captured == [("player.play", SLOW_ACTION_TIMEOUT)]
 
+    @pytest.mark.parametrize("action, body", [("seek", {"position": 30}), ("effects", {"nightcore": True})])
+    def test_restarting_actions_wait_for_the_slow_timeout(self, client, logged_in, fake_redis, captured, action, body):
+        """Both re-extract the track; on 5s they reported failure and then applied."""
+        from website.api.player import SLOW_ACTION_TIMEOUT
+
+        client.post(f"/api/v1/guilds/1/player/{action}", json=body, headers=_headers(logged_in))
+
+        assert captured == [(f"player.{action}", SLOW_ACTION_TIMEOUT)]
+
+    def test_an_oversized_query_is_refused_before_the_bot(self, client, logged_in, fake_redis, captured):
+        response = client.post(
+            "/api/v1/guilds/1/player/play", json={"query": "x" * 501}, headers=_headers(logged_in))
+
+        assert response.status_code == 400
+        assert captured == []
+
+    def test_a_non_string_query_is_refused(self, client, logged_in, fake_redis, captured):
+        response = client.post(
+            "/api/v1/guilds/1/player/play", json={"query": ["a"]}, headers=_headers(logged_in))
+
+        assert response.status_code == 400
+
+    def test_playlist_loads_are_rate_limited(self, client, logged_in, fake_redis, captured, monkeypatch):
+        from website.api import playlists
+
+        monkeypatch.setattr(playlists, "rate_limit", lambda *a, **k: False)
+        created = client.post(
+            "/api/v1/playlists",
+            json={"name": "Weekend", "tracks": [{"title": "A", "url": "https://youtu.be/a"}]},
+            headers=_headers(logged_in),
+        )
+        response = client.post(
+            f"/api/v1/playlists/{created.get_json()['id']}/load", json={"guild_id": "1"}, headers=_headers(logged_in)
+        )
+
+        assert response.status_code == 429
+        assert captured == []
+
     def test_quick_actions_keep_the_default(self, client, logged_in, fake_redis, captured):
         client.post("/api/v1/guilds/1/player/skip", headers=_headers(logged_in))
 

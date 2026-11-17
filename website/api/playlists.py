@@ -8,7 +8,7 @@ always, and to anyone in the guild it was saved in when it is public.
 from flask import current_app, g, jsonify, request
 
 from website.api import api, error, is_row_id, is_snowflake
-from website.api.guard import current_session, require_session
+from website.api.guard import current_session, rate_limit, require_session
 from zephyr.db import playlists as repo
 from zephyr.services import spotify
 
@@ -261,7 +261,7 @@ def import_spotify():
 @require_session
 def load_playlist(playlist_id: str):
     """Queue a playlist up in a guild, via the bot."""
-    from website.api.player import SLOW_ACTION_TIMEOUT, bridge_call
+    from website.api.player import PLAYER_RATE_LIMIT, PLAYER_RATE_WINDOW, SLOW_ACTION_TIMEOUT, bridge_call
 
     if not is_row_id(playlist_id):
         return error("not_found", "No such playlist.", 404)
@@ -273,6 +273,10 @@ def load_playlist(playlist_id: str):
         return error("invalid_guild_id", "Send the guild to load it into.", 400)
     if guild_id not in current_session().manageable_ids():
         return error("forbidden", "You do not manage that server.", 403)
+    # Shares the player's budget: each load can hold a worker thread for the
+    # slow-action timeout, and it was the one player route with no limit.
+    if not rate_limit("player", limit=PLAYER_RATE_LIMIT, window=PLAYER_RATE_WINDOW):
+        return error("rate_limited", "Slow down a moment.", 429)
 
     return bridge_call(
         "playlist.load",

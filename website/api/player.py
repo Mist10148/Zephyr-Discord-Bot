@@ -44,8 +44,15 @@ PLAYER_RATE_WINDOW = 10
 # the bridge's default 5s.  Timing out there reported a 504 for a track the bot
 # went on to queue, and the retry queued it twice.  Kept under gunicorn's 30s
 # default worker timeout so the worker is never killed mid-wait.
-SLOW_ACTIONS = {"play"}
+# seek and effects belong here too: both restart the track, which re-extracts
+# it, and on the default 5s they reported "did not respond" for a change the
+# bot went on to apply.
+SLOW_ACTIONS = {"play", "seek", "effects"}
 SLOW_ACTION_TIMEOUT = 20.0
+
+# Longer than any song title or URL anyone types; the query goes straight to
+# yt-dlp, so there is no reason to forward an arbitrary blob.
+MAX_QUERY_LENGTH = 500
 
 
 def bridge_call(action: str, *, guild_id=None, actor_id=None, args=None, timeout=None):
@@ -115,6 +122,10 @@ def post_player_action(guild_id: str, action: str):
     unknown = sorted(set(body) - allowed)
     if unknown:
         return error("unknown_fields", f"Cannot set: {', '.join(unknown)}.", 400, unknown)
+
+    query = body.get("query")
+    if query is not None and (not isinstance(query, str) or len(query) > MAX_QUERY_LENGTH):
+        return error("invalid_value", f"Send a song name or link of at most {MAX_QUERY_LENGTH} characters.", 400)
 
     if not rate_limit("player", limit=PLAYER_RATE_LIMIT, window=PLAYER_RATE_WINDOW):
         return error("rate_limited", "Slow down a moment.", 429)
