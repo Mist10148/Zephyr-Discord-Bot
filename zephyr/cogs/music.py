@@ -19,10 +19,9 @@ import traceback
 import time
 import re
 from collections import deque
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import aiohttp
-import requests
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -3028,7 +3027,8 @@ class MusicCog(commands.Cog):
         try:
             async with aiohttp.ClientSession() as session:
                 # Try lyrics.ovh search endpoint first
-                search_url = f"https://api.lyrics.ovh/suggest/{requests.utils.quote(title)}"
+                # safe="" so a "/" in a title (AC/DC) is escaped instead of splitting the path.
+                search_url = f"https://api.lyrics.ovh/suggest/{quote(title, safe='')}"
                 async with session.get(search_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     if resp.status == 200:
                         data = await resp.json()
@@ -3039,7 +3039,7 @@ class MusicCog(commands.Cog):
                         # Use first result
                         artist = items[0]['artist']['name']
                         song_title = items[0]['title']
-                        lyrics_url = f"https://api.lyrics.ovh/v1/{requests.utils.quote(artist)}/{requests.utils.quote(song_title)}"
+                        lyrics_url = f"https://api.lyrics.ovh/v1/{quote(artist, safe='')}/{quote(song_title, safe='')}"
                         async with session.get(lyrics_url, timeout=aiohttp.ClientTimeout(total=10)) as lyrics_resp:
                             if lyrics_resp.status == 200:
                                 lyrics_data = await lyrics_resp.json()
