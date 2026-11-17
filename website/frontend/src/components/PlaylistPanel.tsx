@@ -43,8 +43,10 @@ function PlaylistEditor({ playlistId, onClose }: { playlistId: number; onClose()
     onSuccess: () => { client.invalidateQueries({ queryKey: ['playlist', playlistId] }); client.invalidateQueries({ queryKey: ['playlists'] }) },
   })
 
-  if (playlist.isPending || tracks === null) return <Skeleton lines={5} />
+  // The error first: on a failed load tracks stays null, so checking it second
+  // showed a skeleton forever with no way to retry.
   if (playlist.error) return <ErrorNote error={playlist.error} onRetry={() => playlist.refetch()} />
+  if (playlist.isPending || tracks === null) return <Skeleton lines={5} />
 
   const key = (track: PlaylistTrack, index: number) => `${index}-${track.url ?? track.title}`
   const onDragEnd = (event: DragEndEvent) => {
