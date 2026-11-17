@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api } from './api'
+import { ApiError, api } from './api'
 import type { GuildMeta, Player, PlaylistDetail, PlaylistSummary } from '../types/api'
 
 // A .ts file, not .tsx: eslint-plugin-react-refresh only scans .jsx/.tsx, so hooks
@@ -12,12 +12,21 @@ import type { GuildMeta, Player, PlaylistDetail, PlaylistSummary } from '../type
 // polling faster would only re-read the same value.
 export const PLAYER_POLL_MS = 3000
 
+/** Whether an error will clear up by itself, so polling again is worthwhile.
+ *
+ * Signed out, not allowed, or a deployment with no bridge at all will answer
+ * the same way every three seconds for as long as the page stays open.
+ */
+export function isPermanentPlayerError(error: unknown) {
+  return error instanceof ApiError && (error.status === 401 || error.status === 403 || error.code === 'bridge_not_configured')
+}
+
 export function usePlayer(guildId: string | undefined) {
   return useQuery({
     queryKey: ['player', guildId],
     queryFn: () => api<Player>(`/guilds/${guildId}/player`),
     enabled: !!guildId,
-    refetchInterval: PLAYER_POLL_MS,
+    refetchInterval: query => isPermanentPlayerError(query.state.error) ? false : PLAYER_POLL_MS,
     // The snapshot is the definition of current; a cached one is never worth
     // showing in preference to a fetch.
     staleTime: 0,

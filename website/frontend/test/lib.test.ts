@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { groupByDay, timeOfDay } from '../src/lib/audit-groups'
 import { airQualityLabel, heatAdvisory, weatherGlyph } from '../src/lib/weather-icons'
 import { buildTranscriptMarkdown } from '../src/lib/export'
+import { ApiError } from '../src/lib/api'
+import { isPermanentPlayerError } from '../src/lib/player'
 import type { AuditEntry } from '../src/types/api'
 
 function entry(id: number, createdAt: string | null): AuditEntry {
@@ -135,5 +137,18 @@ describe('safeNext', () => {
     const { safeNext } = await import('../src/lib/auth')
     for (const value of ['//evil.com', '/\\evil.com', 'https://evil.com', '/\t/evil.com', '/\n/evil.com', null, ''])
       expect(safeNext(value)).toBe('/g')
+  })
+})
+
+describe('isPermanentPlayerError', () => {
+  it('stops polling for errors that will not clear up by themselves', () => {
+    expect(isPermanentPlayerError(new ApiError(401, 'unauthenticated', 'Sign in'))).toBe(true)
+    expect(isPermanentPlayerError(new ApiError(403, 'forbidden', 'No'))).toBe(true)
+    expect(isPermanentPlayerError(new ApiError(503, 'bridge_not_configured', 'No Redis'))).toBe(true)
+  })
+  it('keeps polling through transient failures', () => {
+    expect(isPermanentPlayerError(new ApiError(503, 'bridge_unavailable', 'Blip'))).toBe(false)
+    expect(isPermanentPlayerError(new Error('network'))).toBe(false)
+    expect(isPermanentPlayerError(null)).toBe(false)
   })
 })
