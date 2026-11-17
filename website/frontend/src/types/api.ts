@@ -24,7 +24,7 @@ export type Effects = { bass_boost: number | null; pitch: number; nightcore: boo
 export type Player = {
   guild_id: string; live: boolean; connected: boolean
   voice_channel_id?: string | null; voice_channel_name?: string | null
-  playing?: boolean; paused?: boolean; position_s?: number; duration_s?: number
+  playing?: boolean; paused?: boolean; position_s?: number; duration_s?: number; rate?: number
   loop?: 'off' | 'track' | 'queue'; volume?: number; autoplay?: boolean; always_on?: boolean
   effects?: Effects; track: PlayerTrack | null; queue: PlayerTrack[]
   queue_length?: number; queue_duration_s?: number; published_at?: number

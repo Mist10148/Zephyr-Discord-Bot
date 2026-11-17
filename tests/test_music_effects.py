@@ -89,3 +89,27 @@ def test_every_chain_runs_in_ffmpeg(flag):
         capture_output=True, text=True, timeout=60,
     )
     assert result.returncode == 0, result.stderr
+
+
+class TestPositionClock:
+    def test_elapsed_runs_at_the_rate_the_source_started_with(self, monkeypatch):
+        state = _state(_nightcore_enabled=True)
+        monkeypatch.setattr("zephyr.cogs.music.time.time", lambda: 1000.0)
+        state._current_position, state._current_start_time = 30.0, 960.0
+        state._current_rate = state.playback_rate()
+        # 40 s of listening at 1.25x covers 50 s of the track.
+        assert state.elapsed == pytest.approx(80.0)
+
+    def test_toggling_an_effect_does_not_rewrite_time_already_played(self, monkeypatch):
+        """restart_current reads elapsed *after* the toggle, to find where to resume."""
+        state = _state()
+        monkeypatch.setattr("zephyr.cogs.music.time.time", lambda: 1000.0)
+        state._current_position, state._current_start_time = 0.0, 900.0
+        state._current_rate = state.playback_rate()
+        state._nightcore_enabled = True
+        assert state.elapsed == pytest.approx(100.0)
+
+    def test_snapshot_reports_the_rate(self):
+        state = _state()
+        state._current_rate = 0.8
+        assert state.snapshot()["rate"] == 0.8

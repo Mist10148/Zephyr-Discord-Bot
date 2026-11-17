@@ -872,6 +872,10 @@ class VoiceState:
 
         self._current_start_time = None
         self._current_position = 0.0
+        # The speed the playing source runs at, fixed when it started: the
+        # effect flags may already have changed by the time elapsed is read
+        # (restart_current reads it *after* a toggle, to find where to resume).
+        self._current_rate = 1.0
         self.audio_player = None
         # Bounded history of what autoplay has already served, so a Mix -- which
         # always leads with its seed video -- cannot put one song on repeat.
@@ -927,9 +931,15 @@ class VoiceState:
 
     @property
     def elapsed(self):
+        """Position in the *source*, in seconds.
+
+        Wall-clock time scaled by the playback rate: under nightcore a minute of
+        listening covers 75 seconds of the track, and treating them as equal
+        made the progress bar, /forward and every effect restart drift.
+        """
         if self._current_start_time is None:
             return self._current_position
-        return self._current_position + (time.time() - self._current_start_time)
+        return self._current_position + (time.time() - self._current_start_time) * self._current_rate
 
     def playback_rate(self) -> float:
         """How fast the effect chain plays the source: 1.0 is normal speed."""
@@ -1002,6 +1012,9 @@ class VoiceState:
             'playing': bool(self.voice and self.voice.is_playing()),
             'paused': bool(self.voice and self.voice.is_paused()),
             'position_s': round(self.elapsed, 1) if self.current else 0.0,
+            # How many seconds of track one second of listening covers, so the
+            # dashboard's local progress tick matches a sped-up or slowed track.
+            'rate': self._current_rate,
             'duration_s': self.current.duration_seconds if self.current else 0,
             'loop': self.loop,
             'volume': int(round(self._volume * 100)),
@@ -1188,6 +1201,7 @@ class VoiceState:
                 self.source = source
                 self._current_start_time = time.time()
                 self._current_position = 0.0
+                self._current_rate = self.playback_rate()
                 self.voice.play(source, after=lambda error: self.play_next_song(error, source=source, track=track))
                 self._remember(track)
                 self.changed()
@@ -1366,6 +1380,7 @@ class VoiceState:
             self.source = source
             self._current_position = elapsed
             self._current_start_time = time.time()
+            self._current_rate = self.playback_rate()
             self.voice.play(source, after=lambda error: self.play_next_song(error, source=source, track=track))
         except Exception:
             # Nothing is playing now and the old callback is being ignored, so

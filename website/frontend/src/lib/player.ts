@@ -91,7 +91,9 @@ export function useElapsed(player: Player | undefined, fetchedAt: number) {
 
   if (!player?.track) return 0
   const base = player.position_s ?? 0
-  const drift = moving ? Math.max(0, (now - fetchedAt) / 1000) : 0
+  // position_s is in track time; under a speed effect it advances faster or
+  // slower than the wall clock, by the rate the bot reports.
+  const drift = moving ? Math.max(0, (now - fetchedAt) / 1000) * (player.rate ?? 1) : 0
   const duration = player.duration_s ?? 0
   const elapsed = base + drift
   return duration > 0 ? Math.min(elapsed, duration) : elapsed
