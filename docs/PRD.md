@@ -194,7 +194,9 @@ the dashboard.
   reading the bot's own heartbeat.
 - **Signed in** (Discord OAuth): the servers you administer, and per server a music remote, weather
   subscriptions, and editable settings. The bot applies the default volume, DJ role and music
-  channels; prefix, locale and timezone are stored but not yet used by the bot.
+  channels; prefix, locale and timezone are stored but not yet used by the bot. The DJ role (or,
+  without one, being in the bot's voice channel) governs the playback slash commands, the
+  now-playing buttons and the web remote alike.
 - Channel and role pickers are answered by the bot in real time, because the web tier holds no
   Discord token and has no gateway connection.
 - Every mutating action is written to `audit_log` with its actor and source.

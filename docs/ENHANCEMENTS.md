@@ -54,6 +54,30 @@ The four issues this audit left open have since been fixed:
   `PRAGMA foreign_keys` stays off because batch Alembic migrations rebuild tables with
   `DROP TABLE`, which would fire the cascades.
 
+## Music audit, 2026-11-18 (resolved)
+
+- **Effects.** FFmpeg has no `reverb` filter, so `/reverb`, `/slownrev` and the web toggles failed
+  every track; they use `aecho` now. Speed effects resample from a fixed 48 kHz, so nightcore,
+  vaporwave and slowed sound the same on every source, and the position clock runs at their rate.
+- **Silent failures.** A filter or startup failure looked like the track ending; it is now detected
+  (stderr markers, or a long track ending within two seconds) and retried once, then reported.
+- **Restarts.** Seeks and effect changes are serialised, keep a paused track paused, and honour a
+  skip that arrives mid-restart.
+- **Commands.** `/np` works; every failed command gets a reply; the DJ role governs the playback
+  slash commands as it already did the buttons and web remote.
+- **Spotify.** Read as metadata only and resolved at play time, for `/play` and the web remote alike.
+- **Voice and lookups.** One connect helper adopts an existing voice client; flat yt-dlp lookups time
+  out after 60s; links to private or local addresses are refused; TLS verification is back on.
+- **Bridge.** Commands run concurrently and are dropped once their caller has given up; seek and
+  effects get the 20s timeout; queue edits name the track they mean, so a stale index cannot edit
+  the wrong row.
+- **Dashboard.** Failed queue edits roll back; Play next moves the row; Undo really undoes; volume
+  reaches 200% and bass boost goes negative; the mini player renders; Spotify imports and creates
+  never overwrite a playlist with the same name.
+
+Known and left as is: no auto-leave from an empty channel, 24/7 is not persisted across restarts,
+the dashboard's progress bar can lag the bot by up to one poll, and YouTube may challenge cloud IPs.
+
 ---
 
 # Phase 8 — UX correctness *(shipped)*

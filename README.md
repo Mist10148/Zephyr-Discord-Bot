@@ -129,7 +129,15 @@ as `/`-prefixed text messages; the rest are slash-only.
 **Extras:** `/lyrics [query]` · `/helpmusic`
 
 > Supports YouTube links/search, Spotify tracks, playlists, and albums (resolved to YouTube audio).
-> Saved playlists store titles and links, and re-find a track by title if its link stops working.
+> Spotify links are read as titles only and each track is found on YouTube when it comes up, so a
+> 200-track playlist queues in seconds. Saved playlists store titles and links, and re-find a track
+> by title if its link stops working.
+>
+> **Who can control the player:** if the server has a DJ role, you need it (or Manage Server);
+> if it does not, you need to be in the voice channel Zephyr is in. That rule applies to the
+> commands that change playback (`/pause`, `/resume`, `/stop`, `/volume`, `/seek`, the queue
+> edits, effects, `/247`, `/autoplay`), the now-playing buttons and the web remote alike. `/skip`
+> stays a vote among listeners; `/leave`, `/summon` and `/disconnect` need Manage Server.
 
 ### 💬 AI Chat & TTS
 | Command | Description |
@@ -157,7 +165,8 @@ You can also just **@mention**, **reply to**, or **DM** the bot to chat with it 
 ## 📋 Requirements
 
 - **Python 3.13+**
-- **Node.js 22+** — only to build the dashboard (`website/frontend`)
+- **Node.js 22+** — builds the dashboard (`website/frontend`), and the **bot needs it at runtime
+  too**: yt-dlp runs YouTube's player JavaScript with Node to get playable audio
 - **FFmpeg** — required for all voice/music/TTS audio. The bot looks for it in this order:
   1. an `ffmpeg/` folder inside a PyInstaller build (only when running as a frozen executable),
   2. the `FFMPEG_PATH` value in your `.env`,
