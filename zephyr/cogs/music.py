@@ -2013,6 +2013,21 @@ class MusicCog(commands.Cog):
             for row in rows
         ]
 
+    async def _gate(self, interaction: discord.Interaction) -> bool:
+        """Apply the player permission rule to a slash command.
+
+        The docs promise the DJ role governs the player, but only the buttons
+        and the dashboard went through ``_authorize``: in Discord anyone could
+        /volume 1000 or /clear, while /pause needed Manage Server, which a DJ
+        does not have.  Every player-changing command now uses the same rule.
+        """
+        try:
+            self._authorize(interaction.guild, interaction.user.id)
+        except VoiceError as exc:
+            await interaction.response.send_message(f'❌ {exc}', ephemeral=True)
+            return False
+        return True
+
     async def _connect(self, state: VoiceState, guild: discord.Guild, destination) -> None:
         """Make sure ``state`` owns a live voice connection, joining ``destination`` if not.
 
@@ -2101,6 +2116,15 @@ class MusicCog(commands.Cog):
                     state.voice = vc
                     await interaction.followup.send(embed=discord.Embed(description=f'✅ Already connected to {destination}', color=discord.Color.green()))
                     return
+                if state.current is not None:
+                    # Moving would take the music away from everyone listening.
+                    try:
+                        self._authorize(interaction.guild, interaction.user.id)
+                    except VoiceError:
+                        await interaction.followup.send(embed=discord.Embed(
+                            description=f'❌ Zephyr is playing in {vc.channel}. Ask a DJ or a server manager to move it.',
+                            color=discord.Color.red()))
+                        return
                 try:
                     await vc.move_to(destination)
                     state.voice = vc
@@ -2265,6 +2289,9 @@ class MusicCog(commands.Cog):
         select = Select(placeholder="Choose a track...", options=options)
 
         async def select_callback(interaction2: discord.Interaction):
+            if interaction2.user.id != interaction.user.id:
+                await interaction2.response.send_message("Run `/msearch` yourself to pick a track.", ephemeral=True)
+                return
             await interaction2.response.defer()
             track = results[int(select.values[0])]
             await self._enqueue_track(interaction2, track)
@@ -2301,8 +2328,9 @@ class MusicCog(commands.Cog):
         await self.now.callback(self, interaction)
 
     @app_commands.command(name='pause', description='Pauses the currently playing song.')
-    @app_commands.checks.has_permissions(manage_guild=True)
     async def pause(self, interaction: discord.Interaction):
+        if not await self._gate(interaction):
+            return
         ctx = await self._interaction_ctx(interaction)
         state = self.get_voice_state(ctx)
         if state.is_playing and state.voice.is_playing():
@@ -2315,8 +2343,9 @@ class MusicCog(commands.Cog):
             await interaction.response.send_message("Nothing is currently playing.", ephemeral=True)
 
     @app_commands.command(name='resume', description='Resumes a currently paused song.')
-    @app_commands.checks.has_permissions(manage_guild=True)
     async def resume(self, interaction: discord.Interaction):
+        if not await self._gate(interaction):
+            return
         ctx = await self._interaction_ctx(interaction)
         state = self.get_voice_state(ctx)
         if state.voice and state.voice.is_paused():
@@ -2327,8 +2356,9 @@ class MusicCog(commands.Cog):
             await interaction.response.send_message("Nothing is currently paused.", ephemeral=True)
 
     @app_commands.command(name='stop', description='Stops playing and clears the queue.')
-    @app_commands.checks.has_permissions(manage_guild=True)
     async def stop(self, interaction: discord.Interaction):
+        if not await self._gate(interaction):
+            return
         ctx = await self._interaction_ctx(interaction)
         state = self.get_voice_state(ctx)
         if state.halt():
@@ -2340,6 +2370,8 @@ class MusicCog(commands.Cog):
 
     @app_commands.command(name='clear', description='Clears the queue but keeps the current song playing.')
     async def clear(self, interaction: discord.Interaction):
+        if not await self._gate(interaction):
+            return
         ctx = await self._interaction_ctx(interaction)
         state = self.get_voice_state(ctx)
         state.songs.clear()
@@ -2353,6 +2385,10 @@ class MusicCog(commands.Cog):
             await interaction.response.send_message("Not playing any music right now...", ephemeral=True)
             return
         voter = interaction.user
+        listening = voter.voice.channel if getattr(voter, 'voice', None) else None
+        if state.voice and state.voice.channel and listening != state.voice.channel:
+            await interaction.response.send_message("Join the voice channel Zephyr is in to vote.", ephemeral=True)
+            return
         # Track carries requester_id, never a Member -- a Member is not
         # serializable, which is the whole reason the queue is plain data.  The
         # old `state.current.requester` raised AttributeError, so every /skip by
@@ -2375,6 +2411,8 @@ class MusicCog(commands.Cog):
     @app_commands.command(name='seek', description='Seeks to a position in the current track.')
     @app_commands.describe(position="Timestamp e.g. 1:30, 90, 2m")
     async def seek(self, interaction: discord.Interaction, position: str):
+        if not await self._gate(interaction):
+            return
         ctx = await self._interaction_ctx(interaction)
         state = self.get_voice_state(ctx)
         if not state.is_playing:
@@ -2400,6 +2438,8 @@ class MusicCog(commands.Cog):
     @app_commands.command(name='forward', description='Skips forward in the current track.')
     @app_commands.describe(amount="Time to skip forward e.g. 10s, 1:00")
     async def forward(self, interaction: discord.Interaction, amount: str):
+        if not await self._gate(interaction):
+            return
         ctx = await self._interaction_ctx(interaction)
         state = self.get_voice_state(ctx)
         if not state.is_playing:
@@ -2425,6 +2465,8 @@ class MusicCog(commands.Cog):
     @app_commands.command(name='rewind', description='Rewinds in the current track.')
     @app_commands.describe(amount="Time to rewind e.g. 10s, 1:00")
     async def rewind(self, interaction: discord.Interaction, amount: str):
+        if not await self._gate(interaction):
+            return
         ctx = await self._interaction_ctx(interaction)
         state = self.get_voice_state(ctx)
         if not state.is_playing:
@@ -2489,6 +2531,8 @@ class MusicCog(commands.Cog):
 
     @app_commands.command(name='shuffle', description='Shuffles the queue.')
     async def shuffle(self, interaction: discord.Interaction):
+        if not await self._gate(interaction):
+            return
         ctx = await self._interaction_ctx(interaction)
         state = self.get_voice_state(ctx)
         if len(state.songs) == 0:
@@ -2499,6 +2543,8 @@ class MusicCog(commands.Cog):
 
     @app_commands.command(name='remove', description='Removes one or more songs from the queue.')
     async def remove(self, interaction: discord.Interaction, index: int, count: int = 1):
+        if not await self._gate(interaction):
+            return
         ctx = await self._interaction_ctx(interaction)
         state = self.get_voice_state(ctx)
         if len(state.songs) == 0:
@@ -2517,6 +2563,8 @@ class MusicCog(commands.Cog):
 
     @app_commands.command(name='move', description='Moves a track to another position in the queue.')
     async def move(self, interaction: discord.Interaction, from_index: int, to_index: int):
+        if not await self._gate(interaction):
+            return
         ctx = await self._interaction_ctx(interaction)
         state = self.get_voice_state(ctx)
         if len(state.songs) == 0:
@@ -2530,6 +2578,8 @@ class MusicCog(commands.Cog):
 
     @app_commands.command(name='jump', description='Jumps to a track in the queue.')
     async def jump(self, interaction: discord.Interaction, index: int):
+        if not await self._gate(interaction):
+            return
         ctx = await self._interaction_ctx(interaction)
         state = self.get_voice_state(ctx)
         if not state.is_playing:
@@ -2551,6 +2601,8 @@ class MusicCog(commands.Cog):
         app_commands.Choice(name='Queue', value='queue')
     ])
     async def loop(self, interaction: discord.Interaction, mode: app_commands.Choice[str] = None):
+        if not await self._gate(interaction):
+            return
         ctx = await self._interaction_ctx(interaction)
         state = self.get_voice_state(ctx)
         if not state.is_playing:
@@ -2569,6 +2621,8 @@ class MusicCog(commands.Cog):
 
     @app_commands.command(name='loopqueue', description='Toggles queue loop.')
     async def loopqueue(self, interaction: discord.Interaction):
+        if not await self._gate(interaction):
+            return
         ctx = await self._interaction_ctx(interaction)
         state = self.get_voice_state(ctx)
         if not state.is_playing:
@@ -2580,6 +2634,8 @@ class MusicCog(commands.Cog):
 
     @app_commands.command(name='volume', description='Sets the volume of the player (0-1000).')
     async def volume(self, interaction: discord.Interaction, volume: int):
+        if not await self._gate(interaction):
+            return
         ctx = await self._interaction_ctx(interaction)
         state = self.get_voice_state(ctx)
         if not state.is_playing:
@@ -2594,6 +2650,8 @@ class MusicCog(commands.Cog):
     # ---------------- Audio Effects ----------------
 
     async def _toggle_effect(self, interaction: discord.Interaction, attr_name: str, display_name: str, mutually_exclusive: list = None):
+        if not await self._gate(interaction):
+            return
         ctx = await self._interaction_ctx(interaction)
         state = self.get_voice_state(ctx)
         if not state.voice:
@@ -2645,6 +2703,8 @@ class MusicCog(commands.Cog):
 
     @app_commands.command(name='pitch', description='Sets the player pitch (0.5-2.0 or reset).')
     async def pitch(self, interaction: discord.Interaction, new_pitch: str):
+        if not await self._gate(interaction):
+            return
         ctx = await self._interaction_ctx(interaction)
         state = self.get_voice_state(ctx)
         if not state.voice:
@@ -2681,6 +2741,8 @@ class MusicCog(commands.Cog):
         await self._set_bass_boost(interaction, amount)
 
     async def _set_bass_boost(self, interaction: discord.Interaction, amount: str):
+        if not await self._gate(interaction):
+            return
         ctx = await self._interaction_ctx(interaction)
         state = self.get_voice_state(ctx)
         if not state.voice:
@@ -2710,6 +2772,8 @@ class MusicCog(commands.Cog):
 
     @app_commands.command(name='247', description='Toggles 24/7 mode (no auto-disconnect).')
     async def twenty_four_seven(self, interaction: discord.Interaction):
+        if not await self._gate(interaction):
+            return
         ctx = await self._interaction_ctx(interaction)
         state = self.get_voice_state(ctx)
         if not state.voice:
@@ -2721,6 +2785,8 @@ class MusicCog(commands.Cog):
 
     @app_commands.command(name='reset_effects', description='Resets all audio effects.')
     async def reset_effects(self, interaction: discord.Interaction):
+        if not await self._gate(interaction):
+            return
         ctx = await self._interaction_ctx(interaction)
         state = self.get_voice_state(ctx)
         if not state.voice:
@@ -2744,6 +2810,8 @@ class MusicCog(commands.Cog):
 
     @app_commands.command(name='autoplay', description='Keeps the music going with a YouTube Mix when the queue runs out.')
     async def autoplay(self, interaction: discord.Interaction):
+        if not await self._gate(interaction):
+            return
         ctx = await self._interaction_ctx(interaction)
         state = self.get_voice_state(ctx)
         if not state.voice:

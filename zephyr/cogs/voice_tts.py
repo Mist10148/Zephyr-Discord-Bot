@@ -22,6 +22,9 @@ class TTSCog(commands.Cog):
         self.tts_language = "en"  # original module-level LANGUAGE
 
     @app_commands.command(name="disconnect", description="Disconnect the bot from the voice call.")
+    # The same rule as /leave, which this does exactly: it used to have no check,
+    # so anyone could end playback that /leave reserves for server managers.
+    @app_commands.checks.has_permissions(manage_guild=True)
     async def disconnect(self, interaction: discord.Interaction):
         if not interaction.guild:
             await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
@@ -81,6 +84,22 @@ class TTSCog(commands.Cog):
         except Exception as exc:
             _safe_remove(tts_path)
             await interaction.followup.send(f"TTS failed: {exc}", ephemeral=True)
+
+    async def cog_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        if isinstance(error, app_commands.MissingPermissions):
+            message = "❌ You need the **Manage Server** permission for that."
+        elif isinstance(error, app_commands.CheckFailure):
+            message = "❌ You can't use that here."
+        else:
+            print(f"[TTS] Command failed: {error}")
+            message = "❌ Something went wrong running that command."
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
+        except Exception:
+            pass
 
     def _music_is_active(self, guild_id: int) -> bool:
         """Whether the music player owns the voice client right now.
