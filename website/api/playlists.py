@@ -123,8 +123,13 @@ def create_playlist():
             tracks,
             guild_id=guild_id,
             is_public=bool(body.get("is_public")),
+            # Creating must not quietly replace a playlist that has this name;
+            # editing an existing one is PATCH /playlists/<id>.
+            replace=False,
             database_url=_database_url(),
         )
+    except repo.PlaylistExists as exc:
+        return error("conflict", str(exc).replace("**", ""), 409)
     except repo.PlaylistError as exc:
         return error("invalid_value", str(exc), 400)
     return jsonify(saved), 201
@@ -244,17 +249,40 @@ def import_spotify():
     if problem is not None:
         return problem
     try:
-        saved = repo.save_playlist(
-            current_session().user_id,
-            str(body.get("name") or name),
-            tracks,
-            guild_id=guild_id,
-            is_public=bool(body.get("is_public")),
-            database_url=_database_url(),
-        )
+        for candidate in _import_names(str(body.get("name") or name)):
+            try:
+                saved = repo.save_playlist(
+                    current_session().user_id,
+                    candidate,
+                    tracks,
+                    guild_id=guild_id,
+                    is_public=bool(body.get("is_public")),
+                    replace=False,
+                    database_url=_database_url(),
+                )
+                break
+            except repo.PlaylistExists:
+                continue
+        else:
+            return error("conflict", "You already have playlists with that name. Rename one and try again.", 409)
     except repo.PlaylistError as exc:
         return error("invalid_value", str(exc), 400)
     return jsonify({**saved, "source": "spotify"}), 201
+
+
+def _import_names(name: str, *, attempts: int = 20):
+    """``name``, then ``name (2)``, ``name (3)``... each cut to fit the limit.
+
+    Spotify allows longer names than playlists here do, and the import form has
+    no name field, so a long album title used to be an error the user could not
+    get around.  Taken names are skipped rather than overwritten.
+    """
+    base = " ".join(name.split()) or "Spotify import"
+    limit = repo.MAX_NAME_LENGTH
+    yield base[:limit].rstrip()
+    for number in range(2, attempts + 1):
+        suffix = f" ({number})"
+        yield base[: limit - len(suffix)].rstrip() + suffix
 
 
 @api.post("/playlists/<playlist_id>/load")

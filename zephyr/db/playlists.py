@@ -27,6 +27,10 @@ class PlaylistError(RuntimeError):
     """A playlist operation failed for a reason the caller should show a user."""
 
 
+class PlaylistExists(PlaylistError):
+    """``save_playlist(replace=False)`` found the name already taken."""
+
+
 def _clean_name(name: str) -> str:
     name = " ".join((name or "").split())
     if not name:
@@ -77,9 +81,14 @@ def save_playlist(
     *,
     guild_id: str | None = None,
     is_public: bool = False,
+    replace: bool = True,
     database_url: str | None = None,
 ) -> dict:
     """Create the playlist, or replace the tracks of the owner's existing one.
+
+    ``replace=False`` raises ``PlaylistExists`` instead of replacing: /save
+    means "overwrite my playlist of that name", but an import does not, and
+    silently swapping out a hand-built playlist's tracks lost them.
 
     One transaction, so a failed save never leaves a playlist half-rewritten --
     which for a replace would mean losing the old queue without storing the new
@@ -110,7 +119,9 @@ def save_playlist(
                     .returning(Playlist.id)
                 ).scalar_one()
             except IntegrityError:
-                raise PlaylistError(f"A playlist called **{name}** already exists.") from None
+                raise PlaylistExists(f"A playlist called **{name}** already exists.") from None
+        elif not replace:
+            raise PlaylistExists(f"A playlist called **{name}** already exists.")
         else:
             connection.execute(
                 delete(PlaylistTrack).where(PlaylistTrack.playlist_id == playlist_id)

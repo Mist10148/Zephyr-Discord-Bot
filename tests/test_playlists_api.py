@@ -159,6 +159,35 @@ class TestSpotifyImport:
         assert [track["url"] for track in tracks] == [None, None]
         assert response.get_json()["name"] == "Discover Weekly"
 
+    def _import(self, app, client, logged_in):
+        app.config["SPOTIFY_CLIENT_ID"] = "id"
+        app.config["SPOTIFY_CLIENT_SECRET"] = "secret"
+        return client.post(
+            "/api/v1/playlists/import/spotify",
+            json={"url": "https://open.spotify.com/playlist/abc"},
+            headers=_headers(logged_in),
+        )
+
+    def test_an_import_never_overwrites_a_playlist_of_the_same_name(self, app, client, logged_in, fake_redis, monkeypatch):
+        own = _create(client, logged_in, name="Discover Weekly").get_json()["id"]
+        before = client.get(f"/api/v1/playlists/{own}").get_json()["tracks"]
+        self._spotify(monkeypatch)
+
+        response = self._import(app, client, logged_in)
+
+        assert response.status_code == 201
+        assert response.get_json()["name"] == "Discover Weekly (2)"
+        assert response.get_json()["id"] != own
+        assert client.get(f"/api/v1/playlists/{own}").get_json()["tracks"] == before
+
+    def test_a_long_spotify_name_is_shortened_not_refused(self, app, client, logged_in, fake_redis, monkeypatch):
+        self._spotify(monkeypatch, name="A" * 100)
+
+        response = self._import(app, client, logged_in)
+
+        assert response.status_code == 201
+        assert response.get_json()["name"] == "A" * 80
+
     def test_a_deployment_without_credentials_says_so(self, app, client, logged_in, fake_redis):
         app.config["SPOTIFY_CLIENT_ID"] = None
         app.config["SPOTIFY_CLIENT_SECRET"] = None
@@ -324,3 +353,13 @@ class TestGuildSettings:
 
         assert response.status_code == 200
         assert client.get("/api/v1/guilds/1/settings").get_json()["dj_role_id"] == "777"
+
+
+def test_creating_a_playlist_with_a_taken_name_is_a_conflict(client, logged_in, fake_redis):
+    first = _create(client, logged_in).get_json()["id"]
+    before = client.get(f"/api/v1/playlists/{first}").get_json()["tracks"]
+
+    response = _create(client, logged_in, tracks=[{"title": "B", "url": "https://youtu.be/b"}])
+
+    assert response.status_code == 409
+    assert client.get(f"/api/v1/playlists/{first}").get_json()["tracks"] == before
