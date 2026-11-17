@@ -212,6 +212,47 @@ class TestPlayNextSong:
         }
         state.bot.loop.call_soon_threadsafe.assert_called_once_with(state.next.set)
 
+    def test_a_missing_filter_is_a_failure_not_a_track_end(self):
+        """FFmpeg's exit code reaches discord.py only after this callback runs."""
+        state = _make_state()
+        state.bot.loop = MagicMock()
+        track = Track(title="Filtered", url="https://example.com/watch?v=1")
+        source = MagicMock(stderr_tail="[AVFilterGraph] No such filter: 'reverb'")
+
+        state.play_next_song(source=source, track=track)
+
+        assert state._playback_failure["track"] is track
+
+    def test_ending_seconds_after_starting_is_a_failure(self):
+        state = _make_state()
+        state.bot.loop = MagicMock()
+        track = Track(title="Long song", url="https://example.com/watch?v=1", duration_seconds=240)
+        state._current_position, state._current_start_time = 0.0, None
+
+        state.play_next_song(source=MagicMock(stderr_tail=""), track=track)
+
+        assert state._playback_failure["track"] is track
+
+    def test_a_requested_skip_that_ends_early_is_not_a_failure(self):
+        state = _make_state()
+        state.bot.loop = MagicMock()
+        state._skip_requested = True
+        track = Track(title="Long song", url="https://example.com/watch?v=1", duration_seconds=240)
+
+        state.play_next_song(source=MagicMock(stderr_tail=""), track=track)
+
+        assert state._playback_failure is None
+
+    def test_a_track_that_played_through_is_not_a_failure(self):
+        state = _make_state()
+        state.bot.loop = MagicMock()
+        track = Track(title="Long song", url="https://example.com/watch?v=1", duration_seconds=240)
+        state._current_position, state._current_start_time = 240.0, None
+
+        state.play_next_song(source=MagicMock(stderr_tail=""), track=track)
+
+        assert state._playback_failure is None
+
 
 class TestPlaybackRetry:
     def test_queue_loop_track_is_retried_without_a_duplicate(self):

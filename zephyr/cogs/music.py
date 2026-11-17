@@ -135,6 +135,17 @@ SPEED_EFFECTS = {
     '_slownrev_enabled': 0.9,
 }
 EFFECT_SAMPLE_RATE = 48000
+
+# Lower-cased fragments of FFmpeg stderr that mean "this source never played",
+# as opposed to a track that reached its end.
+FFMPEG_FAILURE_MARKERS = (
+    'http error', 'error opening input', 'invalid data', 'server returned', 'connection refused',
+    'no such filter', 'filter not found', 'error initializing filter', 'error opening output',
+)
+# A track longer than this that ends within EARLY_END_SECONDS of starting, with
+# no skip or stop requested, failed rather than finished.
+MIN_TRACK_SECONDS_FOR_EARLY_END = 10
+EARLY_END_SECONDS = 2.0
 REVERB_FILTER = 'aecho=0.8:0.88:60:0.4'
 
 _VIDEO_ID_RE = re.compile(r'(?:v=|youtu\.be/|/shorts/|/embed/)([A-Za-z0-9_-]{11})')
@@ -1242,9 +1253,19 @@ class VoiceState:
             self.manual_stop = False
             return
         diagnostics = source.stderr_tail if source else ''
-        is_stream_failure = bool(error) or any(
-            marker in diagnostics.lower()
-            for marker in ('http error', 'error opening input', 'invalid data', 'server returned', 'connection refused')
+        # discord.py calls this *before* source.cleanup() records FFmpeg's exit
+        # code, so ``error`` is almost always None for an FFmpeg failure and the
+        # stderr text is the only evidence.  A track that "ends" moments after
+        # it started, with nobody asking it to, is the other giveaway: without
+        # that check a broken filter chain drained the whole queue in silence.
+        ended_early = (
+            track is not None
+            and track.duration_seconds > MIN_TRACK_SECONDS_FOR_EARLY_END
+            and self.elapsed < EARLY_END_SECONDS
+            and not (self._skip_requested or self._halt_requested)
+        )
+        is_stream_failure = bool(error) or ended_early or any(
+            marker in diagnostics.lower() for marker in FFMPEG_FAILURE_MARKERS
         )
         if is_stream_failure:
             detail = str(error) if error else diagnostics
