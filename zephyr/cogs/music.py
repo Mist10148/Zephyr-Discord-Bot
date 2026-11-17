@@ -1890,9 +1890,8 @@ class MusicCog(commands.Cog):
         if destination is None:
             raise VoiceError("Join a voice channel first.")
 
-        async with self._get_voice_lock(guild.id):
-            if not state.voice or not state.voice.is_connected():
-                state.voice = await destination.connect(self_deaf=True)
+        await self._connect(state, guild, destination)
+        self._ensure_np_channel(state, guild)
         state.start_player()
 
         tracks = await YTDLSource.resolve_tracks(
@@ -1918,6 +1917,54 @@ class MusicCog(commands.Cog):
     def _require_voice(self, interaction: discord.Interaction):
         if not interaction.user.voice or not interaction.user.voice.channel:
             raise VoiceError("You are not connected to any voice channel.")
+
+    async def _connect(self, state: VoiceState, guild: discord.Guild, destination) -> None:
+        """Make sure ``state`` owns a live voice connection, joining ``destination`` if not.
+
+        The one place the player connects.  Four call sites used to do this
+        four ways, and the ones that went straight to ``destination.connect()``
+        raised "Already connected to a voice channel" whenever the guild
+        already had a voice client the state did not know about -- after /say,
+        or after a state was recreated.  An existing client is adopted (moved
+        if it is elsewhere), and a half-dead one is torn down first.
+        """
+        async with self._get_voice_lock(guild.id):
+            if state.voice and state.voice.is_connected():
+                return
+            vc = guild.voice_client
+            if vc and not vc.is_connected():
+                try:
+                    await vc.disconnect(force=True)
+                except Exception:
+                    pass
+                vc = None
+            try:
+                if vc:
+                    if vc.channel != destination:
+                        await vc.move_to(destination)
+                    state.voice = vc
+                else:
+                    state.voice = await destination.connect(self_deaf=True, timeout=30.0, reconnect=True)
+            except Exception as exc:
+                raise VoiceError(f"Could not join {destination}: {exc}") from exc
+
+    def _ensure_np_channel(self, state: VoiceState, guild: discord.Guild) -> None:
+        """Give a state started from the dashboard somewhere to post.
+
+        A slash command sets the sticky channel; the bridge has no channel, so
+        playback started from the web announced nothing and its errors went
+        nowhere.  The first configured music channel is the natural home.
+        """
+        if state.np_channel_id is not None:
+            return
+        for channel_id in self._music_settings.get(int(guild.id), {}).get('music_channel_ids') or []:
+            try:
+                channel = guild.get_channel(int(channel_id))
+            except (TypeError, ValueError):
+                continue
+            if channel is not None:
+                state.np_channel_id = channel.id
+                return
 
     # ---------------- Voice Connection ----------------
 
@@ -1989,14 +2036,13 @@ class MusicCog(commands.Cog):
             return
         destination = channel or interaction.user.voice.channel
         await interaction.response.defer()
-        lock = self._get_voice_lock(interaction.guild.id)
-        async with lock:
-            if state.voice:
+        if state.voice and state.voice.is_connected():
+            async with self._get_voice_lock(interaction.guild.id):
                 await state.voice.move_to(destination)
-                await interaction.followup.send(embed=discord.Embed(description=f'➡️ Moved to {destination}', color=discord.Color.green()))
-            else:
-                state.voice = await destination.connect(self_deaf=True)
-                await interaction.followup.send(embed=discord.Embed(description=f'🔊 Joined {destination}', color=discord.Color.green()))
+            await interaction.followup.send(embed=discord.Embed(description=f'➡️ Moved to {destination}', color=discord.Color.green()))
+        else:
+            await self._connect(state, interaction.guild, destination)
+            await interaction.followup.send(embed=discord.Embed(description=f'🔊 Joined {destination}', color=discord.Color.green()))
 
     @app_commands.command(name='leave', description='Clears the queue and leaves the voice channel.')
     @app_commands.checks.has_permissions(manage_guild=True)
@@ -2038,23 +2084,7 @@ class MusicCog(commands.Cog):
         await interaction.response.defer()
         ctx = await self._interaction_ctx(interaction)
         state = self.get_voice_state(ctx)
-        lock = self._get_voice_lock(interaction.guild.id)
-
-        async with lock:
-            if not state.voice or not state.voice.is_connected():
-                vc = interaction.guild.voice_client
-                if vc and not vc.is_connected():
-                    try:
-                        await vc.disconnect(force=True)
-                    except Exception:
-                        pass
-                    vc = None
-                if vc and vc.is_connected():
-                    await vc.move_to(interaction.user.voice.channel)
-                    state.voice = vc
-                else:
-                    state.voice = await interaction.user.voice.channel.connect(self_deaf=True)
-
+        await self._connect(state, interaction.guild, interaction.user.voice.channel)
         state.start_player()
 
         async def _edit_status(description: str):
@@ -2192,15 +2222,7 @@ class MusicCog(commands.Cog):
             return
         ctx = await self._interaction_ctx(interaction)
         state = self.get_voice_state(ctx)
-        lock = self._get_voice_lock(interaction.guild.id)
-        async with lock:
-            if not state.voice or not state.voice.is_connected():
-                vc = interaction.guild.voice_client
-                if vc and vc.is_connected():
-                    await vc.move_to(interaction.user.voice.channel)
-                    state.voice = vc
-                else:
-                    state.voice = await interaction.user.voice.channel.connect(self_deaf=True)
+        await self._connect(state, interaction.guild, interaction.user.voice.channel)
         state.start_player()
         state.songs.put_nowait(track)
 
@@ -2762,9 +2784,8 @@ class MusicCog(commands.Cog):
         and throw most of the work away the moment somebody ran /skip.
         """
         state = self.ensure_voice_state(guild.id)
-        async with self._get_voice_lock(guild.id):
-            if not state.voice or not state.voice.is_connected():
-                state.voice = await destination.connect(self_deaf=True)
+        await self._connect(state, guild, destination)
+        self._ensure_np_channel(state, guild)
         state.start_player()
 
         for row in playlist['tracks']:
