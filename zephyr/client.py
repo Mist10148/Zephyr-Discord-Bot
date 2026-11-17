@@ -36,6 +36,11 @@ async def type_print(text, delay=0.03):
     await asyncio.sleep(1)
 
 
+# Allowance for clock skew between the web and bot hosts when deciding a
+# bridge command has expired.
+COMMAND_EXPIRY_GRACE_SECONDS = 2.0
+
+
 class ZephyrBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.all()
@@ -47,6 +52,9 @@ class ZephyrBot(commands.Bot):
         self._synced_count = 0
         self._started_at = time.time()
         self._command_stream = None
+        # Bridge commands in flight.  Held so a running task is not garbage
+        # collected; see _command_loop.
+        self._command_tasks: set[asyncio.Task] = set()
         self._dm_owners_backfilled = False
 
     async def setup_hook(self):
@@ -140,8 +148,14 @@ class ZephyrBot(commands.Bot):
             self._close_command_stream()
             await asyncio.sleep(5)
             return
+        # Each command runs as its own task.  Awaiting them in turn meant one
+        # slow command -- a play resolving through yt-dlp for 15 seconds --
+        # held up every other guild's skips and permission checks until their
+        # callers gave up with a 504.
         for command in commands_batch:
-            await self._dispatch_command(command)
+            task = asyncio.create_task(self._dispatch_command(command))
+            self._command_tasks.add(task)
+            task.add_done_callback(self._command_tasks.discard)
 
     @_command_loop.before_loop
     async def _before_command_loop(self):
@@ -193,6 +207,12 @@ class ZephyrBot(commands.Bot):
         offline, which is a much worse diagnosis than the actual error.
         """
         command_id = command["id"]
+        expires_at = command.get("expires_at")
+        if isinstance(expires_at, (int, float)) and time.time() > expires_at + COMMAND_EXPIRY_GRACE_SECONDS:
+            # The caller has already timed out and reported failure; acting now
+            # would surprise them.  Nobody is listening for an answer either.
+            print(f"⚠️ Dropped expired bridge command {command.get('action')!r}")
+            return
         try:
             handler = self._bridge_actions().get(command["action"])
             if handler is None:

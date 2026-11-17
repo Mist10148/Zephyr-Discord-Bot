@@ -207,6 +207,11 @@ def send_command(
             "action": action,
             "args": args or {},
             "issued_at": int(time.time()),
+            # When this caller stops listening.  The bot drops a command it
+            # reaches after this: running it would act on a request the user
+            # was already told had failed, so three 504'd skips became three
+            # skips once the bot caught up.
+            "expires_at": time.time() + timeout,
         }
         client.publish(COMMAND_CHANNEL, json.dumps(envelope))
 
