@@ -194,3 +194,50 @@ class TestMessageLifecycle:
 
         playing.refresh_now_playing.assert_awaited_once()
         paused.refresh_now_playing.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_button_answers_discord_before_publishing_the_snapshot():
+    order = []
+    raw = AsyncMock(side_effect=lambda *a: order.append("action"))
+    cog = _cog(_state())
+    cog.publish_state = AsyncMock(side_effect=lambda guild_id: order.append("publish"))
+    cog.bridge_actions = lambda: {"player.skip": cog._publishing(raw)}
+    interaction = _interaction()
+    interaction.response.defer = AsyncMock(side_effect=lambda: order.append("defer"))
+
+    await NowPlayingView(cog, 1).skip.callback(interaction)
+
+    assert order == ["action", "defer", "publish"]
+
+
+@pytest.mark.asyncio
+async def test_the_state_of_a_guild_the_bot_left_is_a_clean_error():
+    with pytest.raises(VoiceError):
+        await _cog()._bridge_state(None, 42, {})
+
+
+@pytest.mark.asyncio
+async def test_leaving_a_guild_releases_its_player():
+    state = _state()
+    state.stop = AsyncMock()
+    cog = _cog(state)
+    cog._dj_role_ids, cog._music_settings = {1: "9"}, {1: {}}
+    cog._clear_snapshot = AsyncMock()
+
+    await cog.on_guild_remove(MagicMock(id=1))
+
+    state.stop.assert_awaited_once()
+    assert 1 not in cog.voice_states and 1 not in cog._dj_role_ids
+
+
+def test_only_play_commands_move_the_now_playing_channel():
+    cog = _cog()
+    cog.voice_states = {}
+    cog._music_settings = {}
+    cog.publish_state = AsyncMock()
+    cog.ensure_voice_state(1, channel_id=10)
+    cog.ensure_voice_state(1, channel_id=20, sticky=False)        # e.g. /queue elsewhere
+    assert cog.voice_states[1].np_channel_id == 10
+    cog.ensure_voice_state(1, channel_id=30)                       # a play command
+    assert cog.voice_states[1].np_channel_id == 30

@@ -822,8 +822,13 @@ class NowPlayingView(View):
 
     async def _run(self, interaction: discord.Interaction, action: str, args: dict | None = None):
         handler = self.cog.bridge_actions().get(action)
+        # Run the action itself, but publish the dashboard snapshot only after
+        # Discord has been answered: a slow Redis write used to push the reply
+        # past Discord's three seconds, so the action happened and the user was
+        # still told "This interaction failed".
+        raw = getattr(handler, '__wrapped__', None)
         try:
-            await handler(interaction.guild, interaction.user.id, args or {})
+            await (raw or handler)(interaction.guild, interaction.user.id, args or {})
         except (VoiceError, YTDLError) as exc:
             await interaction.response.send_message(f'❌ {exc}', ephemeral=True)
             return
@@ -834,6 +839,8 @@ class NowPlayingView(View):
         # The refresh loop redraws the embed within a few seconds; acknowledging
         # silently keeps the channel free of one message per button press.
         await interaction.response.defer()
+        if raw is not None and interaction.guild is not None:
+            await self.cog.publish_state(interaction.guild.id)
 
     @discord.ui.button(emoji='⏯️', style=discord.ButtonStyle.secondary)
     async def toggle(self, interaction: discord.Interaction, button: Button):
@@ -1687,6 +1694,25 @@ class MusicCog(commands.Cog):
         await state.stop()
         state.exists = False
 
+    @commands.Cog.listener()
+    async def on_guild_remove(self, guild: discord.Guild):
+        """Forget everything about a guild the bot was removed from.
+
+        Nothing released per-guild state before: a 24/7 player in a guild that
+        kicked the bot kept its task running for the life of the process.
+        """
+        state = self.voice_states.pop(int(guild.id), None)
+        self._voice_connect_locks.pop(int(guild.id), None)
+        self._dj_role_ids.pop(int(guild.id), None)
+        self._music_settings.pop(int(guild.id), None)
+        if state is not None:
+            try:
+                await state.stop()
+            except Exception as exc:
+                print(f"[Music] Could not stop the player for removed guild {guild.id}: {exc}")
+            state.exists = False
+        await self._clear_snapshot(guild.id)
+
     def _get_voice_lock(self, guild_id: int) -> asyncio.Lock:
         return self._voice_connect_locks.setdefault(guild_id, asyncio.Lock())
 
@@ -1699,8 +1725,14 @@ class MusicCog(commands.Cog):
         state = self.voice_states.get(int(guild_id))
         return state if state and state.exists else None
 
-    def ensure_voice_state(self, guild_id: int, *, channel_id: int | None = None) -> VoiceState:
-        """Get or create the state for a guild, refreshing the sticky channel."""
+    def ensure_voice_state(self, guild_id: int, *, channel_id: int | None = None,
+                           sticky: bool = True) -> VoiceState:
+        """Get or create the state for a guild, refreshing the sticky channel.
+
+        ``sticky=False`` uses ``channel_id`` only for a brand-new state: /queue
+        or /lyrics typed in another channel must not move where now-playing
+        messages go -- only commands that start music do.
+        """
         state = self.voice_states.get(int(guild_id))
         if not state or not state.exists:
             state = VoiceState(self.bot, guild_id, channel_id=channel_id)
@@ -1711,14 +1743,14 @@ class MusicCog(commands.Cog):
             state.on_change = self.publish_state
             state.np_view_factory = functools.partial(NowPlayingView, self, int(guild_id))
             self.voice_states[int(guild_id)] = state
-        elif channel_id is not None:
+        elif channel_id is not None and (sticky or state.np_channel_id is None):
             state.np_channel_id = channel_id
         return state
 
-    def get_voice_state(self, ctx: commands.Context):
+    def get_voice_state(self, ctx: commands.Context, *, sticky: bool = False):
         """Context-flavoured wrapper, so the existing command call sites are unchanged."""
         channel_id = ctx.channel.id if getattr(ctx, 'channel', None) else None
-        return self.ensure_voice_state(ctx.guild.id, channel_id=channel_id)
+        return self.ensure_voice_state(ctx.guild.id, channel_id=channel_id, sticky=sticky)
 
     def cog_unload(self):
         self._snapshot_loop.cancel()
@@ -1848,6 +1880,9 @@ class MusicCog(commands.Cog):
             await self.publish_state(guild.id)
             return result
 
+        # The now-playing buttons call the unwrapped handler and publish after
+        # answering the interaction; see NowPlayingView._run.
+        wrapper.__wrapped__ = handler
         return wrapper
 
     # The bot is the authority on permissions (see zephyr/services/bridge.py).
@@ -1939,7 +1974,11 @@ class MusicCog(commands.Cog):
         return state
 
     async def _bridge_state(self, guild, actor_id, args):
-        state = self.peek_voice_state(guild.id) if guild else None
+        if guild is None:
+            # str(guild.id) raised AttributeError here, and its text reached the
+            # dashboard as the error message.
+            raise VoiceError("Zephyr is not in that server.")
+        state = self.peek_voice_state(guild.id)
         return state.snapshot() if state else {'guild_id': str(guild.id), 'connected': False}
 
     async def _bridge_pause(self, guild, actor_id, args):
@@ -2244,7 +2283,7 @@ class MusicCog(commands.Cog):
 
         await interaction.response.defer()
         ctx = await self._interaction_ctx(interaction)
-        state = self.get_voice_state(ctx)
+        state = self.get_voice_state(ctx, sticky=True)
         # /join deliberately does NOT enable 24/7: it used to set _247_enabled here,
         # which disabled the idle timeout permanently for any guild that ever ran the
         # command, so the bot sat in an empty channel forever.  Use /247 for that.
@@ -2304,7 +2343,7 @@ class MusicCog(commands.Cog):
     @app_commands.checks.has_permissions(manage_guild=True)
     async def summon(self, interaction: discord.Interaction, channel: discord.VoiceChannel = None):
         ctx = await self._interaction_ctx(interaction)
-        state = self.get_voice_state(ctx)
+        state = self.get_voice_state(ctx, sticky=True)
         if not channel and not interaction.user.voice:
             await interaction.response.send_message("You are neither connected to a voice channel nor specified a channel to join.", ephemeral=True)
             return
@@ -2362,7 +2401,7 @@ class MusicCog(commands.Cog):
 
         await interaction.response.defer()
         ctx = await self._interaction_ctx(interaction)
-        state = self.get_voice_state(ctx)
+        state = self.get_voice_state(ctx, sticky=True)
         await self._connect(state, interaction.guild, interaction.user.voice.channel)
         state.start_player()
 
@@ -2485,7 +2524,7 @@ class MusicCog(commands.Cog):
             await interaction.followup.send("❌ You need to be in a voice channel.", ephemeral=True)
             return
         ctx = await self._interaction_ctx(interaction)
-        state = self.get_voice_state(ctx)
+        state = self.get_voice_state(ctx, sticky=True)
         await self._connect(state, interaction.guild, interaction.user.voice.channel)
         state.start_player()
         state.songs.put_nowait(track)
