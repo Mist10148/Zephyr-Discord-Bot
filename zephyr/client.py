@@ -340,16 +340,25 @@ class ZephyrBot(commands.Bot):
 
     async def on_guild_join(self, guild):
         await self._publish_guilds()
-        welcome_embed = discord.Embed(title="Hello! I am your Weather Bot 🌦️", color=discord.Color.gold())
-        welcome_embed.description = "Here are some commands you can use:"
-        welcome_embed.add_field(name="/weather <city>", value="Current weather", inline=False)
-        welcome_embed.add_field(name="/forecast <city>", value="3-day forecast", inline=False)
-        welcome_embed.add_field(name="/prompt", value="Ask me anything", inline=False)
-        welcome_embed.add_field(name="/play", value="Play music", inline=False)
-        welcome_embed.add_field(name="/help", value="See all commands", inline=False)
+        welcome_embed = discord.Embed(
+            title="👋 Hi, I'm Zephyr",
+            description="Weather, music, voice and AI for your server. A few places to start:",
+            color=discord.Color.from_rgb(56, 189, 248),
+        )
+        # Same order as /help: weather, music, voice, AI, then everything else.
+        welcome_embed.add_field(name="🌦️ Weather", value="`/weather [city]`\n`/forecast [city]`\n`/setlocation [city]`",
+                                inline=True)
+        welcome_embed.add_field(name="🎵 Music", value="`/play <search>`\n`/queue`\n`/skip`", inline=True)
+        welcome_embed.add_field(name="💬 AI & Voice", value="`/prompt [message]`\n`/say <text>`", inline=True)
+        welcome_embed.add_field(name="📖 Everything else", value="`/help` lists every command by category.",
+                                inline=False)
+        welcome_embed.set_footer(text="<required> · [optional]")
         for channel in guild.text_channels:
             if channel.permissions_for(guild.me).send_messages:
-                await channel.send(embed=welcome_embed)
+                try:
+                    await channel.send(embed=welcome_embed)
+                except discord.HTTPException as exc:
+                    print(f"[Welcome] Could not greet {guild.id}: {exc}")
                 break
 
     def _addresses_bot(self, message) -> bool:

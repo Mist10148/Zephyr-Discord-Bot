@@ -1,4 +1,4 @@
-"""Help commands: /helpchat, /helpmusic, /help, /helpweather.
+"""Help commands: /help, /helpweather, /helpmusic, /helpchat.
 
 All help pages are rendered from the centralized registry in
 ``zephyr.utils.help_data`` so categories, ordering, and descriptions stay
@@ -10,10 +10,18 @@ from discord import app_commands
 from discord.ext import commands
 
 from zephyr.utils.help_data import (
+    CHAT_KEYS,
     HELP_CATEGORIES,
+    MUSIC_KEYS,
+    WEATHER_KEYS,
     _send_categorized_help,
     categories_by_key,
 )
+
+HELP_COLOR = discord.Color.from_rgb(88, 101, 242)
+WEATHER_COLOR = discord.Color.from_rgb(56, 189, 248)
+MUSIC_COLOR = discord.Color.from_rgb(168, 85, 247)
+CHAT_COLOR = discord.Color.from_rgb(245, 165, 36)
 
 
 class HelpCog(commands.Cog):
@@ -25,42 +33,36 @@ class HelpCog(commands.Cog):
         await _send_categorized_help(
             interaction,
             HELP_CATEGORIES,
-            title="Command Help",
-            color=discord.Color.green(),
+            title="Zephyr Commands",
+            color=HELP_COLOR,
             include_toc=True,
-        )
-
-    @app_commands.command(name="helpmusic", description="Show music-related commands.")
-    async def helpmusic(self, interaction: discord.Interaction):
-        await _send_categorized_help(
-            interaction,
-            categories_by_key(
-                "music_playback",
-                "music_queue",
-                "music_playlists",
-                "music_effects",
-                "music_voice",
-            ),
-            title="Music Help",
-            color=discord.Color.blurple(),
-        )
-
-    @app_commands.command(name="helpchat", description="Show chat and TTS commands.")
-    async def helpchat(self, interaction: discord.Interaction):
-        await _send_categorized_help(
-            interaction,
-            categories_by_key("chat", "tts"),
-            title="Chat Help",
-            color=discord.Color.gold(),
         )
 
     @app_commands.command(name="helpweather", description="Show weather-related commands.")
     async def helpweather(self, interaction: discord.Interaction):
         await _send_categorized_help(
             interaction,
-            categories_by_key("weather", "weather_alerts"),
-            title="Weather Help",
-            color=discord.Color.blue(),
+            categories_by_key(*WEATHER_KEYS),
+            title="Weather Commands",
+            color=WEATHER_COLOR,
+        )
+
+    @app_commands.command(name="helpmusic", description="Show music-related commands.")
+    async def helpmusic(self, interaction: discord.Interaction):
+        await _send_categorized_help(
+            interaction,
+            categories_by_key(*MUSIC_KEYS),
+            title="Music Commands",
+            color=MUSIC_COLOR,
+        )
+
+    @app_commands.command(name="helpchat", description="Show AI chat and text-to-speech commands.")
+    async def helpchat(self, interaction: discord.Interaction):
+        await _send_categorized_help(
+            interaction,
+            categories_by_key(*CHAT_KEYS),
+            title="AI & Voice Commands",
+            color=CHAT_COLOR,
         )
 
 

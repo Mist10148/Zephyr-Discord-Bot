@@ -38,6 +38,7 @@ from zephyr.utils.weather_utils import (
     get_openmeteo_current,
 )
 from zephyr.utils import weather_embeds as look
+from zephyr.utils.help_data import WEATHER_KEYS, text_summary
 from zephyr.utils.pagination import _send_paginated_embeds, send_paginated_ctx
 
 
@@ -289,23 +290,10 @@ async def use(ctx):
 
 @commands.command(name="helpweather")
 async def helpweather(ctx):
-    help_message = (
-        "**List of Available Commands:**\n"
-        "`/typhoon` - Get typhoon alerts\n"
-        "`/weather <city>` - Current weather of a city\n"
-        "`/forecast <city>` - 3-day weather forecast\n"
-        "`/temperature <city>` - Current temperature\n"
-        "`/description <city>` - Weather description\n"
-        "`/air <city>` - Air quality\n"
-        "`/humidity <city>` - Humidity\n"
-        "`/pressure <city>` - Pressure\n"
-        "`/windspeed <city>` - Wind speed\n"
-        "`/precipitation <city>` - Precipitation\n"
-        "`/search <query>` - Search weather info\n"
-        "`/use` - Link to web app\n"
-        "`/helpweather` - Show this help message"
-    )
-    embed = discord.Embed(title="Weather Bot Help", description=help_message, color=discord.Color.gold())
+    # Rendered from the same registry as /help, so it can no longer go stale.
+    embed = discord.Embed(title="🌦️ Weather Commands", description=text_summary(WEATHER_KEYS),
+                          color=look.COLORS["partly"])
+    embed.set_footer(text="<required> · [optional] • Slash commands also work: type / to see them")
     await ctx.send(embed=embed)
 
 
