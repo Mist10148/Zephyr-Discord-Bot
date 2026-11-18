@@ -25,7 +25,11 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
-config.set_main_option("sqlalchemy.url", _normalize_database_url(DATABASE_URL or DEFAULT_DATABASE_URL))
+# Escaped: Alembic stores this through configparser, where "%" starts an
+# interpolation, so a URL-encoded password (p%40ss) broke every command.
+config.set_main_option(
+    "sqlalchemy.url", _normalize_database_url(DATABASE_URL or DEFAULT_DATABASE_URL).replace("%", "%%")
+)
 
 
 def run_migrations_offline() -> None:

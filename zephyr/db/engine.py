@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import Column, Engine, MetaData, String, Table, create_engine, inspect
 
 from zephyr.config import DB_ECHO, _normalize_database_url
 from zephyr.db.models import Base
@@ -26,6 +26,34 @@ def build_engine(url: str, *, echo: bool | None = None) -> Engine:
     return create_engine(normalized, **options)
 
 
+MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
+
+
+def _head_revision() -> str | None:
+    try:
+        from alembic.script import ScriptDirectory
+
+        return ScriptDirectory(str(MIGRATIONS_DIR)).get_current_head()
+    except Exception as exc:  # alembic missing or the scripts unreadable
+        print(f"[DB] Could not read the migration head: {exc}")
+        return None
+
+
 def create_schema(engine: Engine) -> None:
-    """Create the small Phase 0 schema when it does not exist yet."""
+    """Create the schema when it does not exist yet.
+
+    A database built from nothing is also stamped at the migration head.
+    ``create_all`` wrote every table but no ``alembic_version`` row, so the
+    documented ``alembic upgrade head`` then failed at the first revision with
+    "table already exists" (and ``stamp 0001`` failed at the second).
+    """
+    existing = set(inspect(engine).get_table_names())
+    fresh = not (existing & set(Base.metadata.tables)) and "alembic_version" not in existing
     Base.metadata.create_all(engine)
+    if fresh:
+        head = _head_revision()
+        if head:
+            version = Table("alembic_version", MetaData(), Column("version_num", String(32), primary_key=True))
+            with engine.begin() as connection:
+                version.create(connection, checkfirst=True)
+                connection.execute(version.insert().values(version_num=head))

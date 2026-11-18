@@ -130,9 +130,10 @@ class TestAlembicBaseline:
         create_schema(created_engine)
         created = inspect(created_engine)
 
-        # alembic_version is Alembic's own bookkeeping and has no model behind it.
+        # alembic_version is Alembic's own bookkeeping and has no model behind it;
+        # both paths now write it (create_schema stamps a fresh database at head).
         migrated_tables = set(migrated.get_table_names()) - {"alembic_version"}
-        assert migrated_tables == set(created.get_table_names())
+        assert migrated_tables == set(created.get_table_names()) - {"alembic_version"}
         for table in migrated_tables:
             assert ({c["name"] for c in migrated.get_columns(table)}
                     == {c["name"] for c in created.get_columns(table)}), table

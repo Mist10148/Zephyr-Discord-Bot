@@ -17,8 +17,9 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    ports:
-      - "6379:6379"
+    # No published port: web and bot reach it as redis:6379 on the compose
+    # network. Publishing it without a password let anyone who could reach the
+    # host forge bridge commands (acting as any admin) and dashboard sessions.
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -29,7 +30,9 @@ services:
 
   web:
     build: .
-    command: gunicorn wsgi:app --bind 0.0.0.0:5000
+    # Two workers with threads, like the Render blueprint: a single sync worker
+    # froze the whole site for up to 20 s behind one slow player action.
+    command: gunicorn wsgi:app --bind 0.0.0.0:5000 --workers 2 --threads 4
     restart: unless-stopped
     ports:
       - "5000:5000"
@@ -40,6 +43,8 @@ services:
       - DATABASE_URL=postgresql+psycopg://zephyr:zephyr@postgres:5432/zephyr
       # OAuth redirect base for local runs. DISCORD_CLIENT_ID and
       # DISCORD_CLIENT_SECRET arrive via env_file above.
+      # Register http://localhost:5000/api/v1/auth/callback as a redirect URI
+      # in the Discord developer portal for sign-in to work.
       - WEB_PUBLIC_URL=http://localhost:5000
       - AUTH_COOKIE_SECURE=0
     depends_on:
@@ -59,6 +64,9 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql+psycopg://zephyr:zephyr@postgres:5432/zephyr
+      # /use builds its sign-in link from this; without it the bot linked to
+      # its own 127.0.0.1 default.
+      - WEB_PUBLIC_URL=http://localhost:5000
     depends_on:
       redis:
         condition: service_healthy

@@ -39,4 +39,4 @@ EXPOSE 5000
 
 # Default to the website served by Gunicorn. Override this command to run the Discord bot.
 # The shell form lets us honour the PORT env var set by cloud platforms.
-CMD gunicorn wsgi:app --bind 0.0.0.0:${PORT:-5000}
+CMD gunicorn wsgi:app --bind 0.0.0.0:${PORT:-5000} --workers 2 --threads 4

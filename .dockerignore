@@ -9,6 +9,11 @@ __pycache__/
 # Secrets / local state
 .env
 settings.json
+# The local SQLite database holds AI conversations, DM history and dashboard
+# users; it must never be baked into an image.
+data/
+.claude/
+.cache/
 response_*.txt
 
 # Git

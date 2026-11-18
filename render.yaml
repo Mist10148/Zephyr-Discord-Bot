@@ -83,6 +83,11 @@ services:
           property: connectionString
       - key: PYTHON_VERSION
         value: 3.13.0
+      # The website's preDeployCommand owns the schema (alembic upgrade head).
+      # The worker usually starts first; creating tables itself made that
+      # migration fail with "table already exists".
+      - key: DB_AUTO_CREATE
+        value: "0"
 
   - type: redis
     name: zephyr-redis

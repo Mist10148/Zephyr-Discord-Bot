@@ -210,7 +210,12 @@ def get_storage() -> BaseStorage:
         return _database_storage(DEFAULT_DATABASE_URL)
     except Exception as exc:
         print(f"[Storage] {backend} storage is unavailable: {exc}")
-        print("[Storage] Falling back to file storage.")
+        # Loud on purpose: everything else (playlists, subscriptions, AI
+        # history) still uses the database, so settings saved from now on
+        # live only in this process's settings.json and the dashboard will
+        # not see them.
+        print("[Storage] WARNING: falling back to a local settings.json for this whole run. "
+              "Fix the database connection and restart to persist settings.")
         return FileStorage()
 
 
