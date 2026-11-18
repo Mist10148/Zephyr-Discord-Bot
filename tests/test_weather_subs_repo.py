@@ -163,3 +163,23 @@ class TestParseLocalTime:
 
     def test_a_valid_schedule_parses(self):
         assert repo.parse_local_time("08:05").hour == 8
+
+
+def test_a_digest_created_after_todays_time_waits_for_tomorrow(db_url):
+    from datetime import datetime as real_datetime
+
+    now = real_datetime.now(timezone.utc)
+    passed = (now - timedelta(minutes=5)).strftime("%H:%M")
+    sub = _sub(db_url, schedule_local_time=passed, tz="UTC")
+    if now.strftime("%H:%M") < passed:   # crossed midnight while computing
+        return
+    assert sub["last_run_at"] is not None
+    assert repo.claim_due(now, database_url=db_url) == []
+
+
+def test_release_claim_makes_a_digest_due_again(db_url):
+    _sub(db_url)
+    now = _utc(2026, 7, 31, 1)
+    claimed = repo.claim_due(now, database_url=db_url)
+    repo.release_claim(claimed[0]["id"], claimed[0]["last_run_at"], database_url=db_url)
+    assert len(repo.claim_due(now + timedelta(minutes=1), database_url=db_url)) == 1

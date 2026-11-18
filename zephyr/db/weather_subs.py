@@ -15,6 +15,7 @@ clearer and correct where a portable SQL expression would be neither.
 """
 
 from datetime import date, datetime, time, timezone
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import delete, insert, select, update
@@ -145,6 +146,20 @@ def claim_due(now_utc: datetime, *, database_url: str | None = None) -> list[dic
     return [dict(row._mapping) for row in due]
 
 
+def release_claim(sub_id: int, previous_run_at: datetime | None, *, database_url: str | None = None) -> None:
+    """Undo ``claim_due`` for a digest that could not be delivered.
+
+    The claim marks a digest run *before* it is posted, so a provider hiccup or
+    a failed send at 08:00 used to lose that day's digest silently.  Restoring
+    the previous ``last_run_at`` makes it due again on the next tick.
+    """
+    engine = get_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(
+            update(WeatherSub).where(WeatherSub.id == sub_id).values(last_run_at=previous_run_at)
+        )
+
+
 def list_watched(*, database_url: str | None = None) -> list[dict]:
     """Every enabled severe / class-suspension subscription.
 
@@ -196,6 +211,14 @@ def create(values: dict, *, database_url: str | None = None) -> dict:
         ).all()
         if len(existing) >= MAX_SUBS_PER_GUILD:
             raise SubscriptionError(f"A server may have at most {MAX_SUBS_PER_GUILD} subscriptions.")
+        if values.get("kind") in SCHEDULED_KINDS and values.get("last_run_at") is None:
+            # A digest created after today's time has passed would otherwise be
+            # "due" at once: an 08:00 digest made at 15:00 posted within a minute.
+            now = datetime.now(timezone.utc)
+            probe = SimpleNamespace(schedule_local_time=values.get("schedule_local_time"),
+                                    tz=values.get("tz"), last_run_at=None)
+            if is_due(probe, now):
+                values = {**values, "last_run_at": now}
         sub_id = connection.execute(insert(WeatherSub).values(**values).returning(WeatherSub.id)).scalar_one()
     return get(sub_id, database_url=database_url)
 

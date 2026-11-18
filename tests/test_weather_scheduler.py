@@ -158,3 +158,46 @@ class TestLoopSurvival:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_a_digest_that_failed_to_load_is_released_for_retry(monkeypatch):
+    released = []
+
+    def provider_down(*a, **k):
+        raise cog_module.WeatherProviderError("down")
+
+    monkeypatch.setattr(cog_module, "claim_due", lambda now: [_sub(kind="daily", last_run_at=None)])
+    monkeypatch.setattr(cog_module, "get_openmeteo_bundle", provider_down)
+    monkeypatch.setattr(cog_module, "release_claim", lambda sub_id, previous: released.append((sub_id, previous)))
+    cog = WeatherAlertsCog(FakeBot(FakeChannel()))
+
+    asyncio.run(cog._digest_loop.coro(cog))
+
+    assert released == [(7, None)]
+
+
+def test_a_missing_channel_is_not_retried_every_minute(monkeypatch, fired):
+    released = []
+    monkeypatch.setattr(cog_module, "evaluate", lambda *a, **k: dict(ALERT, kind="daily"))
+    monkeypatch.setattr(cog_module, "claim_due", lambda now: [_sub(kind="daily")])
+    monkeypatch.setattr(cog_module, "release_claim", lambda *a: released.append(a))
+    cog = WeatherAlertsCog(FakeBot(None))
+
+    asyncio.run(cog._digest_loop.coro(cog))
+
+    assert released == []
+
+
+def test_a_refused_permission_gets_a_reply(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from discord import app_commands
+
+    interaction = MagicMock()
+    interaction.response.is_done.return_value = False
+    interaction.response.send_message = AsyncMock()
+    cog = WeatherAlertsCog(FakeBot(None))
+
+    asyncio.run(cog.cog_app_command_error(interaction, app_commands.MissingPermissions(["manage_guild"])))
+
+    assert "Manage Server" in interaction.response.send_message.await_args.args[0]

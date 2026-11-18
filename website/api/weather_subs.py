@@ -261,8 +261,13 @@ def preview_sub(guild_id: str, sub_id: str):
     except WeatherProviderError as exc:
         return error("weather_unavailable", str(exc), 502)
 
-    alert = weather_alerts.evaluate(row["kind"], bundle, location=row["location"], units=units,
-                                    thresholds=row.get("thresholds"))
+    try:
+        alert = weather_alerts.evaluate(row["kind"], bundle, location=row["location"], units=units,
+                                        thresholds=row.get("thresholds"))
+    except (KeyError, TypeError, ValueError) as exc:
+        # A malformed thresholds row or a partial bundle: answer in the API's
+        # JSON error shape rather than Flask's HTML 500 page.
+        return error("preview_failed", f"This subscription could not be evaluated ({exc.__class__.__name__}).", 500)
     return jsonify({"id": row["id"], "kind": row["kind"], "alert": alert,
                     "would_post": alert is not None,
                     "duplicate": bool(alert and alert["fingerprint"] == row.get("last_fingerprint"))})

@@ -31,6 +31,7 @@ from zephyr.db.weather_subs import (
     list_for_guild,
     list_watched,
     mark_fired,
+    release_claim,
     normalise_zone,
     parse_local_time,
 )
@@ -90,6 +91,29 @@ class WeatherAlertsCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
+    async def cog_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        """Answer every failed command.
+
+        Without this a member lacking Manage Server saw "The application did
+        not respond" from /weather-subscribe, and a database error after
+        defer() left "Zephyr is thinking..." on screen for good.
+        """
+        if isinstance(error, app_commands.MissingPermissions):
+            message = "❌ You need the **Manage Server** permission to change weather subscriptions."
+        elif isinstance(error, app_commands.CheckFailure):
+            message = "❌ You can't use that here."
+        else:
+            original = getattr(error, "original", error)
+            traceback.print_exception(type(original), original, original.__traceback__)
+            message = "❌ Something went wrong with that weather subscription command. Try again shortly."
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
+        except Exception as exc:
+            print(f"[WeatherAlerts] Could not report a command error: {exc}")
+
     async def cog_load(self):
         self._digest_loop.start()
         self._watch_loop.start()
@@ -116,7 +140,13 @@ class WeatherAlertsCog(commands.Cog):
             print(f"[WeatherAlerts] Could not claim due subscriptions: {exc}")
             return
         for subscription in due:
-            await self._deliver_safely(subscription)
+            if not await self._deliver_safely(subscription):
+                # Claimed but not delivered for a reason that may pass (provider
+                # hiccup, failed send): make it due again instead of losing today's.
+                try:
+                    await asyncio.to_thread(release_claim, subscription["id"], subscription.get("last_run_at"))
+                except Exception as exc:
+                    print(f"[WeatherAlerts] Could not release subscription {subscription['id']}: {exc}")
 
     @tasks.loop(minutes=15)
     async def _watch_loop(self):
@@ -138,7 +168,7 @@ class WeatherAlertsCog(commands.Cog):
     async def _before_loops(self):
         await self.bot.wait_until_ready()
 
-    async def _deliver_safely(self, subscription: dict, *, dedupe: bool = False) -> None:
+    async def _deliver_safely(self, subscription: dict, *, dedupe: bool = False) -> bool:
         """_deliver, with a backstop the docstring below always promised.
 
         An exception escaping a tasks.loop body stops that loop for good, so
@@ -147,17 +177,22 @@ class WeatherAlertsCog(commands.Cog):
         guild until the bot restarted.
         """
         try:
-            await self._deliver(subscription, dedupe=dedupe)
+            return await self._deliver(subscription, dedupe=dedupe)
         except Exception:
             print(f"[WeatherAlerts] Subscription {subscription.get('id')} failed; continuing with the rest.")
             traceback.print_exc()
+            return False
 
-    async def _deliver(self, subscription: dict, *, dedupe: bool = False) -> None:
+    async def _deliver(self, subscription: dict, *, dedupe: bool = False) -> bool:
         """Evaluate one subscription and post it if there is anything to say.
 
         Failures are contained per subscription: one unreachable channel or one
         provider hiccup must not stop the rest of the batch, which is why this
         swallows rather than raises.
+
+        Returns False only for failures worth retrying (the provider, or a send
+        that errored); a missing channel or a lost permission returns True,
+        because retrying every minute would not fix it.
         """
         try:
             bundle = await asyncio.to_thread(
@@ -168,10 +203,10 @@ class WeatherAlertsCog(commands.Cog):
             )
         except WeatherProviderError as exc:
             print(f"[WeatherAlerts] Provider failed for subscription {subscription['id']}: {exc}")
-            return
+            return False
         except Exception:
             traceback.print_exc()
-            return
+            return False
 
         alert = evaluate(
             subscription["kind"],
@@ -181,26 +216,26 @@ class WeatherAlertsCog(commands.Cog):
             thresholds=subscription.get("thresholds"),
         )
         if alert is None:
-            return
+            return True
         if dedupe and alert["fingerprint"] == subscription.get("last_fingerprint"):
-            return
+            return True
 
         try:
             channel_id = int(str(subscription["channel_id"]))
         except (TypeError, ValueError):
             print(f"[WeatherAlerts] Subscription {subscription['id']} has an invalid channel id.")
-            return
+            return True
         channel = self.bot.get_channel(channel_id)
         if channel is None:
             print(f"[WeatherAlerts] Channel {subscription['channel_id']} is not reachable.")
-            return
+            return True
         # The dashboard only checks that channel_id looks like an id; get_channel
         # finds a channel in *any* guild the bot is in.  Never post across guilds.
         channel_guild = getattr(channel, "guild", None)
         if channel_guild is None or str(channel_guild.id) != str(subscription["guild_id"]):
             print(f"[WeatherAlerts] Channel {subscription['channel_id']} is not in guild "
                   f"{subscription['guild_id']}; skipping subscription {subscription['id']}.")
-            return
+            return True
         try:
             await channel.send(embed=alert_embed(alert))
         except discord.Forbidden:
@@ -208,15 +243,16 @@ class WeatherAlertsCog(commands.Cog):
             # permission change is usually temporary, and silently disabling the
             # subscription would be discovered much later than a missing message.
             print(f"[WeatherAlerts] Cannot post in {subscription['channel_id']}.")
-            return
+            return True
         except Exception:
             traceback.print_exc()
-            return
+            return False
 
         if dedupe:
             # Only recorded once something was actually posted, so a quiet tick
             # never masks the next real warning.
             await asyncio.to_thread(mark_fired, subscription["id"], fingerprint=alert["fingerprint"])
+        return True
 
     # ------------------------------------------------------------------
     # Commands
@@ -225,7 +261,8 @@ class WeatherAlertsCog(commands.Cog):
     @app_commands.command(name="weather-subscribe", description="Have Zephyr post weather to a channel on a schedule.")
     @app_commands.describe(
         kind="What to post", location="City or place name", channel="Where to post it",
-        at="Local time for a daily digest, e.g. 08:00", tz="IANA timezone, e.g. Asia/Manila",
+        at="Local time for a daily digest, e.g. 08:00",
+        tz="IANA timezone, e.g. Asia/Manila (defaults to the location's own)",
     )
     @app_commands.choices(kind=[app_commands.Choice(name=KIND_LABELS[key], value=key) for key in KINDS])
     @app_commands.checks.has_permissions(manage_guild=True)
@@ -236,7 +273,7 @@ class WeatherAlertsCog(commands.Cog):
         location: str,
         channel: discord.TextChannel = None,
         at: str = "08:00",
-        tz: str = "UTC",
+        tz: str = None,
     ):
         if interaction.guild is None:
             await interaction.response.send_message("❌ This command can only be used in a server.", ephemeral=True)
@@ -266,7 +303,9 @@ class WeatherAlertsCog(commands.Cog):
             await interaction.followup.send(f"❌ I could not find **{location}**.")
             return
         place = places[0]
-        zone_name, zone_accepted = normalise_zone(tz)
+        # Default to the place's own zone, as the dashboard does: a UTC default
+        # posted an "08:00" Iloilo digest at 16:00 Manila time.
+        zone_name, zone_accepted = normalise_zone(tz or place.get("timezone") or "UTC")
 
         values = {
             "guild_id": str(interaction.guild.id),
@@ -361,12 +400,12 @@ class WeatherAlertsCog(commands.Cog):
             bundle = await asyncio.to_thread(
                 get_openmeteo_bundle, subscription["lat"], subscription["lon"],
                 units=subscription.get("units") or "metric")
+            alert = evaluate(
+                subscription["kind"], bundle, location=subscription["location"],
+                units=subscription.get("units") or "metric", thresholds=subscription.get("thresholds"))
         except WeatherProviderError as exc:
             await interaction.followup.send(f"❌ {exc}", ephemeral=True)
             return
-        alert = evaluate(
-            subscription["kind"], bundle, location=subscription["location"],
-            units=subscription.get("units") or "metric", thresholds=subscription.get("thresholds"))
         if alert is None:
             await interaction.followup.send(
                 "Nothing to report right now — this subscription would stay quiet.", ephemeral=True)
