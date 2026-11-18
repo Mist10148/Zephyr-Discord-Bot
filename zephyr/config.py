@@ -130,9 +130,11 @@ AUTH_ENABLED = bool(DISCORD_CLIENT_ID and DISCORD_CLIENT_SECRET and REDIS_URL)
 # ---------------------------------------------------------------------------
 # Weather API endpoints & coordinates
 # ---------------------------------------------------------------------------
-CURRENT_URL = "http://api.openweathermap.org/data/2.5/weather"
-FORECAST_URL = "http://api.openweathermap.org/data/2.5/forecast"
-ALERTS_URL = "http://api.openweathermap.org/data/3.0/onecall"
+# https: the API key travels in the query string.
+CURRENT_URL = "https://api.openweathermap.org/data/2.5/weather"
+FORECAST_URL = "https://api.openweathermap.org/data/2.5/forecast"
+ALERTS_URL = "https://api.openweathermap.org/data/3.0/onecall"
+AIR_POLLUTION_URL = "https://api.openweathermap.org/data/2.5/air_pollution"
 PHILIPPINE_COORDS = {"lat": 12.8797, "lon": 121.7740}
 ILOILO_COORDS = {"lat": 10.7202, "lon": 122.5621}
 

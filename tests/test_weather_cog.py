@@ -80,3 +80,36 @@ class TestOwmDayGrouping:
         days = cog._owm_daily_forecast(lat=10.7, lon=122.5, days=1)
 
         assert [day["date"] for day in days] == [local_today.strftime("%Y-%m-%d")]
+
+
+class TestNoKeyLeaks:
+    def test_owm_errors_never_include_the_request_url(self, monkeypatch):
+        response = MagicMock(status_code=401, json=lambda: {"cod": 401, "message": "Invalid API key"})
+        monkeypatch.setattr(cog.requests, "get", lambda *a, **k: response)
+        monkeypatch.setattr(cog, "API_KEY", "SECRET")
+        with pytest.raises(cog.WeatherFetchError) as info:
+            cog._owm_daily_forecast(city="Iloilo", days=1)
+        assert "SECRET" not in str(info.value)
+        assert "appid" not in str(info.value)
+
+    def test_city_names_are_url_encoded(self, monkeypatch):
+        monkeypatch.setattr(cog, "API_KEY", "k")
+        url = cog._current_url("A&B #1?")
+        assert url.startswith("https://")
+        assert "q=A%26B+%231%3F" in url
+
+    def test_a_day_of_empty_slots_is_skipped_not_a_crash(self, monkeypatch):
+        payload = {"cod": "200", "city": {"timezone": 0},
+                   "list": [{"dt": int(datetime.now(timezone.utc).timestamp()), "main": {"temp": None},
+                             "wind": {}, "pop": 0, "weather": []}]}
+        monkeypatch.setattr(cog.requests, "get", lambda *a, **k: MagicMock(status_code=200, json=lambda: payload))
+        assert cog._owm_daily_forecast(lat=0, lon=0, days=1) == []
+
+
+def test_class_and_subscription_share_one_scale():
+    from zephyr.utils.weather_utils import class_suspension_payload
+
+    for feels in (14, 15, 16, 37.9, 38, 41, 50):
+        level = class_suspension_payload(feels)["level"]
+        decision, _ = cog.class_suspension(feels)
+        assert decision == cog._SUSPENSION_DECISIONS[level]

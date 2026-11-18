@@ -158,7 +158,23 @@ def us_aqi_band(value: float | None) -> str | None:
     return next((name for limit, name in ((50, "good"), (100, "moderate"), (150, "unhealthy_sensitive"), (200, "unhealthy"), (300, "very_unhealthy")) if value <= limit), "hazardous")
 
 
+#: OpenWeatherMap's 1-5 air-quality index, in words.  One table: it was
+#: copy-pasted into eight commands.
+AQI_LABELS = {1: "Good", 2: "Fair", 3: "Moderate", 4: "Poor", 5: "Very Poor"}
+
+
+def aqi_label(aqi: int | None) -> str:
+    return AQI_LABELS.get(aqi, "Unknown")
+
+
 def class_suspension_payload(apparent_temp: float | None, *, units: str = "metric") -> dict:
+    """The single heat-index scale for class suspension advice.
+
+    Used by /class, the scheduled class-suspension watch and the web app alike.
+    /class used to carry its own copy with different labels and a different
+    cold threshold, so at exactly 15°C it said classes resume while the
+    subscription said suspension was possible.
+    """
     if apparent_temp is None: return {"level": "unknown", "reason": None}
     celsius = (apparent_temp - 32) * 5 / 9 if units == "imperial" else apparent_temp
     if celsius >= 50: return {"level": "certain", "reason": "Excessive Heat"}
