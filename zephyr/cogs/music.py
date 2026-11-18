@@ -890,6 +890,11 @@ class VoiceState:
         # message hop between them mid-playback.
         self.np_channel_id = channel_id
         self.current: Track | None = None      # metadata; always safe to read
+        # The track that played last, kept after it ends so loop=track can replay
+        # it and autoplay can seed a radio from it.  ``current`` itself is cleared
+        # the moment a track ends: a finished track left in ``current`` made an
+        # idle player look busy, and a seek or effect toggle then "restarted" it.
+        self._last_track: Track | None = None
         self.source: YTDLSource | None = None  # live audio; only while playing
         self.voice: discord.VoiceClient = None
         self.next = asyncio.Event()
@@ -1157,7 +1162,8 @@ class VoiceState:
         because a Mix always leads with its seed video and autoplay would
         otherwise put the same song on repeat.
         """
-        seed = _video_id(self.current.url) if self.current else None
+        seed_track = self.current or self._last_track
+        seed = _video_id(seed_track.url) if seed_track else None
         if not seed:
             return 0
         try:
@@ -1206,23 +1212,38 @@ class VoiceState:
                 self.songs.remove(index)
                 return
 
+    def _track_ended(self) -> None:
+        """Forget the source and the current track once playback has stopped."""
+        # Unconditional: a failed stream clears ``current`` so that loop=track
+        # moves on to the retry at the front of the queue instead of replaying.
+        self._last_track = self.current
+        self.current = None
+        self.source = None
+        self._current_start_time = None
+        self._current_position = 0.0
+
     async def audio_player_task(self):
         while True:
-            self.next.clear()
             self.skip_votes.clear()
             skipped, halted = self._skip_requested, self._halt_requested
             self._skip_requested = self._halt_requested = False
             if halted:
                 self.current = None
+                self._last_track = None
 
             # Refill before the idle timer starts, not after it fires: waiting
             # would disconnect the bot three minutes into an autoplay session.
             if self._autoplay_enabled and not halted and not len(self.songs) and self.loop == 'off':
                 await self._extend_with_radio()
 
-            if self.loop == 'track' and self.current and not skipped:
-                track = self.current            # replay the same track
+            if self.loop == 'track' and self._last_track and not skipped:
+                track = self._last_track        # replay the same track
+                self.current = track
             else:
+                if not len(self.songs):
+                    # Nothing left to play: leave the last now-playing message with
+                    # its buttons disabled instead of controls that do nothing.
+                    await self.retire_now_playing()
                 # Only the wait for a *queued* track is the idle timeout.  The
                 # extraction below raises asyncio.TimeoutError too (and on 3.11+
                 # so does a socket timeout); catching both in one handler made a
@@ -1256,7 +1277,22 @@ class VoiceState:
                 self.current = None
                 continue
 
+            if self._skip_requested or self._halt_requested or self.current is not track:
+                # /skip, /stop or /jump arrived while the track was loading.  There
+                # was no audio for voice.stop() to end, so honour the request here
+                # instead of playing the track anyway.
+                try:
+                    source.cleanup()
+                except Exception:
+                    pass
+                if self.current is track:
+                    self._track_ended()
+                continue
+
             try:
+                # Cleared here rather than at the top of the loop, so a stale signal
+                # from while the track was loading cannot end this one at once.
+                self.next.clear()
                 self._playback_failure = None
                 self.source = source
                 self._current_start_time = time.time()
@@ -1305,6 +1341,7 @@ class VoiceState:
                     )
             else:
                 self._stream_retry_ids.discard(id(track))
+            self._track_ended()
 
     def play_next_song(self, error=None, *, source: YTDLSource | None = None, track: Track | None = None):
         """Advance the queue once the current track finishes.
@@ -1401,6 +1438,7 @@ class VoiceState:
         self._playback_failure = None
         self._stream_retry_ids.clear()
         self.current = None
+        self._last_track = None
         self.source = None
         if cancel_player and self.audio_player and not self.audio_player.done():
             self.audio_player.cancel()
@@ -1432,7 +1470,10 @@ class VoiceState:
         while the dashboard still showed it paused.
         """
         async with self._restart_lock:
-            if not self.is_playing:
+            # A source, not just a current track: while the next track is still
+            # loading there is nothing to restart, and playing one here raced the
+            # player loop's own voice.play() ("Already playing audio").
+            if not self.is_playing or self.source is None:
                 return
             was_paused = bool(self.voice and self.voice.is_paused())
             elapsed = self.elapsed if preserve_position else 0.0

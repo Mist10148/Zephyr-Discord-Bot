@@ -216,3 +216,82 @@ async def test_a_skip_during_the_restart_lookup_still_skips(monkeypatch):
     assert state.voice.played == []
     replacement.cleanup.assert_called_once()
     assert state.next.is_set()
+
+
+@pytest.mark.asyncio
+async def test_a_finished_track_leaves_the_player_idle(monkeypatch):
+    """A finished track used to stay in ``current``, so an effect toggle "restarted" it."""
+    state = _state()
+    state.songs.put_nowait(Track(title="Only"))
+    source = MagicMock(stderr_tail="")
+    monkeypatch.setattr(YTDLSource, "from_track", AsyncMock(return_value=source))
+
+    task = asyncio.create_task(state.audio_player_task())
+    await _spin(lambda: state.voice.played)
+    state.voice.after(None)                       # the track ends normally
+    await _spin(lambda: state.current is None)
+    assert state.current is None and state.source is None
+    assert not state.is_playing
+
+    YTDLSource.from_track.reset_mock()
+    await state.restart_current(preserve_position=True)
+    YTDLSource.from_track.assert_not_awaited()     # nothing to restart
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+@pytest.mark.asyncio
+async def test_a_skip_while_the_track_loads_is_honoured(monkeypatch):
+    state = _state()
+    first, second = Track(title="First"), Track(title="Second")
+    state.songs.put_nowait(first)
+    state.songs.put_nowait(second)
+    loading = asyncio.Event()
+    release = asyncio.Event()
+    first_source, second_source = MagicMock(stderr_tail=""), MagicMock(stderr_tail="")
+
+    async def slow_from_track(track, **kwargs):
+        if track is first:
+            loading.set()
+            await release.wait()
+            return first_source
+        return second_source
+
+    monkeypatch.setattr(YTDLSource, "from_track", slow_from_track)
+    task = asyncio.create_task(state.audio_player_task())
+    await loading.wait()
+    state.skip()                                   # nothing audible yet
+    release.set()
+    await _spin(lambda: state.voice.played)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    first_source.cleanup.assert_called()
+    assert state.voice.played == [second_source]
+    assert state.current is second
+
+
+@pytest.mark.asyncio
+async def test_loop_track_replays_after_the_track_ends(monkeypatch):
+    state = _state()
+    state.loop = "track"
+    song = Track(title="Again")
+    state.songs.put_nowait(song)
+    sources = [MagicMock(stderr_tail=""), MagicMock(stderr_tail="")]
+    monkeypatch.setattr(YTDLSource, "from_track", AsyncMock(side_effect=sources))
+    # Do not trip the early-end failure heuristic.
+    monkeypatch.setattr("zephyr.cogs.music.MIN_TRACK_SECONDS_FOR_EARLY_END", 10 ** 9)
+
+    task = asyncio.create_task(state.audio_player_task())
+    await _spin(lambda: len(state.voice.played) == 1)
+    state.voice.after(None)
+    await _spin(lambda: len(state.voice.played) == 2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert state.voice.played == sources
+    assert state.current is song
