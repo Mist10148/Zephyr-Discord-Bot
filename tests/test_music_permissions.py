@@ -82,3 +82,13 @@ def test_pause_resume_and_stop_no_longer_demand_manage_server():
 
 def test_disconnect_needs_manage_server_like_leave():
     assert TTSCog.disconnect.checks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["skip", "next"])
+async def test_playskip_and_playnext_follow_the_dj_rule(mode):
+    interaction = _interaction(roles=[5], voice_channel=MagicMock())
+    interaction.response.defer = AsyncMock()
+    await _cog(dj_role_id="9")._play_core(interaction, "anything", mode=mode)
+    assert "DJ role" in interaction.response.send_message.await_args.args[0]
+    interaction.response.defer.assert_not_awaited()

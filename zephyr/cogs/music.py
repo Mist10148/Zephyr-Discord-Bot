@@ -2311,6 +2311,11 @@ class MusicCog(commands.Cog):
         if not interaction.user.voice or not interaction.user.voice.channel:
             await interaction.response.send_message("❌ You need to be in a voice channel to play music.", ephemeral=True)
             return
+        # /playskip ends what everyone is hearing and /playnext reorders the queue:
+        # both change playback for others, so they follow the DJ rule like /skip's
+        # instant path, /move and /jump.  /play only appends and stays open to all.
+        if mode != 'normal' and not await self._gate(interaction):
+            return
 
         await interaction.response.defer()
         ctx = await self._interaction_ctx(interaction)
