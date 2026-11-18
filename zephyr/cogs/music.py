@@ -19,6 +19,7 @@ import traceback
 import time
 import re
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import quote, urlsplit
 
 import aiohttp
@@ -161,6 +162,12 @@ STREAM_AVAILABLE_MAX_WAIT_SECONDS = 30
 # resolving any streams.  It is usually quick, but had no timeout at all, so a
 # stalled request held /play "thinking" forever.
 FLAT_EXTRACT_TIMEOUT_SECONDS = 60
+# Upper bound on entries read from one flat extraction (playlists, searches, Mixes).
+MAX_FLAT_ENTRIES = 200
+# yt-dlp gets its own threads.  A timed-out extraction keeps running in its
+# thread (wait_for cannot stop it), and on the shared default executor a few
+# stuck lookups starved database, Redis and TTS work queued behind them.
+_YTDL_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix='ytdl')
 
 FFMPEG_RECONNECT_OPTIONS = '-reconnect 1 -reconnect_streamed 1 -reconnect_on_network_error 1 -reconnect_delay_max 5'
 
@@ -545,11 +552,32 @@ class YTDLSource(discord.PCMVolumeTransformer):
         return url
 
     @classmethod
-    async def _extract(cls, query: str, *, loop, process: bool = True, timeout_s: int = 15):
+    async def _extract(cls, query: str, *, loop, process: bool = True, timeout_s: int = 15,
+                       max_entries: int = MAX_FLAT_ENTRIES):
         _refuse_internal(query)
-        partial = functools.partial(cls.ytdl.extract_info, query, download=False, process=process)
-        return await asyncio.wait_for(loop.run_in_executor(None, partial),
+        partial = functools.partial(cls._extract_sync, query, process=process, max_entries=max_entries)
+        return await asyncio.wait_for(loop.run_in_executor(_YTDL_EXECUTOR, partial),
                                       timeout=timeout_s if process else FLAT_EXTRACT_TIMEOUT_SECONDS)
+
+    @classmethod
+    def _extract_sync(cls, query: str, *, process: bool, max_entries: int):
+        """Run yt-dlp and materialise its entries, all on the worker thread.
+
+        With ``process=False`` yt-dlp returns ``entries`` as a lazy generator that
+        downloads search and playlist pages *as it is iterated*.  Iterating it
+        later, on the event loop, blocked every guild and the gateway heartbeat
+        for the whole lookup, outside any timeout -- and a 2,000-video playlist
+        was read to the end before being cut to 200.
+        """
+        data = cls.ytdl.extract_info(query, download=False, process=process)
+        if isinstance(data, dict) and data.get('entries') is not None:
+            entries = data['entries']
+            if not isinstance(entries, list):
+                entries = list(itertools.islice(entries, max_entries or None))
+            elif max_entries:
+                entries = entries[:max_entries]
+            data = {**data, 'entries': entries}
+        return data
 
     @classmethod
     async def resolve_tracks(cls, search: str, *, requester_id: int = 0, requester_mention: str = '',
@@ -580,7 +608,8 @@ class YTDLSource(discord.PCMVolumeTransformer):
         query = search if as_url else f"ytsearch10:{search}"
 
         try:
-            data = await cls._extract(query, loop=loop, process=False)
+            data = await cls._extract(query, loop=loop, process=False,
+                                      max_entries=max_entries or MAX_FLAT_ENTRIES)
             if data is None:
                 raise YTDLError(f'Could not find anything that matches `{search}`')
 
@@ -658,7 +687,8 @@ class YTDLSource(discord.PCMVolumeTransformer):
         loop = loop or asyncio.get_event_loop()
         search = _sanitize_search(search)
         try:
-            data = await cls._extract(f"ytsearch{max_results}:{search}", loop=loop, process=False)
+            data = await cls._extract(f"ytsearch{max_results}:{search}", loop=loop, process=False,
+                                      max_entries=max_results)
             if data is None or not data.get('entries'):
                 return []
             return cls._build_tracks_from_entries(list(data['entries']),
@@ -739,7 +769,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
         which keeps the "playing a re-resolved match" footer off imports that
         never had a URL in the first place.
         """
-        found = await cls._extract(f"ytsearch1:{track.title}", loop=loop, process=False)
+        found = await cls._extract(f"ytsearch1:{track.title}", loop=loop, process=False, max_entries=1)
         for entry in list((found or {}).get('entries') or []):
             url = cls._entry_url(entry)
             if not url:

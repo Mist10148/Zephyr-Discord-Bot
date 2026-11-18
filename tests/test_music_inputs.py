@@ -563,3 +563,28 @@ async def test_a_hung_flat_lookup_times_out(monkeypatch):
 
 def test_tls_verification_is_not_disabled():
     assert not YTDLSource.YTDL_OPTIONS.get("nocheckcertificate")
+
+
+def test_lazy_entries_are_read_on_the_worker_thread_and_capped():
+    """yt-dlp's flat entries are a generator that fetches pages as it is iterated."""
+    import threading
+
+    reader_threads = []
+
+    def pages():
+        for index in range(10_000):
+            reader_threads.append(threading.current_thread().name)
+            yield {"id": f"v{index}", "title": f"Song {index}"}
+
+    with patch.object(YTDLSource, "ytdl", new_callable=MagicMock) as ytdl:
+        ytdl.extract_info.return_value = {"entries": pages()}
+
+        async def run():
+            return await YTDLSource._extract("https://www.youtube.com/playlist?list=PL1",
+                                             loop=asyncio.get_running_loop(), process=False, max_entries=5)
+
+        data = asyncio.run(run())
+
+    assert isinstance(data["entries"], list)
+    assert len(data["entries"]) == 5
+    assert reader_threads and all(name.startswith("ytdl") for name in reader_threads)
