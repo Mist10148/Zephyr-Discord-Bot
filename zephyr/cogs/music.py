@@ -29,7 +29,6 @@ from discord import app_commands
 from discord.ext import commands
 from discord.ext import tasks
 from discord.ui import Button, View, Select
-from async_timeout import timeout
 import yt_dlp
 
 from zephyr.config import REDIS_URL, SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET
@@ -163,6 +162,10 @@ STREAM_AVAILABLE_MAX_WAIT_SECONDS = 30
 # resolving any streams.  It is usually quick, but had no timeout at all, so a
 # stalled request held /play "thinking" forever.
 FLAT_EXTRACT_TIMEOUT_SECONDS = 60
+# How long an idle player (empty queue, not 24/7) stays connected.
+IDLE_DISCONNECT_SECONDS = 180
+# The idle wait is sliced so /247 and /autoplay toggled while idle take effect.
+IDLE_POLL_SECONDS = 5
 # Upper bound on entries read from one flat extraction (playlists, searches, Mixes).
 MAX_FLAT_ENTRIES = 200
 # yt-dlp gets its own threads.  A timed-out extraction keeps running in its
@@ -1023,7 +1026,20 @@ class VoiceState:
 
     @loop.setter
     def loop(self, value: str):
-        self._loop_mode = value
+        previous, self._loop_mode = self._loop_mode, value
+        # Queue loop works by re-queueing each track as it starts.  Switching
+        # mid-track used to leave the playing song out of the rotation (on), or
+        # leave its copy behind to play once more at the end (off).
+        current = self.current
+        if current is None or previous == value:
+            return
+        if value == 'queue':
+            self.songs.put_nowait(current)
+        elif previous == 'queue':
+            for index in range(len(self.songs) - 1, -1, -1):
+                if self.songs[index] is current:
+                    self.songs.remove(index)
+                    break
 
     @property
     def volume(self):
@@ -1267,6 +1283,32 @@ class VoiceState:
         self._current_start_time = None
         self._current_position = 0.0
 
+    async def _wait_for_track(self, *, allow_radio: bool, radio_tried: bool) -> 'Track':
+        """Wait for the next queued track; raise TimeoutError once idle too long.
+
+        Waits in short slices rather than one long timeout, because the 24/7 and
+        autoplay settings were read once before the wait: turning autoplay on
+        while idle played nothing, and turning 24/7 on did not stop the
+        disconnect three minutes later.
+        """
+        idle = 0.0
+        while True:
+            if not self._autoplay_enabled:
+                radio_tried = False
+            elif (allow_radio and not radio_tried and not len(self.songs)
+                  and self.loop == 'off' and self._last_track is not None):
+                radio_tried = True
+                await self._extend_with_radio()
+            try:
+                return await asyncio.wait_for(self.songs.get(), timeout=IDLE_POLL_SECONDS)
+            except asyncio.TimeoutError:
+                if self._247_enabled:
+                    idle = 0.0
+                    continue
+                idle += IDLE_POLL_SECONDS
+                if idle >= IDLE_DISCONNECT_SECONDS:
+                    raise
+
     async def audio_player_task(self):
         while True:
             self.skip_votes.clear()
@@ -1278,7 +1320,9 @@ class VoiceState:
 
             # Refill before the idle timer starts, not after it fires: waiting
             # would disconnect the bot three minutes into an autoplay session.
+            radio_tried = False
             if self._autoplay_enabled and not halted and not len(self.songs) and self.loop == 'off':
+                radio_tried = True
                 await self._extend_with_radio()
 
             if self.loop == 'track' and self._last_track and not skipped:
@@ -1294,8 +1338,7 @@ class VoiceState:
                 # so does a socket timeout); catching both in one handler made a
                 # slow YouTube lookup disconnect the bot and drop the queue.
                 try:
-                    async with timeout(180 if not self._247_enabled else None):
-                        track = await self.songs.get()
+                    track = await self._wait_for_track(allow_radio=not halted, radio_tried=radio_tried)
                 except asyncio.TimeoutError:
                     # cancel_player=False because we are *inside* the player
                     # task: cancelling and awaiting ourselves only works by accident.

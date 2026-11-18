@@ -245,3 +245,49 @@ async def test_queue_embed_fits_discord_limits_with_long_youtube_rows():
     assert len(embed) <= 6000
     assert "](None)" not in embed.description
     assert embed.description.count("\n`") == 10
+
+
+def test_switching_queue_loop_mid_track_keeps_the_rotation_right():
+    state = VoiceState(MagicMock(), guild_id=1)
+    playing, queued = Track(title="Playing"), Track(title="Queued")
+    state.current = playing
+    state.songs.put_nowait(queued)
+
+    state.loop = "queue"
+    assert list(state.songs) == [queued, playing]
+    state.loop = "off"
+    assert list(state.songs) == [queued]
+
+
+@pytest.mark.asyncio
+async def test_autoplay_turned_on_while_idle_starts_the_radio(monkeypatch):
+    monkeypatch.setattr("zephyr.cogs.music.IDLE_POLL_SECONDS", 0.01)
+    state = _state()
+    state._last_track = Track(title="Seed", url="https://www.youtube.com/watch?v=aaaaaaaaaaa")
+    radio = Track(title="Radio")
+
+    async def extend():
+        state.songs.put_nowait(radio)
+        return 1
+
+    state._extend_with_radio = AsyncMock(side_effect=extend)
+    waiter = asyncio.create_task(state._wait_for_track(allow_radio=True, radio_tried=True))
+    await asyncio.sleep(0.03)
+    assert not waiter.done()
+    state._autoplay_enabled = True          # toggled while idle
+    await asyncio.sleep(0.03)               # one slice with autoplay off resets the attempt
+    assert await asyncio.wait_for(waiter, 1) is radio
+
+
+@pytest.mark.asyncio
+async def test_247_turned_on_while_idle_prevents_the_disconnect(monkeypatch):
+    monkeypatch.setattr("zephyr.cogs.music.IDLE_POLL_SECONDS", 0.01)
+    monkeypatch.setattr("zephyr.cogs.music.IDLE_DISCONNECT_SECONDS", 0.05)
+    state = _state()
+    state._247_enabled = True
+    waiter = asyncio.create_task(state._wait_for_track(allow_radio=False, radio_tried=False))
+    await asyncio.sleep(0.15)
+    assert not waiter.done()
+    state._247_enabled = False
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(waiter, 1)
