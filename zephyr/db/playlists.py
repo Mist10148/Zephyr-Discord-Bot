@@ -40,6 +40,27 @@ def _clean_name(name: str) -> str:
     return name
 
 
+def _name_key(name: str) -> str:
+    """How playlist names are compared: case-insensitively, in any language.
+
+    Done in Python, not with SQL ``lower()``: SQLite's lower() folds ASCII
+    only, so "Été" never matched "été" -- a second /save hit the unique
+    constraint, and /load and /playlist-delete could not find the playlist.
+    """
+    return " ".join((name or "").split()).casefold()
+
+
+def _owner_rows(connection, owner_id: str, name: str):
+    """The owner's playlists whose name matches ``name``, oldest first."""
+    rows = connection.execute(
+        select(Playlist.id, Playlist.name)
+        .where(Playlist.owner_id == str(owner_id))
+        .order_by(Playlist.id)
+    ).all()
+    key = _name_key(name)
+    return [row for row in rows if _name_key(row.name) == key]
+
+
 def _clean_tracks(tracks: list[dict]) -> list[dict]:
     """Normalise incoming track dicts and drop the unusable ones.
 
@@ -106,11 +127,7 @@ def save_playlist(
 
     engine = get_engine(database_url)
     with engine.begin() as connection:
-        existing = connection.execute(
-            select(Playlist.id, Playlist.name).where(
-                Playlist.owner_id == str(owner_id), func.lower(Playlist.name) == name.lower()
-            )
-        ).all()
+        existing = _owner_rows(connection, owner_id, name)
         # An exact match first; otherwise the owner's playlist differing only in case.
         exact = next((row.id for row in existing if row.name == name), None)
         playlist_id = exact if exact is not None else (existing[0].id if existing else None)
@@ -231,25 +248,26 @@ def find_playlist(
     name = " ".join((name or "").split())
     if not name:
         return None
+    key = _name_key(name)
     with engine.connect() as connection:
-        candidates = connection.execute(
-            select(Playlist.id, Playlist.owner_id, Playlist.name)
-            .where(func.lower(Playlist.name) == name.lower())
-            .order_by(Playlist.id)
-        ).all()
+        own = _owner_rows(connection, owner_id, name)
+        shared = []
+        if not own and guild_id:
+            shared = [
+                row for row in connection.execute(
+                    select(Playlist.id, Playlist.name)
+                    .where(Playlist.guild_id == str(guild_id), Playlist.is_public.is_(True))
+                    .order_by(Playlist.id)
+                ).all()
+                if _name_key(row.name) == key
+            ]
 
-    own = [row for row in candidates if row.owner_id == str(owner_id)]
-    # Prefer the exact spelling if older data holds names differing only in case.
-    exact = [row for row in own if row.name == name]
-    mine = (exact or own)[0].id if own else None
-    if mine is not None:
-        return get_playlist(mine, database_url=database_url)
-    if not guild_id:
-        return None
-    for row in candidates:
-        playlist = get_playlist(row.id, database_url=database_url)
-        if playlist and playlist["is_public"] and str(playlist["guild_id"] or "") == str(guild_id):
-            return playlist
+    if own:
+        # Prefer the exact spelling if older data holds names differing only in case.
+        exact = [row for row in own if row.name == name]
+        return get_playlist((exact or own)[0].id, database_url=database_url)
+    if shared:
+        return get_playlist(shared[0].id, database_url=database_url)
     return None
 
 
@@ -292,6 +310,17 @@ def update_playlist(
         return False
     engine = get_engine(database_url)
     with engine.begin() as connection:
+        if "name" in values:
+            # Case-insensitive like every other lookup: a rename to "chill" next
+            # to "Chill" passed the exact-match unique constraint and brought
+            # back the ambiguity /save and /load were fixed to avoid.
+            owner = connection.execute(
+                select(Playlist.owner_id).where(Playlist.id == playlist_id)
+            ).scalar()
+            if owner is not None and any(
+                row.id != playlist_id for row in _owner_rows(connection, owner, values["name"])
+            ):
+                raise PlaylistError("You already have a playlist with that name.")
         try:
             result = connection.execute(
                 update(Playlist).where(Playlist.id == playlist_id).values(**values)

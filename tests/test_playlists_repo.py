@@ -146,3 +146,33 @@ def test_names_differing_only_in_case_are_the_same_playlist(db_url):
     assert len(rows) == 1 and rows[0]["name"] == "chill"
     with pytest.raises(playlists.PlaylistExists):
         playlists.save_playlist("42", "CHILL", [{"title": "C"}], replace=False, database_url=db_url)
+
+
+def test_non_ascii_names_match_case_insensitively(db_url):
+    """SQLite's lower() folds ASCII only, so "Été" never matched "été"."""
+    first = playlists.save_playlist("42", "Été", [{"title": "A"}], database_url=db_url)
+    second = playlists.save_playlist("42", "été", [{"title": "B"}], database_url=db_url)
+
+    assert second["id"] == first["id"]
+    found = playlists.find_playlist("42", "ÉTÉ", database_url=db_url)
+    assert found is not None and found["id"] == first["id"]
+    assert playlists.find_playlist("42", "МУЗЫКА", database_url=db_url) is None
+    playlists.save_playlist("42", "Музыка", [{"title": "C"}], database_url=db_url)
+    assert playlists.find_playlist("42", "МУЗЫКА", database_url=db_url) is not None
+
+
+def test_a_public_non_ascii_playlist_is_found_in_its_guild(db_url):
+    playlists.save_playlist("1", "Ñoño", [{"title": "A"}], guild_id="7", is_public=True, database_url=db_url)
+
+    assert playlists.find_playlist("2", "ñOÑO", guild_id="7", database_url=db_url) is not None
+    assert playlists.find_playlist("2", "ñOÑO", guild_id="8", database_url=db_url) is None
+
+
+def test_a_rename_cannot_create_a_case_duplicate(db_url):
+    playlists.save_playlist("42", "Chill", [{"title": "A"}], database_url=db_url)
+    weekend = playlists.save_playlist("42", "Weekend", [{"title": "B"}], database_url=db_url)
+
+    with pytest.raises(playlists.PlaylistError):
+        playlists.update_playlist(weekend["id"], name="chill", database_url=db_url)
+    # Renaming to its own name in another case is fine.
+    assert playlists.update_playlist(weekend["id"], name="WEEKEND", database_url=db_url) is True
