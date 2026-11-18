@@ -129,3 +129,20 @@ def test_an_oversized_audit_payload_is_truncated(db_url):
     with engine.connect() as connection:
         payload = connection.execute(select(AuditLog.payload)).scalar_one()
     assert payload["truncated"] is True
+
+
+def test_overwriting_updates_visibility(db_url):
+    saved = playlists.save_playlist("42", "Weekend", [{"title": "A"}], guild_id="7", database_url=db_url)
+    playlists.save_playlist("42", "Weekend", [{"title": "B"}], guild_id="7", is_public=True, database_url=db_url)
+    stored = playlists.get_playlist(saved["id"], database_url=db_url)
+    assert stored["is_public"] is True
+    assert [track["title"] for track in stored["tracks"]] == ["B"]
+
+
+def test_names_differing_only_in_case_are_the_same_playlist(db_url):
+    playlists.save_playlist("42", "Chill", [{"title": "A"}], database_url=db_url)
+    playlists.save_playlist("42", "chill", [{"title": "B"}], database_url=db_url)
+    rows = playlists.list_playlists("42", database_url=db_url)
+    assert len(rows) == 1 and rows[0]["name"] == "chill"
+    with pytest.raises(playlists.PlaylistExists):
+        playlists.save_playlist("42", "CHILL", [{"title": "C"}], replace=False, database_url=db_url)

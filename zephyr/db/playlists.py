@@ -92,8 +92,12 @@ def save_playlist(
 
     One transaction, so a failed save never leaves a playlist half-rewritten --
     which for a replace would mean losing the old queue without storing the new
-    one.  The IntegrityError branch covers two callers racing the same new name:
-    the loser re-reads and replaces instead of surfacing a constraint violation.
+    one.  Two callers racing the same new name hit the unique constraint; the
+    loser gets ``PlaylistExists`` rather than a raw constraint violation.
+
+    Names match case-insensitively, the same way ``find_playlist`` resolves
+    them: saving "chill" next to "Chill" created two rows, and /load or
+    /playlist-delete then acted on whichever the database returned first.
     """
     name = _clean_name(name)
     cleaned = _clean_tracks(tracks)
@@ -102,9 +106,14 @@ def save_playlist(
 
     engine = get_engine(database_url)
     with engine.begin() as connection:
-        playlist_id = connection.execute(
-            select(Playlist.id).where(Playlist.owner_id == str(owner_id), Playlist.name == name)
-        ).scalar_one_or_none()
+        existing = connection.execute(
+            select(Playlist.id, Playlist.name).where(
+                Playlist.owner_id == str(owner_id), func.lower(Playlist.name) == name.lower()
+            )
+        ).all()
+        # An exact match first; otherwise the owner's playlist differing only in case.
+        exact = next((row.id for row in existing if row.name == name), None)
+        playlist_id = exact if exact is not None else (existing[0].id if existing else None)
 
         if playlist_id is None:
             try:
@@ -126,6 +135,12 @@ def save_playlist(
             connection.execute(
                 delete(PlaylistTrack).where(PlaylistTrack.playlist_id == playlist_id)
             )
+            # /save weekend public:True on an existing private playlist replaced
+            # the tracks but silently left it private.
+            values = {"is_public": bool(is_public), "name": name}
+            if guild_id:
+                values["guild_id"] = str(guild_id)
+            connection.execute(update(Playlist).where(Playlist.id == playlist_id).values(**values))
 
         connection.execute(
             insert(PlaylistTrack),
@@ -218,10 +233,15 @@ def find_playlist(
         return None
     with engine.connect() as connection:
         candidates = connection.execute(
-            select(Playlist.id, Playlist.owner_id).where(func.lower(Playlist.name) == name.lower())
+            select(Playlist.id, Playlist.owner_id, Playlist.name)
+            .where(func.lower(Playlist.name) == name.lower())
+            .order_by(Playlist.id)
         ).all()
 
-    mine = next((row.id for row in candidates if row.owner_id == str(owner_id)), None)
+    own = [row for row in candidates if row.owner_id == str(owner_id)]
+    # Prefer the exact spelling if older data holds names differing only in case.
+    exact = [row for row in own if row.name == name]
+    mine = (exact or own)[0].id if own else None
     if mine is not None:
         return get_playlist(mine, database_url=database_url)
     if not guild_id:
