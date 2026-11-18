@@ -1,6 +1,7 @@
 """Public weather and geocoding JSON endpoints."""
 
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from flask import jsonify, request
 
@@ -22,9 +23,23 @@ def _number(name: str, default: float | None = None) -> float | None:
     except ValueError: return None
 
 
-def _time_payload(time_local: str | None, offset: int) -> dict:
+def _zone(bundle: dict, offset: int):
+    """The place's own zone, or its current fixed offset if that cannot be loaded.
+
+    Open-Meteo reports one ``utc_offset_seconds`` -- today's.  Applied to every
+    row of a 7-day forecast, rows after a DST change were an hour off.
+    """
+    try:
+        return ZoneInfo(bundle.get("timezone") or "")
+    except (ZoneInfoNotFoundError, ValueError, ModuleNotFoundError):
+        return timezone(timedelta(seconds=offset))
+
+
+def _time_payload(time_local: str | None, zone) -> dict:
     if not time_local: return {"time_local": None, "time_epoch": None}
-    local = datetime.fromisoformat(time_local).replace(tzinfo=timezone(timedelta(seconds=offset)))
+    if isinstance(zone, int):
+        zone = timezone(timedelta(seconds=zone))
+    local = datetime.fromisoformat(time_local).replace(tzinfo=zone)
     return {"time_local": time_local, "time_epoch": int(local.timestamp())}
 
 
@@ -56,8 +71,9 @@ def weather():
             air_quality = None
         current = bundle.get("current") or {}
         offset = bundle.get("utc_offset_seconds") or 0
-        current_payload = {**_time_payload(current.get("time"), offset), "temperature": current.get("temperature_2m"), "feels_like": current.get("apparent_temperature"), "humidity": current.get("relative_humidity_2m"), "wind_speed": current.get("wind_speed_10m"), "precipitation": current.get("precipitation"), "weather_code": current.get("weather_code"), "description": wmo_description(current.get("weather_code")), "icon": wmo_icon(current.get("weather_code")), "group": wmo_group(current.get("weather_code"))}
-        hourly = [{**row, **_time_payload(row.pop("time", None), offset)} for row in slice_hourly_from(bundle, max(1, min(hours, 168)))]
+        zone = _zone(bundle, offset)
+        current_payload = {**_time_payload(current.get("time"), zone), "temperature": current.get("temperature_2m"), "feels_like": current.get("apparent_temperature"), "humidity": current.get("relative_humidity_2m"), "wind_speed": current.get("wind_speed_10m"), "precipitation": current.get("precipitation"), "weather_code": current.get("weather_code"), "description": wmo_description(current.get("weather_code")), "icon": wmo_icon(current.get("weather_code")), "group": wmo_group(current.get("weather_code"))}
+        hourly = [{**row, **_time_payload(row.pop("time", None), zone)} for row in slice_hourly_from(bundle, max(1, min(hours, 168)))]
         daily_data, daily = bundle.get("daily") or {}, []
         def daily_value(name: str, index: int):
             # A field Open-Meteo left out used to raise KeyError -- an HTML 500
@@ -67,7 +83,7 @@ def weather():
 
         for index, time_local in enumerate(daily_data.get("time") or []):
             code = daily_value("weather_code", index)
-            daily.append({"time_local": time_local, "time_epoch": _time_payload(f"{time_local}T00:00", offset)["time_epoch"], "weather_code": code, "description": wmo_description(code), "icon": wmo_icon(code), "temp_max": daily_value("temperature_2m_max", index), "temp_min": daily_value("temperature_2m_min", index), "feels_like_max": daily_value("apparent_temperature_max", index), "feels_like_min": daily_value("apparent_temperature_min", index), "precipitation_probability": daily_value("precipitation_probability_max", index), "wind_speed_max": daily_value("wind_speed_10m_max", index)})
+            daily.append({"time_local": time_local, "time_epoch": _time_payload(f"{time_local}T00:00", zone)["time_epoch"], "weather_code": code, "description": wmo_description(code), "icon": wmo_icon(code), "temp_max": daily_value("temperature_2m_max", index), "temp_min": daily_value("temperature_2m_min", index), "feels_like_max": daily_value("apparent_temperature_max", index), "feels_like_min": daily_value("apparent_temperature_min", index), "precipitation_probability": daily_value("precipitation_probability_max", index), "wind_speed_max": daily_value("wind_speed_10m_max", index)})
         return jsonify({"latitude": lat, "longitude": lon, "timezone": bundle.get("timezone"), "utc_offset_seconds": offset, "units": units, "current": current_payload, "hourly": hourly, "daily": daily, "air_quality": air_quality, "class_suspension": class_suspension_payload(current.get("apparent_temperature"), units=units)})
     except WeatherProviderError as exc:
         return error("weather_unavailable", str(exc), 502)

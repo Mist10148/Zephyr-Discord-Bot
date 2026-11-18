@@ -113,3 +113,58 @@ def test_class_and_subscription_share_one_scale():
         level = class_suspension_payload(feels)["level"]
         decision, _ = cog.class_suspension(feels)
         assert decision == cog._SUSPENSION_DECISIONS[level]
+
+
+class TestSavedLocation:
+    """/setlocation stored coordinates nothing read; the name alone was re-geocoded."""
+
+    def test_the_saved_coordinates_are_used(self, monkeypatch):
+        monkeypatch.setattr(cog, "read_bot_user", lambda user_id: {
+            "default_city": "San Jose", "lat": 37.34, "lon": -121.89})
+        instance = cog.WeatherCog.__new__(cog.WeatherCog)
+        interaction = MagicMock()
+        interaction.user.id = 1
+
+        city = asyncio.run(instance._city_for(interaction, None))
+
+        assert city == "San Jose"
+        url = cog._current_url(city)
+        assert "lat=37.34" in url and "lon=-121.89" in url and "q=" not in url
+
+    def test_a_typed_city_is_still_looked_up_by_name(self):
+        assert "q=Manila" in cog._current_url("Manila")
+
+    def test_the_forecast_skips_re_geocoding(self, monkeypatch):
+        seen = {}
+
+        def forecast(lat, lon, days=3):
+            seen["coords"] = (lat, lon)
+            return [{"date": "2026-11-18", "weather_code": 0, "temp_max": 20, "temp_min": 10,
+                     "feels_like_max": 20, "feels_like_min": 10, "precipitation_probability": 0,
+                     "wind_speed_max": 5}]
+
+        def no_geocode(*args, **kwargs):
+            raise AssertionError("re-geocoded a saved place")
+
+        monkeypatch.setattr(cog, "_resolve_place", no_geocode)
+        monkeypatch.setattr(cog, "get_openmeteo_daily_forecast", forecast)
+        pages = asyncio.run(cog._forecast_pages(cog.SavedPlace("San Jose", 37.34, -121.89)))
+
+        assert seen["coords"] == (37.34, -121.89)
+        assert pages
+
+
+def test_web_forecast_times_follow_dst_per_row():
+    """One utc_offset_seconds (today's) applied to all 7 days put rows after a
+    DST change an hour off."""
+    from website.api.weather import _time_payload, _zone
+
+    zone = _zone({"timezone": "America/New_York"}, -4 * 3600)
+    before = _time_payload("2026-10-31T12:00", zone)["time_epoch"]   # EDT, UTC-4
+    after = _time_payload("2026-11-02T12:00", zone)["time_epoch"]    # EST, UTC-5
+    assert before == int(datetime(2026, 10, 31, 16, tzinfo=timezone.utc).timestamp())
+    assert after == int(datetime(2026, 11, 2, 17, tzinfo=timezone.utc).timestamp())
+    # An unknown zone falls back to the fixed offset.
+    fixed = _zone({"timezone": "Not/AZone"}, 3600)
+    assert _time_payload("2026-01-01T00:00", fixed)["time_epoch"] == int(
+        datetime(2025, 12, 31, 23, tzinfo=timezone.utc).timestamp())

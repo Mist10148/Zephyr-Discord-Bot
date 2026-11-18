@@ -79,7 +79,33 @@ def _owm_url(base: str, **params) -> str:
     return f"{base}?{urlencode(query)}"
 
 
+class SavedPlace(str):
+    """A city name that also carries the coordinates /setlocation resolved.
+
+    A ``str`` so every embed and message that prints the city keeps working,
+    while the fetchers can ask OpenWeatherMap by coordinates.  By name alone,
+    "San Jose" confirmed as California could come back as Costa Rica, or not
+    be found at all when the two geocoders spell a place differently.
+    """
+
+    lat: float
+    lon: float
+
+    def __new__(cls, name: str, lat: float, lon: float):
+        place = super().__new__(cls, name)
+        place.lat, place.lon = float(lat), float(lon)
+        return place
+
+
+def _coords(city: str) -> tuple[float, float] | None:
+    lat, lon = getattr(city, "lat", None), getattr(city, "lon", None)
+    return (lat, lon) if lat is not None and lon is not None else None
+
+
 def _current_url(city: str) -> str:
+    coords = _coords(city)
+    if coords:
+        return _owm_url(CURRENT_URL, lat=coords[0], lon=coords[1], units="metric")
     return _owm_url(CURRENT_URL, q=city, units="metric")
 
 
@@ -180,7 +206,8 @@ async def _forecast_pages(city: str) -> list[discord.Embed]:
     """/forecast: Open-Meteo first, OpenWeatherMap if that fails."""
     days, label, fallback = [], city, False
     try:
-        resolved = await asyncio.to_thread(_resolve_place, city)
+        coords = _coords(city)
+        resolved = (coords[0], coords[1], str(city)) if coords else await asyncio.to_thread(_resolve_place, city)
         if resolved:
             lat, lon, label = resolved
             days = await asyncio.to_thread(get_openmeteo_daily_forecast, lat, lon, days=3)
@@ -521,7 +548,14 @@ class WeatherCog(commands.Cog):
         except Exception as exc:
             print(f"[Weather] Could not read the default city: {exc}")
             return self.FALLBACK_CITY
-        return (stored or {}).get("default_city") or self.FALLBACK_CITY
+        stored = stored or {}
+        name = stored.get("default_city")
+        if not name:
+            return self.FALLBACK_CITY
+        if stored.get("lat") is not None and stored.get("lon") is not None:
+            # What /setlocation confirmed is what the weather is for.
+            return SavedPlace(name, stored["lat"], stored["lon"])
+        return name
 
     @app_commands.command(name="setlocation", description="Set your default city for weather commands.")
     @app_commands.describe(city="Your city, or leave empty to clear it")
