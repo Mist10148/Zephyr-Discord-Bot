@@ -34,6 +34,7 @@ from zephyr.db.weather_subs import (
     normalise_zone,
     parse_local_time,
 )
+from zephyr.utils import weather_embeds as look
 from zephyr.utils.weather_alerts import DEFAULT_THRESHOLDS, evaluate
 from zephyr.utils.weather_utils import (
     WeatherProviderError,
@@ -47,20 +48,41 @@ KIND_LABELS = {
     "class_suspension": "Class suspension watch",
 }
 KIND_COLORS = {
-    "daily": discord.Color.blue(),
-    "severe": discord.Color.orange(),
-    "class_suspension": discord.Color.red(),
+    "daily": 0x38BDF8,
+    "severe": 0xF97316,
+    "class_suspension": 0xDC2626,
+}
+KIND_ICONS = {"daily": "📰", "severe": "⚠️", "class_suspension": "🏫"}
+FIELD_ICONS = {
+    "High / Low": "🌡️", "Feels like": "🥵", "Chance of rain": "🌧️", "Max wind": "💨",
+    "Right now": "🕒", "Watch window": "⏱️", "Feels like (max)": "🥵",
 }
 
 
 def alert_embed(alert: dict) -> discord.Embed:
+    """A scheduled post or a /weather-preview, in the shared weather style."""
+    kind = alert.get("kind")
     embed = discord.Embed(
         title=alert["title"],
         description=alert.get("summary"),
-        color=KIND_COLORS.get(alert["kind"], discord.Color.blue()),
+        color=KIND_COLORS.get(kind, look.NEUTRAL),
+        timestamp=datetime.now(timezone.utc),
     )
+    embed.set_author(name=f"{KIND_ICONS.get(kind, '🔔')} {KIND_LABELS.get(kind, 'Weather alert')}")
+    advisory = None
     for field in alert.get("fields") or []:
-        embed.add_field(name=field["name"], value=field["value"], inline=True)
+        if field["name"] == "Advisory only":
+            advisory = field["value"]
+            continue
+        icon = FIELD_ICONS.get(field["name"])
+        embed.add_field(name=f"{icon} {field['name']}" if icon else field["name"], value=field["value"], inline=True)
+    # The digest always computed today's class-suspension outlook but never showed it.
+    suspension = (alert.get("class_suspension") or {}).get("level")
+    if kind == "daily" and suspension in ("certain", "likely", "possible"):
+        dot, verdict, _ = look.SUSPENSION_STYLE[suspension]
+        embed.add_field(name="🏫 Classes", value=f"{dot} {verdict} (heat index advisory)", inline=False)
+    footer = "Advisory only — confirm with your school or LGU" if advisory else None
+    embed.set_footer(text=" • ".join(part for part in (look.BRAND, look.OPEN_METEO, footer) if part))
     return embed
 
 
@@ -288,14 +310,23 @@ class WeatherAlertsCog(commands.Cog):
         if not rows:
             await interaction.followup.send("No weather subscriptions here yet. Add one with `/weather-subscribe`.", ephemeral=True)
             return
-        embed = discord.Embed(title="🌦️ Weather subscriptions", color=discord.Color.blue())
-        for row in rows[:25]:
-            when = f" at {row['schedule_local_time']} ({row['tz']})" if row["schedule_local_time"] else ""
-            state = "" if row["enabled"] else " • disabled"
+        embed = discord.Embed(
+            title="🌦️ Weather subscriptions",
+            description=f"{len(rows)} subscription{'s' if len(rows) != 1 else ''} in **{interaction.guild.name}**",
+            color=0x38BDF8)
+        shown = rows[:24]
+        for row in shown:
+            when = f"\n⏰ {row['schedule_local_time']} ({row['tz']})" if row["schedule_local_time"] else ""
+            state = "" if row["enabled"] else "\n⏸️ Disabled"
             embed.add_field(
-                name=f"#{row['id']} — {KIND_LABELS.get(row['kind'], row['kind'])}",
-                value=f"{row['location']} → <#{row['channel_id']}>{when}{state}",
-                inline=False)
+                name=f"{KIND_ICONS.get(row['kind'], '🔔')} #{row['id']} · {KIND_LABELS.get(row['kind'], row['kind'])}",
+                value=f"📍 {row['location']}\n📢 <#{row['channel_id']}>{when}{state}",
+                inline=True)
+        footer = "Remove one with /weather-unsubscribe • Preview with /weather-preview"
+        if len(rows) > len(shown):
+            # Discord allows 25 fields; say so instead of silently dropping the rest.
+            footer = f"…and {len(rows) - len(shown)} more on the dashboard • " + footer
+        embed.set_footer(text=footer)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="weather-unsubscribe", description="Remove a weather subscription by its number.")
