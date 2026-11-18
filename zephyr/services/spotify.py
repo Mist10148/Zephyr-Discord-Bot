@@ -13,18 +13,40 @@ actually played.
 """
 
 import re
+from urllib.parse import urlsplit
 
 # Matches the plan's cap on playlist size, which yt-dlp's max_entries also uses.
 MAX_IMPORT_TRACKS = 200
+
+
+# Hosts a Spotify link may live on.  Matched exactly against the parsed host:
+# the old substring test accepted ``https://10.0.0.5/?spotify.link``, which was
+# then fetched (with redirects) by resolve_short_link -- a blind request to any
+# internal address from anyone with /play or a dashboard session.
+SPOTIFY_HOSTS = frozenset({"open.spotify.com", "play.spotify.com", "spotify.com", "www.spotify.com"})
+SHORT_LINK_HOSTS = frozenset({"spotify.link", "spotify.app.link"})
+
+
+def _host(value: str) -> str | None:
+    candidate = (value or "").strip().strip("<>")
+    if not candidate.lower().startswith(("http://", "https://")):
+        return None
+    try:
+        return (urlsplit(candidate).hostname or "").lower() or None
+    except ValueError:
+        return None
+
+
+def is_short_link(value: str) -> bool:
+    return _host(value) in SHORT_LINK_HOSTS
 
 
 def is_spotify_url(value: str) -> bool:
     candidate = (value or "").strip().strip("<>").lower()
     if candidate.startswith("spotify:"):
         return True
-    return ("spotify.com" in candidate or "spotify.link" in candidate) and candidate.startswith(
-        ("http://", "https://")
-    )
+    host = _host(candidate)
+    return host in SPOTIFY_HOSTS or host in SHORT_LINK_HOSTS
 
 
 def parse_spotify_id(url: str, kind: str) -> str | None:
@@ -42,10 +64,12 @@ def resolve_short_link(url: str) -> str:
     """Follow a spotify.link redirect to the real open.spotify.com URL."""
     import requests
 
+    if not is_short_link(url):
+        return url
     try:
         response = requests.head(url, allow_redirects=True, timeout=10)
         resolved = str(response.url)
-        if "spotify.com" in resolved or resolved.startswith("spotify:"):
+        if _host(resolved) in SPOTIFY_HOSTS or resolved.startswith("spotify:"):
             return resolved
     except Exception as exc:
         print(f"[Spotify Resolve Error] {exc}")
@@ -84,7 +108,7 @@ def fetch_playlist_metadata(client, url: str, *, limit: int = MAX_IMPORT_TRACKS)
     because nothing has been resolved -- that is the whole point of the import.
     """
     url = (url or "").strip().strip("<>")
-    if "spotify.link" in url:
+    if is_short_link(url):
         url = resolve_short_link(url)
     if not is_spotify_url(url):
         raise ValueError("That is not a Spotify link.")

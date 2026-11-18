@@ -68,3 +68,16 @@ def test_playlist_entries_under_the_new_item_key_are_read():
 
     assert name == "Mix"
     assert rows == [{"title": "Artist - Song", "url": None, "duration_s": 1, "source": "spotify"}]
+
+
+def test_only_real_spotify_hosts_count_as_spotify_links():
+    from zephyr.services.spotify import is_spotify_url, resolve_short_link
+
+    assert is_spotify_url("https://open.spotify.com/track/abc")
+    assert is_spotify_url("https://spotify.link/abc")
+    assert is_spotify_url("spotify:track:abc")
+    assert not is_spotify_url("https://10.0.0.5:8080/x?spotify.link")
+    assert not is_spotify_url("http://127.0.0.1/open.spotify.com/track/1")
+    assert not is_spotify_url("https://evilspotify.com/track/1")
+    # Never fetched: not a short-link host.
+    assert resolve_short_link("https://10.0.0.5/?spotify.link") == "https://10.0.0.5/?spotify.link"
