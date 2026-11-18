@@ -89,3 +89,43 @@ traced in the code; the ones marked **fixed** have a regression test. The AI fea
   dashboard may show the bot online for up to 30 s after shutdown.
 - **Playlist web API:** delete/patch write no audit row; the Spotify client is rebuilt per import.
 - **Public web endpoints** (`/weather`, `/geocode`) have no per-IP rate limit (ENHANCEMENTS 12.6).
+
+---
+
+# Second pass — November 2026
+
+A second read of music and weather after the fixes above. Every item was traced in the code and
+has a regression test.
+
+## Music
+
+| # | Problem | Effect | Status |
+|---|---------|--------|--------|
+| M18 | Loop=track kept `_last_track` after a replay failed to load | The dead track was retried forever, with a "Failed to load" post each time | fixed |
+| M19 | `interaction_check` replied, then the error handler replied again | Two messages for a DM or for a channel outside the music channels | fixed |
+| M20 | SQLite `lower()` only folds ASCII | `/save Été` twice failed; `/load` and `/playlist-delete` could not find non-ASCII names | fixed (`casefold()` in Python) |
+| M21 | `/load` created the player with no announce channel | With no music channels set, no now-playing, buttons or errors were posted | fixed |
+| M22 | Effects or `/seek` while a track loaded | Reported success but did nothing; the progress clock ran at the wrong speed | fixed: applied when the load finishes |
+| M23 | A seek travelled through `_current_position`, outside the restart lock | A seek racing an effect restart was silently lost | fixed: explicit `position=` |
+| M24 | Dashboard effects set toggles before validating pitch and bass | A bad value left effects half-applied | fixed |
+| M25 | `/play` while `/say` was speaking | `voice.play` raised; the track could be dropped as "could not stream" | fixed: waits for the clip |
+| M26 | `/msearch` pick | Said "Selected" after a refusal; a connect error went unanswered | fixed |
+| M27 | ⏭️ button skipped at once for any listener | The documented skip vote was bypassed | fixed: same rule as `/skip` |
+| M28 | Stream retries keyed by `id(track)` | Leaked, and a recycled id could drop a new track with no retry | fixed: flag on the Track |
+| M29 | Dashboard rename only checked the exact-case unique constraint | Recreated "Chill"/"chill" duplicates | fixed |
+| M30 | A song opened from a YouTube Mix (`list=RD…`) | Queued the whole 200-track Mix | fixed: only that video |
+
+## Weather
+
+| # | Problem | Effect | Status |
+|---|---------|--------|--------|
+| W16 | Imperial severe watches compared °F/mph against metric defaults | "Feels like 95°F" warnings daily; gales under 60 mph missed | fixed; old rows healed on read |
+| W17 | The severe fingerprint had no date and was never cleared | The next day's identical storm or heat peak was never announced | fixed: cleared on a quiet tick |
+| W18 | Dashboard edits skipped the "already past today" check | Re-enabling or rescheduling a digest posted it within a minute | fixed |
+| W19 | `/setlocation` coordinates were never used | Commands re-geocoded the name and could land in another country | fixed |
+| W20 | Threshold and `enabled` validation | `true` → 1 %, NaN broke the dashboard's JSON, `"false"` → on | fixed |
+| W21 | "Cold Weather" counted as a class-suspension advisory | Every cool city got a daily watch post and a "heat index" Classes line | fixed (heat only; `/class` unchanged) |
+| W22 | Changing a subscription's place kept the old time zone | An 08:00 digest moved to London posted at midnight there | fixed |
+| W23 | Web forecast used today's UTC offset for all seven days | Times an hour off after a DST change | fixed |
+| W24 | No Embed Links check; 4xx send errors retried every minute | A broken channel re-fetched the forecast all day | fixed |
+| W25 | Raw database error posted publicly; duplicate subscriptions allowed | Leaked SQL; double posts | fixed |

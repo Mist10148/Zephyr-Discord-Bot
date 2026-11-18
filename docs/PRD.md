@@ -153,9 +153,12 @@ the dashboard.
   transactionally, so two bot instances cannot double-post.
 - **Severe weather watch:** posted only when wind, rain probability, apparent temperature or a storm
   code crosses a threshold. Thresholds are editable, and each can be switched off individually.
-- **Class suspension watch:** posted when the heat index reaches an advisory level.
+- **Class suspension watch:** posted when the heat index reaches an advisory level (heat only; a
+  cool day is not an advisory, although `/class` still mentions it).
 - Both watches run every 15 minutes and deduplicate by a coarse fingerprint, so a storm that lasts
-  all afternoon is announced once rather than sixteen times.
+  all afternoon is announced once rather than sixteen times. Once conditions are quiet again the
+  fingerprint is forgotten, so the next day's identical storm is announced too.
+- Imperial subscriptions keep their thresholds in °F and mph; switching units converts them.
 - `/weather-preview` and the dashboard's preview show exactly what a subscription would post right
   now, using the same code the scheduler uses.
 
@@ -172,7 +175,8 @@ the dashboard.
 - **Autoplay:** when the queue drains, playback continues into YouTube's Mix for the last track,
   skipping anything played recently.
 - **Now playing controls:** the now-playing message carries pause/resume, skip, loop, shuffle and
-  stop buttons, and its progress bar advances while the track plays.
+  stop buttons, and its progress bar advances while the track plays. The skip button follows the
+  `/skip` rule: a vote, unless you queued the song, hold the DJ role or can manage the server.
 - **Web remote:** the dashboard shows the live queue and drives the same actions, with the bot
   re-checking permissions on every one.
 

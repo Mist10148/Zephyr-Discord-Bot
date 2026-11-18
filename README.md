@@ -139,7 +139,8 @@ observation time in the footer. Times are shown in the place's own time zone.
 > if it does not, you need to be in the voice channel Zephyr is in. That rule applies to the
 > commands that change playback (`/pause`, `/resume`, `/stop`, `/volume`, `/seek`, the queue
 > edits, effects, `/247`, `/autoplay`), the now-playing buttons and the web remote alike. `/skip`
-> stays a vote among listeners; `/leave`, `/summon` and `/disconnect` need Manage Server.
+> and the ⏭️ button are a vote among listeners, except for whoever queued the song, a DJ or a
+> server manager, who skip at once; `/leave`, `/summon` and `/disconnect` need Manage Server.
 
 ### 💬 AI Chat & TTS
 | Command | Description |
