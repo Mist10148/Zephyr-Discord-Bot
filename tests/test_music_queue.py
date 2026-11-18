@@ -303,7 +303,7 @@ class TestPlaybackRetry:
                 await asyncio.sleep(0)
             state.voice.after(None)
             for _ in range(20):
-                if state._stream_retry_ids == set():
+                if len(state._notify.call_args_list) >= 2:
                     break
                 await asyncio.sleep(0)
             task.cancel()

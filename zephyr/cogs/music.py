@@ -357,6 +357,11 @@ class Track:
     upload_date: str = 'Unknown'
     source: str = 'youtube'                   # youtube | spotify | file | search
     repaired_from: str | None = None           # set when the original URL died
+    # Set after one failed stream so the next failure drops the track instead
+    # of retrying forever.  On the track itself: a set of id(track) leaked
+    # entries for removed tracks, and a recycled id could make a brand-new
+    # track look as if it had already used its retry.
+    stream_retried: bool = dataclasses.field(default=False, compare=False, repr=False)
 
     @property
     def duration(self) -> str:
@@ -977,7 +982,9 @@ class VoiceState:
         # failed FFmpeg source here before waking audio_player_task on the event
         # loop; the task owns the retry and all Discord API calls.
         self._playback_failure = None
-        self._stream_retry_ids = set()
+        # A /seek that arrived while the track was still loading; applied by
+        # audio_player_task once the load finishes.
+        self._pending_seek = None
 
         self._16d_enabled = False
         self._reverb_enabled = False
@@ -1280,6 +1287,31 @@ class VoiceState:
                 self.songs.remove(index)
                 return
 
+    async def _wait_for_foreign_audio(self, timeout: float = 15.0) -> None:
+        """Wait while the voice client is playing audio that is not ours (a TTS clip).
+
+        Only a real ``True`` counts as busy, so test doubles and a voice client
+        that cannot answer never stall the player.
+        """
+        voice = self.voice
+        is_playing = getattr(voice, 'is_playing', None)
+        if not callable(is_playing):
+            return
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                busy = is_playing()
+            except Exception:
+                return
+            if busy is not True:
+                return
+            await asyncio.sleep(0.25)
+        # Still talking after the timeout: music wins rather than being dropped.
+        try:
+            voice.stop()
+        except Exception:
+            pass
+
     def _track_ended(self) -> None:
         """Forget the source and the current track once playback has stopped."""
         # Unconditional: a failed stream clears ``current`` so that loop=track
@@ -1357,9 +1389,32 @@ class VoiceState:
                     # Re-queue it so it plays again after everything else.
                     self.songs.put_nowait(track)
 
+            # The options and the rate they imply are captured together, before
+            # the lookup: an effect toggled during the 1-3 s extraction used to
+            # set the progress clock to the new speed while the source played
+            # at the old one.
+            self._pending_seek = None
+            start_at = 0.0
+            options = self.get_ffmpeg_options()
+            rate = self.playback_rate()
             try:
-                source = await YTDLSource.from_track(track, ffmpeg_options=self.get_ffmpeg_options(),
+                source = await YTDLSource.from_track(track, ffmpeg_options=options,
                                                      volume=self._volume, loop=self.bot.loop)
+                # A /seek or an effect change that arrived while the track was
+                # loading had nothing to restart.  Apply it now, before play,
+                # instead of reporting success and ignoring it.
+                pending = self._pending_seek
+                if pending is not None or self.get_ffmpeg_options() != options:
+                    self._pending_seek = None
+                    start_at = pending or 0.0
+                    try:
+                        source.cleanup()
+                    except Exception:
+                        pass
+                    options = self.get_ffmpeg_options(seek_position=start_at)
+                    rate = self.playback_rate()
+                    source = await YTDLSource.from_track(track, ffmpeg_options=options,
+                                                         volume=self._volume, loop=self.bot.loop)
             except Exception as e:
                 reason = 'the lookup timed out' if isinstance(e, asyncio.TimeoutError) else str(e)
                 await self._notify(embed=discord.Embed(description=f'❌ Failed to load **{track.title}**: {reason}',
@@ -1370,6 +1425,9 @@ class VoiceState:
                 # forever, re-extracting the dead video every few seconds.
                 self._remove_queued_track(track)
                 self.current = None
+                # Nor in track-loop mode: _last_track still pointed at it, so
+                # every pass replayed the dead track and posted another error.
+                self._last_track = None
                 continue
 
             if self._skip_requested or self._halt_requested or self.current is not track:
@@ -1384,6 +1442,11 @@ class VoiceState:
                     self._track_ended()
                 continue
 
+            # /say may be speaking: voice.play() would raise "Already playing
+            # audio", and the track went down the stream-failure path and could
+            # be dropped.  Give a short clip time to finish first.
+            await self._wait_for_foreign_audio()
+
             try:
                 # Cleared here rather than at the top of the loop, so a stale signal
                 # from while the track was loading cannot end this one at once.
@@ -1391,8 +1454,8 @@ class VoiceState:
                 self._playback_failure = None
                 self.source = source
                 self._current_start_time = time.time()
-                self._current_position = 0.0
-                self._current_rate = self.playback_rate()
+                self._current_position = start_at
+                self._current_rate = rate
                 self.voice.play(source, after=lambda error: self.play_next_song(error, source=source, track=track))
                 self._remember(track)
                 self.changed()
@@ -1417,17 +1480,16 @@ class VoiceState:
                 self._playback_failure = None
                 diagnostics = failure['diagnostics']
                 LOGGER.error("FFmpeg failed while streaming %r: %s", track.title, diagnostics)
-                retry_id = id(track)
-                if retry_id not in self._stream_retry_ids:
+                if not track.stream_retried:
                     # yt-dlp URLs are short-lived.  One fresh extraction is cheap
                     # and recovers from an expired edge URL; never retry forever.
-                    self._stream_retry_ids.add(retry_id)
+                    track.stream_retried = True
                     self.current = None
                     self._current_start_time = None
                     self._queue_track_for_retry(track)
                     await self._notify(content='⚠️ The stream was rejected; refreshing it once and retrying.')
                 else:
-                    self._stream_retry_ids.discard(retry_id)
+                    track.stream_retried = False
                     self._remove_queued_track(track)
                     self.current = None
                     self._current_start_time = None
@@ -1435,7 +1497,7 @@ class VoiceState:
                         content='❌ I could not stream that track. Please try it again later or choose another result.'
                     )
             else:
-                self._stream_retry_ids.discard(id(track))
+                track.stream_retried = False
             self._track_ended()
 
     def play_next_song(self, error=None, *, source: YTDLSource | None = None, track: Track | None = None):
@@ -1531,7 +1593,7 @@ class VoiceState:
         self._loop_mode = 'off'
         self.manual_stop = False
         self._playback_failure = None
-        self._stream_retry_ids.clear()
+        self._pending_seek = None
         self.current = None
         self._last_track = None
         self.source = None
@@ -1553,8 +1615,18 @@ class VoiceState:
         non_bot = [m for m in self.voice.channel.members if not m.bot]
         return max(1, math.ceil(len(non_bot) / 2))
 
-    async def restart_current(self, interaction: discord.Interaction = None, preserve_position: bool = True):
+    async def restart_current(self, interaction: discord.Interaction = None, preserve_position: bool = True,
+                              *, position: float | None = None) -> bool:
         """Recreate and restart the current track (used by effects and seek).
+
+        ``position`` is an explicit seek target.  It is read inside the lock: a
+        seek used to travel through ``_current_position``, which a restart
+        already in progress overwrote with its own old position, so the seek
+        was silently lost.
+
+        Returns False when there was nothing to restart because the track is
+        still loading.  A seek is then kept as ``_pending_seek`` and effects are
+        picked up when the load finishes, so callers can say so honestly.
 
         Serialised: two quick effect toggles used to overlap, and the second
         ``voice.play()`` raised "Already playing audio" while the first source
@@ -1569,9 +1641,14 @@ class VoiceState:
             # loading there is nothing to restart, and playing one here raced the
             # player loop's own voice.play() ("Already playing audio").
             if not self.is_playing or self.source is None:
-                return
+                if position is not None and self.current is not None:
+                    self._pending_seek = max(0.0, position)
+                return False
             was_paused = bool(self.voice and self.voice.is_paused())
-            elapsed = self.elapsed if preserve_position else 0.0
+            if position is not None:
+                elapsed = max(0.0, position)
+            else:
+                elapsed = self.elapsed if preserve_position else 0.0
             track = self.current
             # Retire the old source *before* voice.stop(), so its after-callback --
             # whenever the player thread gets round to it -- is recognised and
@@ -1601,7 +1678,7 @@ class VoiceState:
                 source.cleanup()
                 self.source = None
                 self.next.set()
-                return
+                return True
 
             try:
                 self.source = source
@@ -1617,6 +1694,7 @@ class VoiceState:
                 self.source = None
                 self.next.set()
                 raise
+            return True
 
 
 class MusicCog(commands.Cog):
@@ -2036,10 +2114,11 @@ class MusicCog(commands.Cog):
         position = _coerce_float(args.get('position'), 'position')
         if state.current.duration_seconds and position > state.current.duration_seconds:
             raise VoiceError("That position is beyond the song length.")
-        state._current_position = max(0.0, position)
-        state._current_start_time = time.time()
-        await state.restart_current(preserve_position=True)
-        return {'position_s': state._current_position}
+        position = max(0.0, position)
+        # Passed explicitly rather than through _current_position, which a
+        # restart already in progress would overwrite.
+        await state.restart_current(position=position)
+        return {'position_s': position}
 
     async def _bridge_volume(self, guild, actor_id, args):
         self._authorize(guild, actor_id)
@@ -2645,10 +2724,10 @@ class MusicCog(commands.Cog):
             return
         await interaction.response.defer()
         try:
-            state._current_position = pos
-            state._current_start_time = time.time()
-            await state.restart_current(interaction, preserve_position=True)
-            await interaction.followup.send(embed=discord.Embed(description=f'⏩ Seeked to `{_format_timestamp(pos)}`.', color=discord.Color.green()))
+            applied = await state.restart_current(interaction, position=pos)
+            description = (f'⏩ Seeked to `{_format_timestamp(pos)}`.' if applied else
+                           f'⏩ The track is still loading; it will start at `{_format_timestamp(pos)}`.')
+            await interaction.followup.send(embed=discord.Embed(description=description, color=discord.Color.green()))
         except Exception as e:
             await interaction.followup.send(embed=discord.Embed(description=f'❌ Seek failed: {e}', color=discord.Color.red()))
 
@@ -2672,10 +2751,10 @@ class MusicCog(commands.Cog):
             new_pos = min(new_pos, state.current.duration_seconds)
         await interaction.response.defer()
         try:
-            state._current_position = new_pos
-            state._current_start_time = time.time()
-            await state.restart_current(interaction, preserve_position=True)
-            await interaction.followup.send(embed=discord.Embed(description=f'⏩ Forwarded `{_format_timestamp(delta)}`.', color=discord.Color.green()))
+            applied = await state.restart_current(interaction, position=new_pos)
+            description = (f'⏩ Forwarded `{_format_timestamp(delta)}`.' if applied else
+                           f'⏩ The track is still loading; it will start at `{_format_timestamp(new_pos)}`.')
+            await interaction.followup.send(embed=discord.Embed(description=description, color=discord.Color.green()))
         except Exception as e:
             await interaction.followup.send(embed=discord.Embed(description=f'❌ Forward failed: {e}', color=discord.Color.red()))
 
@@ -2697,10 +2776,10 @@ class MusicCog(commands.Cog):
         new_pos = max(0.0, state.elapsed - delta)
         await interaction.response.defer()
         try:
-            state._current_position = new_pos
-            state._current_start_time = time.time()
-            await state.restart_current(interaction, preserve_position=True)
-            await interaction.followup.send(embed=discord.Embed(description=f'⏪ Rewound `{_format_timestamp(delta)}`.', color=discord.Color.green()))
+            applied = await state.restart_current(interaction, position=new_pos)
+            description = (f'⏪ Rewound `{_format_timestamp(delta)}`.' if applied else
+                           f'⏪ The track is still loading; it will start at `{_format_timestamp(new_pos)}`.')
+            await interaction.followup.send(embed=discord.Embed(description=description, color=discord.Color.green()))
         except Exception as e:
             await interaction.followup.send(embed=discord.Embed(description=f'❌ Rewind failed: {e}', color=discord.Color.red()))
 

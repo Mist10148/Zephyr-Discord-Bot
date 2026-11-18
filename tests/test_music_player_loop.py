@@ -17,19 +17,27 @@ class Voice:
     def __init__(self):
         self.played = []
         self.after = None
+        self.playing = False
 
     def play(self, source, *, after):
         self.played.append(source)
-        self.after = after
+        self.playing = True
+
+        def finished(error=None):
+            # As discord.py does: the player has stopped before `after` runs.
+            self.playing = False
+            after(error)
+
+        self.after = finished
 
     def stop(self):
-        pass
+        self.playing = False
 
     def is_connected(self):
         return True
 
     def is_playing(self):
-        return bool(self.played)
+        return self.playing
 
     def is_paused(self):
         return False
@@ -295,3 +303,136 @@ async def test_loop_track_replays_after_the_track_ends(monkeypatch):
 
     assert state.voice.played == sources
     assert state.current is song
+
+
+# ---------------------------------------------------------------------------
+# Second audit (M18, M22, M23, M25, M28)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_loop_track_stops_replaying_a_track_that_no_longer_loads(monkeypatch):
+    state = _state()
+    state.loop = "track"
+    song, nxt = Track(title="Goes private"), Track(title="Next")
+    state.songs.put_nowait(song)
+    first, good = MagicMock(stderr_tail=""), MagicMock(stderr_tail="")
+    factory = AsyncMock(side_effect=[first, RuntimeError("Video unavailable"), good])
+    monkeypatch.setattr(YTDLSource, "from_track", factory)
+    monkeypatch.setattr("zephyr.cogs.music.MIN_TRACK_SECONDS_FOR_EARLY_END", 10 ** 9)
+
+    task = asyncio.create_task(state.audio_player_task())
+    await _spin(lambda: len(state.voice.played) == 1)
+    state.songs.put_nowait(nxt)
+    state.voice.after(None)
+    await _spin(lambda: len(state.voice.played) == 2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    # The failed replay is given up on; the loop moves to the queue instead of
+    # re-extracting the dead track forever.
+    assert factory.await_count == 3
+    assert state.voice.played == [first, good]
+    assert state.current is nxt
+
+
+@pytest.mark.asyncio
+async def test_an_effect_toggled_during_the_load_is_applied_with_a_matching_clock(monkeypatch):
+    state = _state()
+    song = Track(title="Song")
+    state.songs.put_nowait(song)
+    stale, fresh = MagicMock(stderr_tail=""), MagicMock(stderr_tail="")
+
+    async def load(track, **kwargs):
+        if load.calls == 0:
+            # /nightcore lands while the first extraction is still running.
+            state._nightcore_enabled = True
+        load.calls += 1
+        return stale if load.calls == 1 else fresh
+    load.calls = 0
+    monkeypatch.setattr(YTDLSource, "from_track", load)
+
+    task = asyncio.create_task(state.audio_player_task())
+    await _spin(lambda: state.voice.played)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    stale.cleanup.assert_called()
+    assert state.voice.played == [fresh]
+    assert state._current_rate == state.playback_rate() != 1.0
+
+
+@pytest.mark.asyncio
+async def test_a_seek_during_the_load_is_kept_and_applied(monkeypatch):
+    state = _state()
+    song = Track(title="Song", duration_seconds=300)
+    state.songs.put_nowait(song)
+    stale, fresh = MagicMock(stderr_tail=""), MagicMock(stderr_tail="")
+    seen_options = []
+
+    async def load(track, *, ffmpeg_options, **kwargs):
+        seen_options.append(ffmpeg_options)
+        if len(seen_options) == 1:
+            applied = await state.restart_current(position=120)
+            assert applied is False
+        return stale if len(seen_options) == 1 else fresh
+    monkeypatch.setattr(YTDLSource, "from_track", load)
+
+    task = asyncio.create_task(state.audio_player_task())
+    await _spin(lambda: state.voice.played)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert state.voice.played == [fresh]
+    assert "-ss 120" in seen_options[1]["before_options"]
+    assert state._current_position == 120
+
+
+@pytest.mark.asyncio
+async def test_restart_uses_the_explicit_position_not_a_shared_field(monkeypatch):
+    state = _state()
+    song = Track(title="Song", duration_seconds=300)
+    state.current = song
+    state.source = MagicMock()
+    state._current_position, state._current_start_time = 10.0, None
+    seen = []
+
+    async def load(track, *, ffmpeg_options, **kwargs):
+        # Another writer clobbers the shared field mid-restart.
+        state._current_position = 10.0
+        seen.append(ffmpeg_options["before_options"])
+        return MagicMock(stderr_tail="")
+    monkeypatch.setattr(YTDLSource, "from_track", load)
+
+    assert await state.restart_current(position=180) is True
+    assert "-ss 180" in seen[0]
+    assert state._current_position == 180
+
+
+def test_stream_retry_is_remembered_on_the_track_itself():
+    state_attrs = VoiceState.__init__.__code__.co_names
+    assert "_stream_retry_ids" not in state_attrs
+    track = Track(title="t")
+    assert track.stream_retried is False
+    # Not part of equality: two queue entries for the same song still compare equal.
+    other = Track(title="t")
+    other.stream_retried = True
+    assert track == other
+
+
+@pytest.mark.asyncio
+async def test_music_waits_for_a_tts_clip_instead_of_failing(monkeypatch):
+    state = _state()
+    state.voice.playing = True   # /say is speaking
+
+    async def finish_clip():
+        await asyncio.sleep(0.3)
+        state.voice.playing = False
+
+    clip = asyncio.create_task(finish_clip())
+    await asyncio.wait_for(state._wait_for_foreign_audio(timeout=5), timeout=5)
+    await clip
+    assert state.voice.playing is False
