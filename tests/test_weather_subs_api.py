@@ -240,3 +240,49 @@ class TestPreview:
 
     def test_signing_out_is_a_401(self, client, fake_redis):
         assert client.get("/api/v1/guilds/1/weather-subs").status_code == 401
+
+
+class TestSecondAudit:
+    def test_an_imperial_watch_gets_imperial_defaults(self, client, logged_in, fake_redis):
+        response = _create(client, logged_in, kind="severe", schedule_local_time=None, units="imperial")
+
+        assert response.status_code == 201
+        thresholds = response.get_json()["thresholds"]
+        assert thresholds["apparent_temperature"] == pytest.approx(100.4)
+        assert thresholds["wind_speed"] == pytest.approx(37.3)
+
+    def test_switching_units_keeps_the_same_real_limits(self, client, logged_in, fake_redis):
+        sub_id = _create(client, logged_in, kind="severe", schedule_local_time=None).get_json()["id"]
+        response = client.patch(f"/api/v1/guilds/1/weather-subs/{sub_id}", json={"units": "imperial"},
+                                headers=_headers(logged_in))
+
+        assert response.status_code == 200
+        assert response.get_json()["thresholds"]["apparent_temperature"] == pytest.approx(100.4)
+
+    @pytest.mark.parametrize("thresholds", [
+        {"precipitation_probability": True},
+        {"wind_speed": "nan"},
+        {"wind_speed": "Infinity"},
+        {"wind_speed": -5},
+        {"precipitation_probability": 150},
+        {"storm": "false"},
+    ])
+    def test_nonsense_thresholds_are_refused(self, client, logged_in, fake_redis, thresholds):
+        response = _create(client, logged_in, kind="severe", schedule_local_time=None, thresholds=thresholds)
+        assert response.status_code == 400
+
+    def test_enabled_must_be_a_boolean(self, client, logged_in, fake_redis):
+        sub_id = _create(client, logged_in).get_json()["id"]
+        response = client.patch(f"/api/v1/guilds/1/weather-subs/{sub_id}", json={"enabled": "false"},
+                                headers=_headers(logged_in))
+        assert response.status_code == 400
+
+    def test_a_new_location_brings_its_own_timezone(self, client, logged_in, fake_redis):
+        sub_id = _create(client, logged_in).get_json()["id"]
+        london = [{"name": "London", "latitude": 51.5, "longitude": -0.12, "timezone": "Europe/London"}]
+        with patch("website.api.weather_subs.geocode_search", return_value=london):
+            response = client.patch(f"/api/v1/guilds/1/weather-subs/{sub_id}", json={"location": "London"},
+                                    headers=_headers(logged_in))
+
+        assert response.status_code == 200
+        assert response.get_json()["tz"] == "Europe/London"

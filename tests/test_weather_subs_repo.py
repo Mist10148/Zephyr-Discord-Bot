@@ -183,3 +183,34 @@ def test_release_claim_makes_a_digest_due_again(db_url):
     claimed = repo.claim_due(now, database_url=db_url)
     repo.release_claim(claimed[0]["id"], claimed[0]["last_run_at"], database_url=db_url)
     assert len(repo.claim_due(now + timedelta(minutes=1), database_url=db_url)) == 1
+
+
+def test_an_identical_subscription_is_refused(db_url):
+    _sub(db_url)
+    with pytest.raises(repo.SubscriptionError):
+        _sub(db_url)
+    # A different time or channel is a different subscription.
+    _sub(db_url, schedule_local_time="18:00")
+    _sub(db_url, channel_id="6")
+
+
+def test_re_enabling_a_digest_after_its_time_waits_for_tomorrow(db_url):
+    """The create-time rule now applies to edits: a paused 08:00 digest
+    re-enabled at 15:00 used to post within a minute."""
+    created = _sub(db_url, enabled=False, schedule_local_time="00:00", tz="UTC")
+    repo.update_sub(created["id"], {"enabled": True}, database_url=db_url)
+
+    assert repo.claim_due(datetime.now(timezone.utc), database_url=db_url) == []
+
+
+def test_an_unrelated_edit_does_not_touch_the_schedule(db_url):
+    created = _sub(db_url, schedule_local_time="23:59", tz="UTC")
+    updated = repo.update_sub(created["id"], {"channel_id": "9"}, database_url=db_url)
+    assert updated["last_run_at"] == created["last_run_at"]
+
+
+def test_clear_fingerprint(db_url):
+    created = _sub(db_url, kind="severe", schedule_local_time=None)
+    repo.mark_fired(created["id"], fingerprint="abc", database_url=db_url)
+    repo.clear_fingerprint(created["id"], database_url=db_url)
+    assert repo.get(created["id"], database_url=db_url)["last_fingerprint"] is None

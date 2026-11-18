@@ -40,7 +40,7 @@ def _public(row: dict) -> dict:
     }
 
 
-def _clean_thresholds(value):
+def _clean_thresholds(value, units: str = "metric"):
     if value is None:
         return None
     if not isinstance(value, dict):
@@ -51,21 +51,31 @@ def _clean_thresholds(value):
     cleaned = {}
     for key, raw in value.items():
         if key == "storm":
-            cleaned[key] = bool(raw)
+            # bool("false") is True; only a real boolean is accepted.
+            if not isinstance(raw, bool):
+                raise ValueError("storm must be true or false.")
+            cleaned[key] = raw
             continue
         if raw is None:
             # None disables one threshold without disabling the subscription --
             # "warn me about wind but never about rain" has to be expressible.
             cleaned[key] = None
             continue
+        # float(True) is 1.0 (a 1% rain threshold), and NaN or Infinity pass
+        # float() too -- a stored NaN then broke the dashboard's JSON.parse.
+        if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+            raise ValueError(f"{key} must be a number.")
         try:
-            cleaned[key] = float(raw)
+            number = float(raw)
         except (TypeError, ValueError):
             raise ValueError(f"{key} must be a number.") from None
+        if not weather_alerts.threshold_in_range(key, number, units):
+            raise ValueError(f"{key} is out of range.")
+        cleaned[key] = number
     return cleaned
 
 
-def _clean_common(body: dict, *, partial: bool) -> dict:
+def _clean_common(body: dict, *, partial: bool, current_units: str = "metric") -> dict:
     values = {}
     if "kind" in body:
         if not isinstance(body["kind"], str) or body["kind"] not in repo.KINDS:
@@ -92,9 +102,12 @@ def _clean_common(body: dict, *, partial: bool) -> dict:
             raise ValueError("schedule_local_time must look like 08:00.")
         values["schedule_local_time"] = repo.parse_local_time(raw).strftime("%H:%M") if raw else None
     if "thresholds" in body:
-        values["thresholds"] = _clean_thresholds(body["thresholds"])
+        values["thresholds"] = _clean_thresholds(body["thresholds"], values.get("units", current_units))
     if "enabled" in body:
-        values["enabled"] = bool(body["enabled"])
+        # bool("false") is True: a string would have switched the sub on.
+        if not isinstance(body["enabled"], bool):
+            raise ValueError("enabled must be true or false.")
+        values["enabled"] = body["enabled"]
 
     # A daily digest with no time would never fire, and a subscription that
     # silently never fires is worse than one that refuses to be created.
@@ -156,7 +169,9 @@ def create_sub(guild_id: str):
     values.setdefault("tz", place.get("timezone") or "UTC")
     values.setdefault("enabled", True)
     if values["kind"] == "severe":
-        values.setdefault("thresholds", dict(weather_alerts.DEFAULT_THRESHOLDS))
+        # In the subscription's own units: the metric defaults compared against
+        # an imperial forecast meant "feels like 38 °F" and "60 mph wind".
+        values.setdefault("thresholds", weather_alerts.thresholds_for(values["units"]))
 
     try:
         created = repo.create(values, database_url=_database_url())
@@ -194,9 +209,17 @@ def patch_sub(guild_id: str, sub_id: str):
         return error("unknown_fields", f"Cannot set: {', '.join(unknown)}.", 400, unknown)
 
     try:
-        values = _clean_common(body, partial=True)
+        values = _clean_common(body, partial=True, current_units=row.get("units") or "metric")
     except (ValueError, repo.SubscriptionError) as exc:
         return error("invalid_value", str(exc), 400)
+
+    old_units = row.get("units") or "metric"
+    if "units" in values and values["units"] != old_units and "thresholds" not in values and row.get("thresholds"):
+        # Keep the same real-world limits in the new units.
+        stored = row["thresholds"]
+        if old_units == "imperial" and stored == weather_alerts.DEFAULT_THRESHOLDS:
+            stored = weather_alerts.thresholds_for("imperial")
+        values["thresholds"] = weather_alerts.convert_thresholds(stored, old_units, values["units"])
 
     if "location" in body:
         # str(None) would geocode the literal word "None".
@@ -211,6 +234,10 @@ def patch_sub(guild_id: str, sub_id: str):
             return error("invalid_value", f"Could not find {location}.", 400)
         values.update({"location": places[0].get("name") or location,
                        "lat": places[0]["latitude"], "lon": places[0]["longitude"]})
+        if "tz" not in body:
+            # As on create: the new place's own zone.  Keeping the old one made
+            # an 08:00 Manila digest moved to London post at midnight there.
+            values["tz"] = places[0].get("timezone") or row["tz"]
 
     # Checked against the merged result, not the patch: switching an existing
     # severe watch to a daily digest must not leave it without a time.

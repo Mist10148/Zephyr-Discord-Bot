@@ -201,3 +201,44 @@ def test_a_refused_permission_gets_a_reply(monkeypatch):
     asyncio.run(cog.cog_app_command_error(interaction, app_commands.MissingPermissions(["manage_guild"])))
 
     assert "Manage Server" in interaction.response.send_message.await_args.args[0]
+
+
+def test_a_quiet_tick_forgets_the_last_alert(monkeypatch, fired):
+    """The severe fingerprint has no date: without this, the next day's identical
+    afternoon storm matched the previous one and was never announced."""
+    cleared = []
+    monkeypatch.setattr(cog_module, "evaluate", lambda *a, **k: None)
+    monkeypatch.setattr(cog_module, "clear_fingerprint", lambda sub_id: cleared.append(sub_id))
+    channel = FakeChannel()
+
+    _deliver(WeatherAlertsCog(FakeBot(channel)), _sub(last_fingerprint="abc123"), dedupe=True)
+    _deliver(WeatherAlertsCog(FakeBot(channel)), _sub(last_fingerprint=None), dedupe=True)
+
+    assert cleared == [7]
+    assert channel.sent == []
+
+
+def test_a_client_error_is_not_retried_but_a_server_error_is(monkeypatch, fired):
+    import discord
+
+    monkeypatch.setattr(cog_module, "evaluate", lambda *a, **k: dict(ALERT, kind="daily"))
+
+    def failing(status):
+        class Channel(FakeChannel):
+            async def send(self, *, embed=None):
+                response = type("R", (), {"status": status, "reason": "x"})()
+                raise discord.HTTPException(response, "nope")
+        return Channel()
+
+    bad_request = WeatherAlertsCog(FakeBot(failing(400)))
+    assert asyncio.run(bad_request._deliver(_sub(kind="daily"))) is True
+    outage = WeatherAlertsCog(FakeBot(failing(503)))
+    assert asyncio.run(outage._deliver(_sub(kind="daily"))) is False
+
+
+def test_a_cold_day_adds_no_classes_line_to_the_digest():
+    alert = {"kind": "daily", "title": "t", "summary": "s", "fields": [],
+             "class_suspension": {"level": "possible", "reason": "Cold Weather"}}
+    assert all("Classes" not in field.name for field in cog_module.alert_embed(alert).fields)
+    alert["class_suspension"] = {"level": "likely", "reason": "Extreme Heat"}
+    assert any("Classes" in field.name for field in cog_module.alert_embed(alert).fields)

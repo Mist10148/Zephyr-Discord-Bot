@@ -143,3 +143,36 @@ class TestDispatch:
 
     def test_an_unknown_kind_is_quiet_rather_than_fatal(self):
         assert alerts.evaluate("hurricane", _bundle(), location="X") is None
+
+
+class TestSecondAudit:
+    def test_imperial_watches_use_imperial_defaults(self):
+        """38 used to mean 38 °F and 60 meant 60 mph on an imperial watch."""
+        # 95 °F feels-like is 35 °C: below the 38 °C default, so quiet.
+        assert alerts.evaluate_severe(_bundle(feels=95, wind=10), None, location="X", units="imperial") is None
+        # 70 mph is ~113 km/h: well past the 60 km/h default.
+        assert alerts.evaluate_severe(_bundle(feels=70, wind=70), None, location="X", units="imperial") is not None
+
+    def test_old_imperial_rows_with_metric_defaults_are_read_as_defaults(self):
+        stored = dict(alerts.DEFAULT_THRESHOLDS)
+        assert alerts.evaluate_severe(_bundle(feels=95), stored, location="X", units="imperial") is None
+
+    def test_thresholds_convert_between_units(self):
+        imperial = alerts.thresholds_for("imperial")
+        assert imperial["apparent_temperature"] == pytest.approx(100.4)
+        assert imperial["wind_speed"] == pytest.approx(37.3)
+        assert imperial["precipitation_probability"] == 80.0 and imperial["storm"] is True
+        back = alerts.convert_thresholds(imperial, "imperial", "metric")
+        assert back["apparent_temperature"] == pytest.approx(38.0)
+        assert back["wind_speed"] == pytest.approx(60.0, abs=0.1)
+
+    def test_a_cold_day_is_not_a_class_suspension_watch(self):
+        assert alerts.evaluate_class_suspension(_bundle(feels_max=10), location="London") is None
+        assert alerts.evaluate_class_suspension(_bundle(feels_max=42), location="Iloilo") is not None
+
+    def test_threshold_ranges(self):
+        assert alerts.threshold_in_range("precipitation_probability", 80, "metric")
+        assert not alerts.threshold_in_range("precipitation_probability", 120, "metric")
+        assert not alerts.threshold_in_range("wind_speed", float("nan"), "metric")
+        assert not alerts.threshold_in_range("wind_speed", -1, "metric")
+        assert alerts.threshold_in_range("apparent_temperature", 100, "imperial")

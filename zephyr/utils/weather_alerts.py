@@ -15,6 +15,7 @@ new one.
 
 import hashlib
 import json
+import math
 
 from zephyr.utils.weather_utils import (
     UNIT_LABELS,
@@ -24,15 +25,73 @@ from zephyr.utils.weather_utils import (
     wmo_emoji,
 )
 
-# Metric defaults.  An imperial subscription stores its own numbers, converted at
-# subscription time, so nothing here has to know which unit a threshold is in --
-# it is always the same unit as the bundle it is compared against.
+# Metric defaults.  An imperial subscription stores its own numbers, converted
+# with ``convert_thresholds`` at subscription time, so a threshold is always in
+# the same unit as the bundle it is compared against.
 DEFAULT_THRESHOLDS = {
     "wind_speed": 60.0,
     "precipitation_probability": 80.0,
     "apparent_temperature": 38.0,
     "storm": True,
 }
+
+# Allowed range per numeric threshold, in metric units.  Imperial values are
+# checked after converting back.
+THRESHOLD_RANGES = {
+    "wind_speed": (0.0, 400.0),
+    "precipitation_probability": (0.0, 100.0),
+    "apparent_temperature": (-60.0, 70.0),
+}
+
+KMH_PER_MPH = 1.609344
+
+
+def _to_unit(key: str, value: float, units: str) -> float:
+    if units != "imperial":
+        return value
+    if key == "wind_speed":
+        return round(value / KMH_PER_MPH, 1)
+    if key == "apparent_temperature":
+        return round(value * 9 / 5 + 32, 1)
+    return value
+
+
+def _to_metric(key: str, value: float, units: str) -> float:
+    if units != "imperial":
+        return value
+    if key == "wind_speed":
+        return value * KMH_PER_MPH
+    if key == "apparent_temperature":
+        return (value - 32) * 5 / 9
+    return value
+
+
+def convert_thresholds(thresholds: dict | None, from_units: str, to_units: str) -> dict | None:
+    """Re-express thresholds in another unit system; None and booleans pass through."""
+    if thresholds is None or from_units == to_units:
+        return thresholds
+    converted = {}
+    for key, value in thresholds.items():
+        if isinstance(value, bool) or value is None or key not in THRESHOLD_RANGES:
+            converted[key] = value
+        else:
+            converted[key] = _to_unit(key, _to_metric(key, float(value), from_units), to_units)
+    return converted
+
+
+def thresholds_for(units: str) -> dict:
+    """The default thresholds in ``units``.
+
+    Imperial watches used to be compared against the metric numbers: 38 became
+    38 °F, so a "feels like 95°F" warning posted every day, and 60 became
+    60 mph, so real gales were missed.
+    """
+    return convert_thresholds(dict(DEFAULT_THRESHOLDS), "metric", units)
+
+
+def threshold_in_range(key: str, value: float, units: str) -> bool:
+    low, high = THRESHOLD_RANGES[key]
+    return math.isfinite(value) and low <= _to_metric(key, value, units) <= high
 
 STORM_CODES = {95, 96, 99}
 # How far ahead the severe watcher looks.  Long enough to be a warning, short
@@ -95,7 +154,11 @@ def evaluate_severe(bundle: dict, thresholds: dict | None, *, location: str, uni
     not post, and must not record as a run either, or the next genuine warning
     would be suppressed as a duplicate.
     """
-    limits = {**DEFAULT_THRESHOLDS, **(thresholds or {})}
+    if units == "imperial" and thresholds == DEFAULT_THRESHOLDS:
+        # Rows saved before imperial defaults were converted hold the metric
+        # numbers verbatim; read them as the defaults they were meant to be.
+        thresholds = None
+    limits = {**thresholds_for(units), **(thresholds or {})}
     labels = UNIT_LABELS.get(units, UNIT_LABELS["metric"])
     hours = slice_hourly_from(bundle, SEVERE_HOURS)
     if not hours:
@@ -144,7 +207,7 @@ def evaluate_class_suspension(bundle: dict, *, location: str, units: str = "metr
     """
     today = _daily(bundle)
     payload = class_suspension_payload(today.get("apparent_temperature_max"), units=units)
-    if payload["level"] in {"none", "unknown"}:
+    if not is_heat_advisory(payload):
         return None
     labels = UNIT_LABELS.get(units, UNIT_LABELS["metric"])
     feels = today.get("apparent_temperature_max")
@@ -163,6 +226,17 @@ def evaluate_class_suspension(bundle: dict, *, location: str, units: str = "metr
             {"kind": "class_suspension", "location": location, "date": today.get("time"), "level": payload["level"]}
         ),
     }
+
+
+def is_heat_advisory(payload: dict | None) -> bool:
+    """Whether a class-suspension payload is a heat-index advisory.
+
+    The shared scale also rates a cool day (<= 15 °C) as "possible" for /class.
+    The watch and the digest's Classes line are documented as heat-index
+    advisories, and counting cold made every cool city post one daily.
+    """
+    payload = payload or {}
+    return payload.get("level") in {"certain", "likely", "possible"} and payload.get("reason") != "Cold Weather"
 
 
 def _value(value, suffix: str) -> str:

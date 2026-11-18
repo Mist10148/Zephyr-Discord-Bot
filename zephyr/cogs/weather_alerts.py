@@ -25,6 +25,7 @@ from zephyr.db.weather_subs import (
     KINDS,
     SubscriptionError,
     claim_due,
+    clear_fingerprint,
     create,
     delete_sub,
     get,
@@ -36,7 +37,7 @@ from zephyr.db.weather_subs import (
     parse_local_time,
 )
 from zephyr.utils import weather_embeds as look
-from zephyr.utils.weather_alerts import DEFAULT_THRESHOLDS, evaluate
+from zephyr.utils.weather_alerts import DEFAULT_THRESHOLDS, evaluate, is_heat_advisory
 from zephyr.utils.weather_utils import (
     WeatherProviderError,
     geocode_search,
@@ -78,9 +79,10 @@ def alert_embed(alert: dict) -> discord.Embed:
         icon = FIELD_ICONS.get(field["name"])
         embed.add_field(name=f"{icon} {field['name']}" if icon else field["name"], value=field["value"], inline=True)
     # The digest always computed today's class-suspension outlook but never showed it.
-    suspension = (alert.get("class_suspension") or {}).get("level")
-    if kind == "daily" and suspension in ("certain", "likely", "possible"):
-        dot, verdict, _ = look.SUSPENSION_STYLE[suspension]
+    suspension = alert.get("class_suspension") or {}
+    # Heat only: the line says "heat index advisory", and a cool day is not one.
+    if kind == "daily" and is_heat_advisory(suspension):
+        dot, verdict, _ = look.SUSPENSION_STYLE[suspension["level"]]
         embed.add_field(name="🏫 Classes", value=f"{dot} {verdict} (heat index advisory)", inline=False)
     footer = "Advisory only — confirm with your school or LGU" if advisory else None
     embed.set_footer(text=" • ".join(part for part in (look.BRAND, look.OPEN_METEO, footer) if part))
@@ -216,6 +218,10 @@ class WeatherAlertsCog(commands.Cog):
             thresholds=subscription.get("thresholds"),
         )
         if alert is None:
+            if dedupe and subscription.get("last_fingerprint"):
+                # Quiet again: the next storm or heat peak is news, even if it
+                # looks exactly like the last one.
+                await asyncio.to_thread(clear_fingerprint, subscription["id"])
             return True
         if dedupe and alert["fingerprint"] == subscription.get("last_fingerprint"):
             return True
@@ -244,6 +250,12 @@ class WeatherAlertsCog(commands.Cog):
             # subscription would be discovered much later than a missing message.
             print(f"[WeatherAlerts] Cannot post in {subscription['channel_id']}.")
             return True
+        except discord.HTTPException as exc:
+            traceback.print_exc()
+            # A 4xx (missing Embed Links, a bad payload) fails identically every
+            # minute, re-fetching the forecast each time, until local midnight.
+            # Only server errors are worth retrying.
+            return not (exc.status is None or exc.status >= 500)
         except Exception:
             traceback.print_exc()
             return False
@@ -280,9 +292,11 @@ class WeatherAlertsCog(commands.Cog):
             return
         destination = channel or interaction.channel
         me = interaction.guild.me
-        if me and not destination.permissions_for(me).send_messages:
+        permissions = destination.permissions_for(me) if me else None
+        if permissions is not None and not (permissions.send_messages and permissions.embed_links):
             await interaction.response.send_message(
-                f"❌ I cannot post in {destination.mention}. Pick a channel I can write to.", ephemeral=True)
+                f"❌ I cannot post embeds in {destination.mention} (I need Send Messages and Embed Links). "
+                "Pick a channel I can write to.", ephemeral=True)
             return
 
         await interaction.response.defer()
@@ -327,9 +341,11 @@ class WeatherAlertsCog(commands.Cog):
         except SubscriptionError as exc:
             await interaction.followup.send(f"❌ {exc}")
             return
-        except Exception as exc:
+        except Exception:
+            # The raw database error (SQL, connection details) is for the log,
+            # not a public channel.
             traceback.print_exc()
-            await interaction.followup.send(f"❌ Could not save that subscription: {exc}")
+            await interaction.followup.send("❌ Could not save that subscription. Try again shortly.")
             return
 
         when = f" at {schedule} ({zone_name})" if schedule else ""

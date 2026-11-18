@@ -187,6 +187,17 @@ def mark_fired(
         )
 
 
+def clear_fingerprint(sub_id: int, *, database_url: str | None = None) -> None:
+    """Forget the last alert once conditions are quiet again.
+
+    The severe fingerprint has no date, so without this Tuesday's afternoon
+    storm matched Monday's and was never announced.
+    """
+    engine = get_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(update(WeatherSub).where(WeatherSub.id == sub_id).values(last_fingerprint=None))
+
+
 def list_for_guild(guild_id: str, *, database_url: str | None = None) -> list[dict]:
     engine = get_engine(database_url)
     with engine.connect() as connection:
@@ -211,22 +222,62 @@ def create(values: dict, *, database_url: str | None = None) -> dict:
         ).all()
         if len(existing) >= MAX_SUBS_PER_GUILD:
             raise SubscriptionError(f"A server may have at most {MAX_SUBS_PER_GUILD} subscriptions.")
+        if _duplicate_of(connection, values) is not None:
+            raise SubscriptionError("That channel already has the same subscription.")
         if values.get("kind") in SCHEDULED_KINDS and values.get("last_run_at") is None:
             # A digest created after today's time has passed would otherwise be
             # "due" at once: an 08:00 digest made at 15:00 posted within a minute.
-            now = datetime.now(timezone.utc)
-            probe = SimpleNamespace(schedule_local_time=values.get("schedule_local_time"),
-                                    tz=values.get("tz"), last_run_at=None)
-            if is_due(probe, now):
-                values = {**values, "last_run_at": now}
+            values = _skip_today_if_passed(values, None)
         sub_id = connection.execute(insert(WeatherSub).values(**values).returning(WeatherSub.id)).scalar_one()
     return get(sub_id, database_url=database_url)
+
+
+def _skip_today_if_passed(values: dict, last_run_at) -> dict:
+    """Mark a digest as run today when its time has already passed."""
+    now = datetime.now(timezone.utc)
+    probe = SimpleNamespace(schedule_local_time=values.get("schedule_local_time"),
+                            tz=values.get("tz"), last_run_at=last_run_at)
+    if is_due(probe, now):
+        return {**values, "last_run_at": now}
+    return values
+
+
+def _duplicate_of(connection, values: dict) -> int | None:
+    """The id of an identical subscription in the same channel, if any."""
+    rows = connection.execute(
+        select(WeatherSub.id, WeatherSub.lat, WeatherSub.lon, WeatherSub.schedule_local_time).where(
+            WeatherSub.guild_id == str(values.get("guild_id")),
+            WeatherSub.channel_id == str(values.get("channel_id")),
+            WeatherSub.kind == values.get("kind"),
+        )
+    ).all()
+    for row in rows:
+        if (abs(float(row.lat) - float(values.get("lat", 0))) < 1e-4
+                and abs(float(row.lon) - float(values.get("lon", 0))) < 1e-4
+                and (row.schedule_local_time or None) == (values.get("schedule_local_time") or None)):
+            return row.id
+    return None
+
+
+# Edits that can make a digest "due" again at once.
+_SCHEDULE_FIELDS = {"kind", "schedule_local_time", "tz", "enabled"}
 
 
 def update_sub(sub_id: int, values: dict, *, database_url: str | None = None) -> dict | None:
     if values:
         engine = get_engine(database_url)
         with engine.begin() as connection:
+            if _SCHEDULE_FIELDS & set(values) and "last_run_at" not in values:
+                row = connection.execute(select(*_COLUMNS).where(WeatherSub.id == sub_id)).first()
+                if row is not None:
+                    merged = {**dict(row._mapping), **values}
+                    if merged["kind"] in SCHEDULED_KINDS and merged["enabled"]:
+                        # The same rule create() applies: re-enabling an 08:00
+                        # digest at 15:00, or moving it to a time already past,
+                        # used to post it within a minute.
+                        probed = _skip_today_if_passed(merged, merged.get("last_run_at"))
+                        if probed is not merged:
+                            values = {**values, "last_run_at": probed["last_run_at"]}
             connection.execute(update(WeatherSub).where(WeatherSub.id == sub_id).values(**values))
     return get(sub_id, database_url=database_url)
 
