@@ -98,27 +98,29 @@ as `/`-prefixed text messages; the rest are slash-only.
 
 | Command | Description |
 |---------|-------------|
-| `/weather [city]` | Current weather, air quality & precipitation |
-| `/forecast [city]` | Paginated 3-day forecast |
-| `/temperature [city]` | Current temperature |
-| `/description [city]` | Weather description |
-| `/humidity [city]` | Humidity |
+| `/weather [city]` | The full card: temperature, feels-like, wind & gusts, visibility, clouds, air quality, sunrise/sunset |
+| `/temperature [city]` | Temperature, feels-like and today's high / low |
+| `/description [city]` | Current conditions |
+| `/humidity [city]` | Humidity, dew point and comfort |
+| `/windspeed [city]` | Wind speed, direction, gusts (km/h) |
+| `/precipitation [city]` | Rain or snow in the last hour |
 | `/pressure [city]` | Atmospheric pressure |
-| `/windspeed [city]` | Wind speed |
-| `/air [city]` | Air quality index & pollutants |
-| `/precipitation [city]` | Rain/snow details |
-| `/typhoon` | Latest typhoon alert for Iloilo City |
-| `/class` | Class-suspension forecast based on heat index |
-| `/search [city]` | Quick weather lookup |
+| `/air [city]` | Air-quality badge & pollutants |
+| `/search [city]` | Same card as `/weather` |
+| `/forecast [city]` | 3-day overview, then a page per day |
+| `/class` | Class-suspension outlook from the heat index (Iloilo City) |
+| `/typhoon` | Typhoon / cyclone alerts for Iloilo City (needs an OpenWeatherMap One Call 3.0 subscription) |
 | `/setlocation [city]` | Set your default city (leave empty to clear it) |
 | `/mylocation` | Show your default city |
-| `/weather-subscribe <kind> <location>` | Post weather to a channel on a schedule or a watch |
+| `/weather-subscribe <kind> <location> [channel] [at] [tz]` | Post weather to a channel on a schedule or a watch; `tz` defaults to the location's own |
 | `/weather-subs` | List this server's subscriptions |
-| `/weather-unsubscribe <id>` | Remove one |
-| `/weather-preview <id>` | See what a subscription would post right now |
-| `/use` | Link to the web app |
+| `/weather-preview <subscription_id>` | See what a subscription would post right now |
+| `/weather-unsubscribe <subscription_id>` | Remove one |
 | `/helpweather` | Weather command help |
-| `/ping` | Bot latency |
+
+Every weather reply shares one design: the place as a `📍` header, a colour that matches the
+conditions, the headline value up top, a three-column grid of details, and the data source and
+observation time in the footer. Times are shown in the place's own time zone.
 
 ### 🎵 Music
 **Playback:** `/play` · `/playskip` · `/playnext` · `/msearch` · `/now` (`/np`) · `/pause` · `/resume` · `/stop` · `/seek` · `/forward` · `/rewind`
@@ -152,13 +154,19 @@ as `/`-prefixed text messages; the rest are slash-only.
 | `/image-gen <prompt>` | Generate an image with Gemini |
 | `/generate <prompt>` | Optional image-generator hook (stub by default) |
 | `/say <text>` | Speak text in your voice channel |
-| `/language <code>` | Set the TTS language (e.g., `en`, `ja`) |
+| `/language <lang>` | Set this server's TTS language (e.g., `en`, `tl`, `ja`); unknown codes are refused |
 | `/helpchat` | Chat command help |
 
 You can also just **@mention**, **reply to**, or **DM** the bot to chat with it directly.
 
 ### 📖 Help
-`/help` — a paginated overview of every command, grouped by category.
+`/help` — a numbered table of contents, then one page per category, in this order:
+**Weather** (Right Now · Forecast & Advisories · Your Location · Alerts & Subscriptions) →
+**Music** (Playback · Queue · Volume & Effects · Playlists · Voice Channel & 24/7) →
+**Voice** (Text-to-Speech) → **AI** (Chat & Images) → **Utility** (`/use`, `/ping`) → **Help**.
+`/helpweather`, `/helpmusic` and `/helpchat` show one group. Arguments are shown as
+`<required>` and `[optional]`, using the names Discord prompts for. Only the person who ran a help
+command can turn its pages.
 
 ---
 
@@ -265,7 +273,11 @@ automatically. For the dashboard, also set `DISCORD_CLIENT_ID` and `DISCORD_CLIE
 - **Set `WEB_APP_URL`** to your deployed website, or `/use` will report that it is unconfigured.
 - **Run migrations** on an existing database: `alembic upgrade head`. Only the Render Blueprint
   does this for you; Docker, Compose and the Procfile do not. A fresh database is created
-  automatically. See [Database migrations](docs/DEPLOYMENT.md#database-migrations).
+  automatically and stamped at the current migration, so later upgrades apply cleanly. See
+  [Database migrations](docs/DEPLOYMENT.md#database-migrations).
+- **Compose:** the bot needs `WEB_PUBLIC_URL` too (the compose file sets it). When the dashboard's
+  OAuth is configured, `/use` builds its sign-in link from `WEB_PUBLIC_URL`; `WEB_APP_URL` is only
+  used when the dashboard is off.
 - **Serve over HTTPS.** Session cookies are marked `Secure` automatically for `https://` origins,
   and HSTS is only sent from one.
 - The website sends a Content-Security-Policy that allows images from `cdn.discordapp.com`
@@ -358,8 +370,10 @@ startup. `REDIS_URL` on its own is fine — it has other jobs.
   command is `/image-gen`.
 - Privileged intents must be enabled in the Discord Developer Portal for chat and some features to
   work.
-- When running multiple bot instances in the cloud, point them at the same `DATABASE_URL` so AI
-  settings stay in sync.
+- Run **one** bot process per token. A second instance would answer every Discord event twice,
+  overwrite the other's AI settings, and run every dashboard command twice.
+- See [docs/AUDIT.md](docs/AUDIT.md) for the latest bug audit: what was fixed and what is known
+  but left as is.
 
 ---
 

@@ -62,10 +62,13 @@ python run_bot.py
 ### Run the website
 
 ```bash
+npm --prefix website/frontend ci
+npm --prefix website/frontend run build   # without this every page is "503 spa_not_built"
 python run_web.py
 ```
 
-Open **http://localhost:5000**.
+Open **http://127.0.0.1:5000** — not `localhost`: the OAuth redirect URI is registered for
+`127.0.0.1`, and hopping between the two loses the sign-in state.
 
 To enable debug mode, set `FLASK_DEBUG=1` in your `.env` or shell.
 
@@ -108,8 +111,14 @@ docker compose down
 Both `web` and `bot` receive `DATABASE_URL` pointing at the `postgres` service and
 `REDIS_URL=redis://redis:6379/0`, and wait for both to pass a healthcheck rather than merely start.
 
-Compose does **not** run migrations. Tables are created on first start (`DB_AUTO_CREATE=1`); after
-pulling a change that adds a migration, run it once:
+Redis is not published to the host: both services reach it as `redis:6379` on the compose
+network. (It has no password, so publishing it let anyone who could reach the machine forge bridge
+commands and dashboard sessions.) For sign-in, register
+`http://localhost:5000/api/v1/auth/callback` as a redirect URI — Compose serves on `localhost`.
+
+Compose does **not** run migrations. Tables are created on first start (`DB_AUTO_CREATE=1`) and the
+new database is stamped at the current migration, so after pulling a change that adds a migration,
+run it once:
 
 ```bash
 docker compose run --rm web alembic upgrade head
@@ -126,6 +135,7 @@ Needed only for the dashboard. Skip it to serve the public weather site alone.
 2. Under **Redirects**, add the callback for every origin you will sign in from:
    - production: `https://<your-host>/api/v1/auth/callback`
    - local Flask: `http://127.0.0.1:5000/api/v1/auth/callback`
+   - Docker Compose: `http://localhost:5000/api/v1/auth/callback`
    - local Vite dev server: `http://localhost:5173/api/v1/auth/callback`
 3. Copy the **Client ID**, and **Reset Secret** to get a **Client Secret**.
 4. Set `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET` and `REDIS_URL`.
@@ -207,13 +217,16 @@ host, or a recovery):
 # Fresh database — build it from migrations alone
 alembic upgrade head
 
-# Existing deployed database, where ai_settings and app_state already exist
-# because create_all() made them: adopt the baseline without re-creating anything
-alembic stamp 0001
+# A database create_all() built from nothing is stamped at the head automatically,
+# so `alembic upgrade head` simply applies any newer revisions.
 
-# ...then bring it up to date with the later revisions
-alembic upgrade head
+# An older database that create_all() built before that stamping existed has every
+# table but no alembic_version row. Adopt the current schema, then upgrade later:
+alembic stamp head
 ```
+
+`DATABASE_URL` may contain URL-encoded characters (`p%40ss`); the migration environment escapes
+them for Alembic's config parser.
 
 Revisions so far:
 
@@ -403,15 +416,22 @@ AI settings (`/settings`, `/output`) and per-server/DM preferences are persisted
 
 | Mode | When | Notes |
 |------|------|-------|
-| **Database** | `DATABASE_URL` is set | Tables `ai_settings` / `app_state`. Best for the cloud and for several bot instances |
+| **Database** | `DATABASE_URL` is set | Tables `ai_settings` / `app_state`. Best for the cloud |
 | **Redis** | no `DATABASE_URL`, but `REDIS_URL` is set | One JSON document under `zephyr:settings` |
 | **Local SQLite** (default) | neither is set | `data/zephyr.db` in the project. Lost on ephemeral filesystems |
 | **File** | only if the chosen backend cannot be reached at startup | `settings.json` (or `SETTINGS_PATH`) |
 
 Set `STORAGE_BACKEND` to `database`, `redis` or `file` to force one. `python -m
-scripts.import_settings` migrates an existing `settings.json` into the database. If a backend fails
-to *load* at startup, the bot refuses to save settings until a load succeeds, so a brief outage can
-never overwrite what is stored.
+scripts.import_settings` migrates an existing `settings.json` into the database.
+
+If the chosen backend cannot be reached **when the bot starts**, it falls back to `settings.json`
+for the whole run and logs a `WARNING`; settings saved then are not visible to the dashboard. Fix
+the connection and restart. (A backend that connects but fails to *load* is different: the bot then
+refuses to save until a load succeeds, so a brief outage can never overwrite what is stored.)
+
+Run **one** bot process per token. Settings are saved as a whole document and web commands are
+delivered over pub/sub, so a second instance would overwrite the first one's settings and run every
+dashboard command twice.
 
 ---
 

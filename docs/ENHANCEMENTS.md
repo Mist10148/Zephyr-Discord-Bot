@@ -46,7 +46,7 @@ The four issues this audit left open have since been fixed:
   503, and a revoked permission answers 403. Reads still use the session's guild list. Player
   actions skip the extra check (`@bot_authorizes`) because the bot authorizes each one itself.
 - **Bridge timeout for slow actions.** `player.play` and `playlist.load` now wait up to 20s
-  (`SLOW_ACTION_TIMEOUT`, under gunicorn's 30s worker timeout); every other action keeps 5s.
+  (`SLOW_ACTION_TIMEOUT`, under gunicorn's 30s worker timeout; every deployment file now runs 2 workers × 4 threads, so one slow action no longer blocks the site); every other action keeps 5s.
 - **Serial cache retries.** A failed `TTLCache` load is now shared with every waiter instead of
   being retried by each in turn.
 - **SQLite foreign keys.** AI purges and compaction delete revisions, labels and annotations
@@ -328,7 +328,7 @@ Four S-sized fixes and one M.
 
 ### 11.1 — `/commands` is unreachable · S · ✅
 
-The command reference — 73 commands, shipped as **C10** — has **no entry point in the UI**.
+The command reference — 78 commands, shipped as **C10** — has **no entry point in the UI**.
 It is absent from `TABS` in [`components/TabBar.tsx`](../website/frontend/src/components/TabBar.tsx),
 from the nav in [`components/AppShell.tsx`](../website/frontend/src/components/AppShell.tsx),
 and from `FEATURES` in [`routes/Home.tsx`](../website/frontend/src/routes/Home.tsx) — which
@@ -359,7 +359,7 @@ that card with Commands or Music and demote `/kitchen-sink` to a footer or `/set
 
 ### 11.5 — `/commands` needs in-page navigation · M · ✅
 
-[`routes/Commands.tsx`](../website/frontend/src/routes/Commands.tsx) renders 73 rows across
+[`routes/Commands.tsx`](../website/frontend/src/routes/Commands.tsx) renders every command (78 today) across
 every category as one long scroll with no category jump list and no result count. Aliases
 are in the Fuse search keys but never displayed, so searching an alias returns a hit with no
 visible reason for the match.
@@ -433,7 +433,7 @@ every unknown path, so `/nonsense` is an indexable soft 404 that renders `NotFou
 ### 12.6 — Public endpoints are unguarded · M · ⚠️
 
 `rate_limit()` in [`website/api/guard.py`](../website/api/guard.py) is used by
-[`website/api/player.py`](../website/api/player.py) only. On a public origin `/weather` and
+[`website/api/player.py`](../website/api/player.py) and [`website/api/playlists.py`](../website/api/playlists.py) only. On a public origin `/weather` and
 `/geocode` (which spend an upstream Open-Meteo quota), `/ai/*` (a free-tier Gemini key) and
 `/auth/login` are all unlimited.
 

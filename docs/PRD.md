@@ -300,7 +300,7 @@ Per-server/DM AI preferences are stored in the database (`ai_settings`), which i
 The bot requests `discord.Intents.all()` and requires these privileged intents in the Discord Developer Portal:
 - **Message Content** — for prefix commands and mention/reply AI chat.
 - **Server Members** — for member-related features.
-- **Presence** — optional, for richer presence data.
+- **Presence** — **required**: the bot requests `Intents.all()`, so with Presence off it fails to connect (close code 4014).
 
 Additional permissions needed at invite time:
 - Send Messages, Embed Links, Attach Files
