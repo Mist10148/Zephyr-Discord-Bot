@@ -291,3 +291,129 @@ async def test_247_turned_on_while_idle_prevents_the_disconnect(monkeypatch):
     state._247_enabled = False
     with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(waiter, 1)
+
+
+# ---------------------------------------------------------------------------
+# Second audit (M19, M21, M24, M26, M27, M30)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_refused_check_is_not_answered_twice():
+    """interaction_check already replied; the error handler added "You can't use that here"."""
+    from discord import app_commands
+
+    interaction = _error_interaction(done=True)
+    await MusicCog.cog_app_command_error(_cog(), interaction, app_commands.CheckFailure())
+
+    interaction.followup.send.assert_not_awaited()
+    interaction.response.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_missing_permissions_is_still_explained():
+    from discord import app_commands
+
+    interaction = _error_interaction(done=False)
+    await MusicCog.cog_app_command_error(_cog(), interaction, app_commands.MissingPermissions(["manage_guild"]))
+
+    assert "Manage Server" in interaction.response.send_message.await_args.args[0]
+
+
+def test_a_bad_effect_value_changes_nothing():
+    from zephyr.cogs.music import VoiceError, _apply_effects
+
+    state = VoiceState(MagicMock(), guild_id=1)
+    with pytest.raises(VoiceError):
+        _apply_effects(state, {"nightcore": True, "pitch": 5})
+    assert state._nightcore_enabled is False
+    assert state._pitch == 1.0
+
+    with pytest.raises(VoiceError):
+        _apply_effects(state, {"reset": True, "slowed": True, "bass_boost": 99})
+    assert state._slowed_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_load_announces_in_the_channel_it_was_run_from():
+    cog = _cog()
+    cog._connect = AsyncMock()
+    cog._ensure_np_channel = MagicMock()
+    seen = {}
+
+    def ensure(guild_id, *, channel_id=None, sticky=False):
+        seen.update(channel_id=channel_id, sticky=sticky)
+        state = VoiceState(MagicMock(), guild_id=guild_id)
+        state.start_player = MagicMock()
+        return state
+
+    cog.ensure_voice_state = ensure
+    member = SimpleNamespace(id=5, mention="<@5>")
+    playlist = {"tracks": [{"title": "a", "url": None, "duration_s": 0, "source": "search"}]}
+
+    added = await cog._enqueue_playlist(SimpleNamespace(id=1), member, "vc", playlist, channel_id=42)
+
+    assert added == 1
+    assert seen == {"channel_id": 42, "sticky": True}
+
+
+@pytest.mark.asyncio
+async def test_enqueue_track_reports_a_refusal():
+    cog = _cog()
+    interaction = MagicMock()
+    interaction.user.voice = None
+    interaction.followup.send = AsyncMock()
+
+    assert await cog._enqueue_track(interaction, Track(title="x")) is False
+    interaction.followup.send.assert_awaited_once()
+
+
+def _voter(user_id, channel="vc"):
+    return SimpleNamespace(id=user_id, voice=SimpleNamespace(channel=channel), roles=[],
+                           guild_permissions=SimpleNamespace(manage_guild=False))
+
+
+def test_skip_vote_rules():
+    state = VoiceState(MagicMock(), guild_id=1)
+    state.voice = MagicMock()
+    state.voice.channel = "vc"
+    state._skip_threshold = lambda: 2
+    state.skip = MagicMock()
+    state.current = Track(title="t", requester_id=1)
+
+    assert state.vote_skip(_voter(9, channel="elsewhere"))[0] == "not_listening"
+    assert state.vote_skip(_voter(2))[0] == "voted"
+    assert state.vote_skip(_voter(2))[0] == "already_voted"
+    state.skip.assert_not_called()
+    assert state.vote_skip(_voter(3))[0] == "skipped"
+    assert state.vote_skip(_voter(1))[0] == "skipped"   # the requester
+
+
+def test_only_requester_dj_or_manager_force_skip():
+    cog = _cog()
+    cog._dj_role_ids = {}
+    state = VoiceState(MagicMock(), guild_id=1)
+    state.current = Track(title="t", requester_id=1)
+
+    assert cog._may_force_skip(state, _voter(1)) is True
+    assert cog._may_force_skip(state, _voter(2)) is False   # a plain listener votes
+
+    manager = _voter(3)
+    manager.guild_permissions = SimpleNamespace(manage_guild=True)
+    assert cog._may_force_skip(state, manager) is True
+
+    cog._dj_role_ids = {1: "77"}
+    dj = _voter(4)
+    dj.roles = [SimpleNamespace(id=77)]
+    assert cog._may_force_skip(state, dj) is True
+
+
+def test_a_song_opened_from_a_mix_queues_only_that_song():
+    from zephyr.cogs.music import _drop_auto_mix
+
+    mixed = "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=RDdQw4w9WgXcQ&start_radio=1&index=2"
+    assert _drop_auto_mix(mixed) == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+
+    playlist = "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL1234567890"
+    assert _drop_auto_mix(playlist) == playlist
+    assert _drop_auto_mix("lofi beats") == "lofi beats"

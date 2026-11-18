@@ -21,7 +21,7 @@ import time
 import re
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import quote, urlsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import aiohttp
 import discord
@@ -83,6 +83,26 @@ def _is_youtube_url(search: str) -> bool:
 def _is_youtube_playlist(search: str) -> bool:
     s = _sanitize_search(search).lower()
     return _is_youtube_url(search) and ("list=" in s or "/playlist" in s)
+
+
+def _drop_auto_mix(search: str) -> str:
+    """A watch link that merely came *from* a YouTube Mix plays just that video.
+
+    Clicking a song inside a Mix gives ``watch?v=X&list=RDX...``.  With
+    ``noplaylist`` off, yt-dlp expanded that into the whole auto-generated Mix,
+    so pasting one song queued 200.  Real playlists (``list=PL...``) and
+    ``/playlist`` links are left alone.
+    """
+    if not _is_youtube_url(search):
+        return search
+    parts = urlsplit(_sanitize_search(search))
+    query = parse_qsl(parts.query, keep_blank_values=True)
+    names = {key for key, _ in query}
+    mix = any(key == 'list' and value.upper().startswith('RD') for key, value in query)
+    if 'v' not in names or not mix:
+        return search
+    kept = [(key, value) for key, value in query if key not in {'list', 'index', 'start_radio', 'pp'}]
+    return urlunsplit(parts._replace(query=urlencode(kept)))
 
 
 def _is_internal_url(search: str) -> bool:
@@ -272,6 +292,20 @@ def _apply_effects(state: 'VoiceState', args: dict) -> None:
     thing in the same request, which is what the UI's "reset" button does after
     the user has already moved a slider.
     """
+    # Validate first, assign after: a bad pitch used to be rejected only after
+    # the toggles were already set, leaving effects half-applied -- shown as on
+    # in the snapshot and used by the next track, but never restarted into the
+    # current one.
+    pitch = boost = None
+    if 'pitch' in args:
+        pitch = _coerce_float(args['pitch'], 'pitch')
+        if not 0.5 <= pitch <= 2.0:
+            raise VoiceError("Pitch must be between 0.5 and 2.0.")
+    if 'bass_boost' in args and args['bass_boost'] is not None:
+        boost = int(_coerce_float(args['bass_boost'], 'bass_boost'))
+        if not -20 <= boost <= 20:
+            raise VoiceError("Bass boost must be between -20 and 20 dB.")
+
     if args.get('reset'):
         for attribute, _ in _TOGGLE_EFFECTS.values():
             setattr(state, attribute, False)
@@ -287,20 +321,10 @@ def _apply_effects(state: 'VoiceState', args: dict) -> None:
             for other in excludes:
                 setattr(state, other, False)
 
-    if 'pitch' in args:
-        pitch = _coerce_float(args['pitch'], 'pitch')
-        if not 0.5 <= pitch <= 2.0:
-            raise VoiceError("Pitch must be between 0.5 and 2.0.")
+    if pitch is not None:
         state._pitch = pitch
-
     if 'bass_boost' in args:
-        if args['bass_boost'] is None:
-            state._bass_boost = None
-        else:
-            boost = int(_coerce_float(args['bass_boost'], 'bass_boost'))
-            if not -20 <= boost <= 20:
-                raise VoiceError("Bass boost must be between -20 and 20 dB.")
-            state._bass_boost = boost
+        state._bass_boost = boost
 
 
 class YTDLError(Exception):
@@ -855,7 +879,18 @@ class NowPlayingView(View):
 
     @discord.ui.button(emoji='⏭️', style=discord.ButtonStyle.secondary)
     async def skip(self, interaction: discord.Interaction, button: Button):
-        await self._run(interaction, 'player.skip')
+        # The same rule as /skip: instant for whoever queued the song, a DJ or
+        # a server manager; a vote for everyone else.  The button used to skip
+        # outright for any listener, which made the documented vote pointless.
+        state = self.cog.peek_voice_state(self.guild_id)
+        member = interaction.user
+        if state is None or state.current is None or self.cog._may_force_skip(state, member):
+            await self._run(interaction, 'player.skip')
+            return
+        outcome, text = state.vote_skip(member)
+        await interaction.response.send_message(text, ephemeral=True)
+        if outcome == 'skipped' and interaction.guild is not None:
+            await self.cog.publish_state(interaction.guild.id)
 
     @discord.ui.button(emoji='🔁', style=discord.ButtonStyle.secondary)
     async def loop_mode(self, interaction: discord.Interaction, button: Button):
@@ -1609,6 +1644,28 @@ class VoiceState:
         await self.retire_now_playing()
         self.changed()
 
+    def vote_skip(self, voter) -> tuple[str, str]:
+        """Apply one /skip (or skip-button) request.  Returns (outcome, message).
+
+        outcome is 'skipped', 'voted', 'already_voted' or 'not_listening'.
+        """
+        listening = voter.voice.channel if getattr(voter, 'voice', None) else None
+        if self.voice and self.voice.channel and listening != self.voice.channel:
+            return 'not_listening', "Join the voice channel Zephyr is in to vote."
+        # Track carries requester_id, never a Member -- a Member is not
+        # serializable, which is the whole reason the queue is plain data.
+        if self.current is not None and voter.id == self.current.requester_id:
+            self.skip()
+            return 'skipped', '⏭️ Skipped.'
+        if voter.id in self.skip_votes:
+            return 'already_voted', "You have already voted to skip this song."
+        self.skip_votes.add(voter.id)
+        total, needed = len(self.skip_votes), self._skip_threshold()
+        if total >= needed:
+            self.skip()
+            return 'skipped', '⏭️ Skip vote passed.'
+        return 'voted', f'🗳️ Skip vote added ({total}/{needed})'
+
     def _skip_threshold(self):
         if not self.voice or not self.voice.channel:
             return 1
@@ -1735,6 +1792,11 @@ class MusicCog(commands.Cog):
         connect that timed out, a bug -- left the user looking at "Zephyr is
         thinking..." until Discord gave up on the interaction.
         """
+        if (type(error) is app_commands.CheckFailure and interaction.response.is_done()):
+            # interaction_check already told the user why (a DM, or a channel
+            # outside the music channels); a second "You can't use that here"
+            # follow-up was pure noise.
+            return
         if isinstance(error, app_commands.CheckFailure):
             message = ("❌ You need the **Manage Server** permission for that."
                        if isinstance(error, app_commands.MissingPermissions)
@@ -2004,6 +2066,18 @@ class MusicCog(commands.Cog):
                 raise VoiceError("You are not connected to a voice channel.")
         return member
 
+    def _may_force_skip(self, state: 'VoiceState', member) -> bool:
+        """Who skips at once rather than voting: the requester, a DJ, a manager."""
+        if state.current is not None and member.id == state.current.requester_id:
+            return True
+        permissions = getattr(member, 'guild_permissions', None)
+        if permissions is not None and permissions.manage_guild:
+            return True
+        dj_role_id = self._dj_role_ids.get(int(state.guild_id)) if getattr(state, 'guild_id', None) else None
+        if dj_role_id:
+            return any(str(role.id) == str(dj_role_id) for role in getattr(member, 'roles', []))
+        return False
+
     async def reload_dj_roles(self) -> None:
         """Refresh the DJ-role cache from the database.
 
@@ -2261,7 +2335,7 @@ class MusicCog(commands.Cog):
         longer than Discord's 15-minute interaction token lasts.  The dashboard
         handed Spotify links straight to yt-dlp, which cannot read them at all.
         """
-        query = _sanitize_search(query)
+        query = _drop_auto_mix(_sanitize_search(query))
         if not _is_spotify_url(query):
             return await YTDLSource.resolve_tracks(
                 query, requester_id=requester_id, requester_mention=requester_mention, loop=self.bot.loop)
@@ -2587,8 +2661,19 @@ class MusicCog(commands.Cog):
             # made a failed retry of one copy delete the other (matched by identity).
             track = copy.copy(results[int(select.values[0])])
             await _disable(f"🔎 Picked: {track}")
-            await self._enqueue_track(interaction2, track)
-            await interaction2.followup.send(embed=discord.Embed(description=f'🎶 Selected: {track}', color=discord.Color.green()), ephemeral=True)
+            # Component callbacks never reach cog_app_command_error, so a failed
+            # connect used to vanish, and a refused enqueue still said "Selected".
+            try:
+                queued = await self._enqueue_track(interaction2, track)
+            except (VoiceError, YTDLError) as exc:
+                await interaction2.followup.send(f'❌ {exc}', ephemeral=True)
+                return
+            except Exception:
+                traceback.print_exc()
+                await interaction2.followup.send('❌ Something went wrong queueing that track.', ephemeral=True)
+                return
+            if queued:
+                await interaction2.followup.send(embed=discord.Embed(description=f'🎶 Selected: {track}', color=discord.Color.green()), ephemeral=True)
 
         async def on_timeout():
             await _disable("🔎 Search expired — run `/msearch` again.")
@@ -2598,15 +2683,17 @@ class MusicCog(commands.Cog):
         view.add_item(select)
         message = await interaction.followup.send("🔎 Search results:", view=view, wait=True)
 
-    async def _enqueue_track(self, interaction: discord.Interaction, track: Track):
+    async def _enqueue_track(self, interaction: discord.Interaction, track: Track) -> bool:
+        """Queue one track; False (after telling the user why) if it was refused."""
         if not interaction.user.voice or not interaction.user.voice.channel:
             await interaction.followup.send("❌ You need to be in a voice channel.", ephemeral=True)
-            return
+            return False
         ctx = await self._interaction_ctx(interaction)
         state = self.get_voice_state(ctx, sticky=True)
         await self._connect(state, interaction.guild, interaction.user.voice.channel)
         state.start_player()
         state.songs.put_nowait(track)
+        return True
 
     @app_commands.command(name='now', description='Displays the currently playing song.')
     async def now(self, interaction: discord.Interaction):
@@ -2680,29 +2767,12 @@ class MusicCog(commands.Cog):
         if not state.is_playing:
             await interaction.response.send_message("Not playing any music right now...", ephemeral=True)
             return
-        voter = interaction.user
-        listening = voter.voice.channel if getattr(voter, 'voice', None) else None
-        if state.voice and state.voice.channel and listening != state.voice.channel:
-            await interaction.response.send_message("Join the voice channel Zephyr is in to vote.", ephemeral=True)
+        outcome, text = state.vote_skip(interaction.user)
+        if outcome in ('not_listening', 'already_voted'):
+            await interaction.response.send_message(text, ephemeral=True)
             return
-        # Track carries requester_id, never a Member -- a Member is not
-        # serializable, which is the whole reason the queue is plain data.  The
-        # old `state.current.requester` raised AttributeError, so every /skip by
-        # the requester failed instead of skipping.
-        if voter.id == state.current.requester_id:
-            state.skip()
-            await interaction.response.send_message(embed=discord.Embed(description='⏭️ Skipped.', color=discord.Color.green()))
-        elif voter.id not in state.skip_votes:
-            state.skip_votes.add(voter.id)
-            total = len(state.skip_votes)
-            needed = state._skip_threshold()
-            if total >= needed:
-                state.skip()
-                await interaction.response.send_message(embed=discord.Embed(description='⏭️ Skip vote passed.', color=discord.Color.green()))
-            else:
-                await interaction.response.send_message(embed=discord.Embed(description=f'🗳️ Skip vote added ({total}/{needed})', color=discord.Color.orange()))
-        else:
-            await interaction.response.send_message("You have already voted to skip this song.", ephemeral=True)
+        color = discord.Color.green() if outcome == 'skipped' else discord.Color.orange()
+        await interaction.response.send_message(embed=discord.Embed(description=text, color=color))
 
     @app_commands.command(name='seek', description='Seeks to a position in the current track.')
     @app_commands.describe(position="Timestamp e.g. 1:30, 90, 2m")
@@ -3203,12 +3273,14 @@ class MusicCog(commands.Cog):
             return
 
         added = await self._enqueue_playlist(interaction.guild, interaction.user,
-                                             interaction.user.voice.channel, playlist)
+                                             interaction.user.voice.channel, playlist,
+                                             channel_id=interaction.channel_id)
         await interaction.followup.send(embed=discord.Embed(
             description=f'📀 Queued **{added}** track(s) from **{playlist["name"]}**.',
             color=discord.Color.green()))
 
-    async def _enqueue_playlist(self, guild, member, destination, playlist: dict) -> int:
+    async def _enqueue_playlist(self, guild, member, destination, playlist: dict,
+                                *, channel_id: int | None = None) -> int:
         """Connect if needed and append a stored playlist to the queue.
 
         Nothing is resolved here.  Stored rows become Tracks as they are -- some
@@ -3216,7 +3288,13 @@ class MusicCog(commands.Cog):
         each one actually plays.  Resolving 200 rows up front would take minutes
         and throw most of the work away the moment somebody ran /skip.
         """
-        state = self.ensure_voice_state(guild.id)
+        # /load passes the channel it was run in, as /play does: without one an
+        # idle guild with no music channels configured had nowhere to announce,
+        # so the session posted no now-playing, no buttons and no errors.
+        if channel_id is not None:
+            state = self.ensure_voice_state(guild.id, channel_id=channel_id, sticky=True)
+        else:
+            state = self.ensure_voice_state(guild.id)
         await self._connect(state, guild, destination)
         self._ensure_np_channel(state, guild)
         state.start_player()
