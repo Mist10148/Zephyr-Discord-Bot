@@ -1,7 +1,7 @@
 """Voice / TTS general commands: /disconnect, /say, /language.
 
-Ported 1:1 from the original bot.py (lines 2218-2264). The module-level
-``LANGUAGE`` global becomes the ``tts_language`` attribute on the cog.
+The TTS language is per server.  It used to be one value for the whole bot,
+so ``/language`` in one server changed (or broke) ``/say`` in every other.
 """
 
 import asyncio
@@ -19,7 +19,11 @@ from zephyr.core.ffmpeg import FFMPEG_PATH
 class TTSCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.tts_language = "en"  # original module-level LANGUAGE
+        self.default_language = "en"
+        self.languages: dict[int, str] = {}
+
+    def language_for(self, guild_id: int | None) -> str:
+        return self.languages.get(int(guild_id), self.default_language) if guild_id else self.default_language
 
     @app_commands.command(name="disconnect", description="Disconnect the bot from the voice call.")
     # The same rule as /leave, which this does exactly: it used to have no check,
@@ -66,7 +70,7 @@ class TTSCog(commands.Cog):
         tts_fd, tts_path = tempfile.mkstemp(suffix=".mp3")
         os.close(tts_fd)
         try:
-            tts = gTTS(text=text, lang=self.tts_language)
+            tts = gTTS(text=text, lang=self.language_for(interaction.guild.id))
             # gTTS.save() is a blocking HTTP request; on the event loop it froze
             # every other command (and the gateway heartbeat) while it ran.
             await asyncio.to_thread(tts.save, tts_path)
@@ -112,11 +116,35 @@ class TTSCog(commands.Cog):
         state = music_cog.peek_voice_state(guild_id) if music_cog else None
         return bool(state and (state.current is not None or len(state.songs)))
 
-    @app_commands.command(name="language", description="Change the TTS language output.")
+    @app_commands.command(name="language", description="Change this server's TTS language.")
     @app_commands.describe(lang="Language code (e.g., 'en' for English, 'ja' for Japanese)")
     async def language_command(self, interaction: discord.Interaction, lang: str):
-        self.tts_language = lang
-        await interaction.response.send_message(f"Language changed to `{lang}`!", ephemeral=True)
+        if not interaction.guild:
+            await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+            return
+        code = lang.strip().lower()
+        supported = _supported_languages()
+        # Checked now, not when /say runs: an unknown code used to be accepted
+        # here and only fail later as "TTS failed: Language not supported".
+        if supported and code not in supported:
+            examples = ", ".join(f"`{key}`" for key in ("en", "tl", "ja", "ko", "es", "fr") if key in supported)
+            await interaction.response.send_message(
+                f"❌ `{lang}` is not a language Google TTS supports. Try one of {examples}.", ephemeral=True)
+            return
+        self.languages[interaction.guild.id] = code
+        name = supported.get(code, code) if supported else code
+        await interaction.response.send_message(f"🗣️ This server's TTS language is now **{name}** (`{code}`).",
+                                                ephemeral=True)
+
+
+def _supported_languages() -> dict[str, str]:
+    """gTTS's language table, or empty if it cannot be read (then anything goes)."""
+    try:
+        from gtts.lang import tts_langs
+
+        return {key.lower(): value for key, value in tts_langs().items()}
+    except Exception:
+        return {}
 
 
 def _safe_remove(path: str):

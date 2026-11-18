@@ -177,7 +177,7 @@ HELP_CATEGORIES = [
         title="Voice — Text-to-Speech",
         commands=[
             HelpEntry("/say <text>", "Speak a message in your voice channel"),
-            HelpEntry("/language <lang>", "Change this server's TTS language, e.g. en, ja, fil"),
+            HelpEntry("/language <lang>", "Change this server's TTS language, e.g. en, tl, ja"),
             HelpEntry("/disconnect", "Disconnect Zephyr from voice (Manage Server)"),
         ],
     ),

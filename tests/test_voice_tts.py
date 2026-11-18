@@ -28,3 +28,31 @@ def test_a_queued_track_between_songs_counts_as_active():
 
 def test_no_music_state_is_free_to_speak():
     assert not _cog(None)._music_is_active(1)
+
+
+def _language_interaction(guild_id):
+    from unittest.mock import AsyncMock
+
+    interaction = MagicMock()
+    interaction.guild.id = guild_id
+    interaction.response.send_message = AsyncMock()
+    return interaction
+
+
+def test_the_tts_language_is_per_server():
+    import asyncio
+
+    cog = TTSCog(MagicMock())
+    asyncio.run(TTSCog.language_command.callback(cog, _language_interaction(1), "ja"))
+    assert cog.language_for(1) == "ja"
+    assert cog.language_for(2) == "en"
+
+
+def test_an_unknown_language_is_refused_up_front():
+    import asyncio
+
+    cog = TTSCog(MagicMock())
+    interaction = _language_interaction(1)
+    asyncio.run(TTSCog.language_command.callback(cog, interaction, "klingon"))
+    assert cog.language_for(1) == "en"
+    assert "not a language" in interaction.response.send_message.await_args.args[0]
