@@ -218,3 +218,30 @@ async def test_a_bug_gets_a_generic_reply_before_any_response():
 
     message = interaction.response.send_message.await_args.args[0]
     assert "secret internals" not in message
+
+
+@pytest.mark.asyncio
+async def test_queue_embed_fits_discord_limits_with_long_youtube_rows():
+    """Ten rows of links, long titles and mentions overflowed a 1,024-char field."""
+    state = _state()
+    state.current = Track(title="Now [Official Video] " * 10, url="https://www.youtube.com/watch?v=aaaaaaaaaaa",
+                          duration_seconds=213, requester_mention="<@123456789012345678>")
+    state.source = MagicMock()
+    for index in range(25):
+        state.songs.put_nowait(Track(title=f"Song {index} " + "x" * 120,
+                                     url=f"https://www.youtube.com/watch?v={index:011d}",
+                                     duration_seconds=3600 + index,
+                                     requester_mention="<@123456789012345678>"))
+    cog = MusicCog.__new__(MusicCog)
+    cog._interaction_ctx = AsyncMock(return_value=SimpleNamespace())
+    cog.get_voice_state = MagicMock(return_value=state)
+    interaction = SimpleNamespace(response=SimpleNamespace(send_message=AsyncMock()))
+
+    await MusicCog.queue.callback(cog, interaction, page=1)
+
+    embed = interaction.response.send_message.await_args.kwargs["embed"]
+    assert len(embed.description) <= 4096
+    assert all(len(field.value) <= 1024 for field in embed.fields)
+    assert len(embed) <= 6000
+    assert "](None)" not in embed.description
+    assert embed.description.count("\n`") == 10

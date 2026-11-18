@@ -8,6 +8,7 @@ Ported 1:1 from the original bot.py (lines 899-2211). Time helpers come from
 import math
 import random
 import asyncio
+import copy
 import dataclasses
 import functools
 import ipaddress
@@ -216,13 +217,22 @@ class VoiceError(Exception):
     pass
 
 
-def _link(track: 'Track') -> str:
+def _short(text: str, limit: int | None) -> str:
+    text = text or ''
+    if limit and len(text) > limit:
+        return text[:limit - 1].rstrip() + '…'
+    return text
+
+
+def _link(track: 'Track', max_title: int | None = None) -> str:
     """Markdown link to a track, or its bare title before it has a URL.
 
     Spotify and imported tracks are resolved only when they play, and
-    ``[title](None)`` rendered as a broken link in /queue.
+    ``[title](None)`` rendered as a broken link in /queue.  Square brackets in
+    a title closed the link early, so they are swapped for parentheses.
     """
-    return f'[{track.title}]({track.url})' if track.url else track.title
+    title = _short(track.title, max_title).replace('[', '(').replace(']', ')')
+    return f'[{title}]({track.url})' if track.url else title
 
 
 def _coerce_float(value, name: str) -> float:
@@ -401,7 +411,12 @@ class Track:
                             inline=False)
         embed.add_field(name='Duration', value=self.duration, inline=True)
         embed.add_field(name='Requested by', value=self.requester_mention or 'Unknown', inline=True)
-        embed.add_field(name='Uploader', value=f'[{self.uploader}]({self.uploader_url})', inline=True)
+        uploader = self.uploader or 'Unknown'
+        # Flat, Spotify and imported tracks have no uploader URL until they play;
+        # a link to "None" rendered as broken markdown.
+        embed.add_field(name='Uploader',
+                        value=f'[{uploader}]({self.uploader_url})' if self.uploader_url else uploader,
+                        inline=True)
         if self.url:
             embed.add_field(name='URL', value=f'[Click]({self.url})', inline=True)
         if self.thumbnail:
@@ -2384,20 +2399,38 @@ class MusicCog(commands.Cog):
             options.append(discord.SelectOption(label=label, description=description, value=str(i - 1)))
 
         select = Select(placeholder="Choose a track...", options=options)
+        view = View(timeout=60)
+        message: discord.Message | None = None
+
+        async def _disable(content: str | None = None):
+            select.disabled = True
+            view.stop()
+            if message is None:
+                return
+            try:
+                await message.edit(content=content or message.content, view=view)
+            except discord.HTTPException:
+                pass
 
         async def select_callback(interaction2: discord.Interaction):
             if interaction2.user.id != interaction.user.id:
                 await interaction2.response.send_message("Run `/msearch` yourself to pick a track.", ephemeral=True)
                 return
             await interaction2.response.defer()
-            track = results[int(select.values[0])]
+            # One pick per search, and a copy: the same Track object queued twice
+            # made a failed retry of one copy delete the other (matched by identity).
+            track = copy.copy(results[int(select.values[0])])
+            await _disable(f"🔎 Picked: {track}")
             await self._enqueue_track(interaction2, track)
             await interaction2.followup.send(embed=discord.Embed(description=f'🎶 Selected: {track}', color=discord.Color.green()), ephemeral=True)
 
+        async def on_timeout():
+            await _disable("🔎 Search expired — run `/msearch` again.")
+
         select.callback = select_callback
-        view = View(timeout=60)
+        view.on_timeout = on_timeout
         view.add_item(select)
-        await interaction.followup.send("🔎 Search results:", view=view)
+        message = await interaction.followup.send("🔎 Search results:", view=view, wait=True)
 
     async def _enqueue_track(self, interaction: discord.Interaction, track: Track):
         if not interaction.user.voice or not interaction.user.voice.channel:
@@ -2604,21 +2637,31 @@ class MusicCog(commands.Cog):
         embed = discord.Embed(title='🎶 Music Queue', color=discord.Color.blurple())
         if state.is_playing:
             embed.add_field(name='Currently Playing',
-                            value=f"{_link(state.current)}\n"
-                                  f"Requested by {state.current.requester_mention} • `{state.current.duration}`",
+                            value=_short(f"{_link(state.current, 80)}\n"
+                                         f"Requested by {state.current.requester_mention or 'Unknown'} • "
+                                         f"`{_format_timestamp(state.current.duration_seconds)}`", 1024),
                             inline=False)
             embed.add_field(name='Loop Mode', value=state.loop.capitalize(), inline=True)
             embed.add_field(name='Volume', value=f"{int(state.volume * 100)}%", inline=True)
 
+        # The list goes in the description (4,096 characters), not a field
+        # (1,024): ten rows of YouTube links, long durations and mentions came to
+        # ~1,500 characters, and Discord rejected the whole embed.
         upcoming = list(state.songs)[start:end]
         if upcoming:
-            queue_text = '\n'.join(
-                f'`{i + 1}.` {_link(song)} • {song.duration} • {song.requester_mention}'
-                for i, song in enumerate(upcoming, start=start)
-            )
-            embed.add_field(name=f'Up Next ({total} total)', value=queue_text, inline=False)
+            lines = [f'**Up Next** — {total} track{"s" if total != 1 else ""}']
+            used = len(lines[0])
+            for i, song in enumerate(upcoming, start=start):
+                row = (f'`{i + 1:>2}.` {_link(song, 55)} · `{_format_timestamp(song.duration_seconds)}`'
+                       f' · {song.requester_mention or "Unknown"}')
+                if used + len(row) + 1 > 3900:
+                    lines.append('*…*')
+                    break
+                lines.append(row)
+                used += len(row) + 1
+            embed.description = '\n'.join(lines)
         elif total == 0:
-            embed.add_field(name='Up Next', value='No more songs in queue.', inline=False)
+            embed.description = '**Up Next**\nNo more songs in queue.'
 
         total_duration = state.current.duration_seconds if state.is_playing else 0
         for song in state.songs:
