@@ -182,3 +182,40 @@ class TestAutoplayRadio:
         with patch.object(YTDLSource, "resolve_tracks", AsyncMock()) as resolve:
             assert await state._extend_with_radio() == 0
         resolve.assert_not_called()
+
+
+class TestThirdAudit:
+    @pytest.mark.asyncio
+    async def test_a_stop_during_a_radio_lookup_discards_the_refill(self):
+        state = VoiceState(MagicMock(), 1, channel_id=2)
+        state.bot.user.id = 7
+        state.current = Track(title="Seed", url="https://www.youtube.com/watch?v=seedvideo11")
+        candidates = [Track(title="Fresh", url="https://www.youtube.com/watch?v=freshvideo1")]
+
+        async def slow_lookup(*args, **kwargs):
+            state.clear_queue()          # /stop or /clear while the Mix is read
+            return candidates
+
+        with patch.object(YTDLSource, "resolve_tracks", AsyncMock(side_effect=slow_lookup)):
+            added = await state._extend_with_radio()
+
+        assert added == 0
+        assert len(state.songs) == 0
+
+    def test_deleted_and_private_playlist_entries_are_dropped(self):
+        entries = [
+            {"id": "aaaaaaaaaaa", "title": "[Deleted video]", "url": "https://www.youtube.com/watch?v=aaaaaaaaaaa"},
+            {"id": "bbbbbbbbbbb", "title": "[Private video]", "url": "https://www.youtube.com/watch?v=bbbbbbbbbbb"},
+            {"id": "ccccccccccc", "title": "Real Song", "url": "https://www.youtube.com/watch?v=ccccccccccc"},
+        ]
+        tracks = YTDLSource._build_tracks_from_entries(entries)
+        assert [track.title for track in tracks] == ["Real Song"]
+
+    @pytest.mark.asyncio
+    async def test_a_dead_saved_placeholder_is_not_searched_by_title(self):
+        track = Track(title="[Deleted video]", url="https://www.youtube.com/watch?v=aaaaaaaaaaa")
+        search = AsyncMock()
+        with patch.object(YTDLSource, "_extract", AsyncMock(side_effect=Exception("Video unavailable"))),                 patch.object(YTDLSource, "_resolve_by_title", search):
+            with pytest.raises(YTDLError, match="Could not fetch"):
+                await YTDLSource.from_track(track, loop=asyncio.get_event_loop())
+        search.assert_not_awaited()

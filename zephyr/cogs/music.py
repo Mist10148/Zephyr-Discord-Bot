@@ -238,6 +238,16 @@ class VoiceError(Exception):
 REMOVE_LIST_LIMIT = 10
 
 
+# What a flat YouTube playlist extraction calls a video that is gone.  They
+# have no stream, and searching YouTube for the title played a random video
+# (and "healed" a saved playlist to it).
+UNAVAILABLE_TITLES = frozenset({'[deleted video]', '[private video]', '[unavailable video]'})
+
+
+def _is_unavailable_title(title: str | None) -> bool:
+    return (title or '').strip().lower() in UNAVAILABLE_TITLES
+
+
 def _short(text: str, limit: int | None) -> str:
     text = text or ''
     if limit and len(text) > limit:
@@ -730,7 +740,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
         skipped = 0
         for entry in entries:
             url = cls._entry_url(entry)
-            if not url:
+            if not url or _is_unavailable_title(entry.get('title')):
                 skipped += 1
                 continue
             tracks.append(Track.from_info({**entry, 'webpage_url': url},
@@ -738,7 +748,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
                                           requester_mention=requester_mention,
                                           source=source))
         if skipped:
-            print(f"[Playlist] Added {len(tracks)} tracks, skipped {skipped} with no usable URL.")
+            print(f"[Playlist] Added {len(tracks)} tracks, skipped {skipped} unavailable or with no usable URL.")
         return tracks
 
     @classmethod
@@ -803,10 +813,10 @@ class YTDLSource(discord.PCMVolumeTransformer):
             except asyncio.TimeoutError:
                 raise
             except Exception as exc:
-                if not track.title or track.title == track.url:
+                if not track.title or track.title == track.url or _is_unavailable_title(track.title):
                     raise YTDLError(f'Could not fetch `{track.url}`: {exc}')
                 print(f"[Re-resolve] {track.url} failed ({exc}); searching for '{track.title}'.")
-        elif not track.title:
+        elif not track.title or _is_unavailable_title(track.title):
             raise YTDLError('That track has neither a link nor a title.')
 
         if not info or not info.get('url'):
@@ -1016,6 +1026,8 @@ class VoiceState:
         self.next = asyncio.Event()
         self.songs = SongQueue()
         self.exists = True
+        # Bumped by clear_queue(); an autoplay refill started before it is dropped.
+        self._refill_generation = 0
 
         self._loop_mode = 'off'  # 'off', 'track', 'queue'
         self._volume = 0.5
@@ -1069,6 +1081,11 @@ class VoiceState:
         self.on_change = None
         self.np_view_factory = None
         self.np_message: discord.Message | None = None
+
+    def clear_queue(self) -> None:
+        """Empty the queue, including an autoplay refill still being looked up."""
+        self._refill_generation += 1
+        self.songs.clear()
 
     def start_player(self):
         """Start the audio player task lazily; safe to call multiple times."""
@@ -1297,6 +1314,7 @@ class VoiceState:
         seed = _video_id(seed_track.url) if seed_track else None
         if not seed:
             return 0
+        generation = self._refill_generation
         try:
             tracks = await YTDLSource.resolve_tracks(
                 f"https://www.youtube.com/watch?v={seed}&list=RD{seed}",
@@ -1309,6 +1327,10 @@ class VoiceState:
             print(f"[Autoplay] Could not build a radio for {seed}: {exc}")
             return 0
 
+        if generation != self._refill_generation:
+            # /stop or /clear arrived during the (up to a minute) lookup: the
+            # refill used to land afterwards and start five songs anyway.
+            return 0
         added = 0
         for track in tracks:
             key = _video_id(track.url) or track.url
@@ -1463,6 +1485,11 @@ class VoiceState:
             try:
                 source = await YTDLSource.from_track(track, ffmpeg_options=options,
                                                      volume=self._volume, loop=self.bot.loop)
+                # /say may be speaking: voice.play() would raise "Already playing
+                # audio", and the track went down the stream-failure path and
+                # could be dropped.  Waited for here, *before* the checks below:
+                # a skip, stop or seek sent during the clip used to be lost.
+                await self._wait_for_foreign_audio()
                 # A /seek or an effect change that arrived while the track was
                 # loading had nothing to restart.  Apply it now, before play,
                 # instead of reporting success and ignoring it.
@@ -1504,11 +1531,6 @@ class VoiceState:
                 if self.current is track:
                     self._track_ended()
                 continue
-
-            # /say may be speaking: voice.play() would raise "Already playing
-            # audio", and the track went down the stream-failure path and could
-            # be dropped.  Give a short clip time to finish first.
-            await self._wait_for_foreign_audio()
 
             try:
                 # Cleared here rather than at the top of the loop, so a stale signal
@@ -1626,7 +1648,7 @@ class VoiceState:
         queue and stopped the source, and the loop then replayed the current
         track under loop=track, or refilled the queue from autoplay.
         """
-        self.songs.clear()
+        self.clear_queue()
         self.skip_votes.clear()
         if not self.is_playing:
             self.current = None
@@ -2234,7 +2256,7 @@ class MusicCog(commands.Cog):
         self._authorize(guild, actor_id)
         state = self._require_state(guild.id)
         removed = len(state.songs)
-        state.songs.clear()
+        state.clear_queue()
         return {'removed': removed}
 
     async def _bridge_shuffle(self, guild, actor_id, args):
@@ -2832,7 +2854,7 @@ class MusicCog(commands.Cog):
             return
         ctx = await self._interaction_ctx(interaction)
         state = self.get_voice_state(ctx)
-        state.songs.clear()
+        state.clear_queue()
         await interaction.response.send_message(embed=discord.Embed(description='🧹 Queue cleared.', color=discord.Color.orange()))
 
     @app_commands.command(name='skip', description='Vote to skip the current song.')

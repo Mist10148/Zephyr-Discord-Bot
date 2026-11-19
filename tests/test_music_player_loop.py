@@ -436,3 +436,30 @@ async def test_music_waits_for_a_tts_clip_instead_of_failing(monkeypatch):
     await asyncio.wait_for(state._wait_for_foreign_audio(timeout=5), timeout=5)
     await clip
     assert state.voice.playing is False
+
+
+@pytest.mark.asyncio
+async def test_a_skip_sent_while_a_tts_clip_plays_is_honoured(monkeypatch):
+    """The skip check ran before the wait for /say, so a skip during the clip was lost."""
+    state = _state()
+    doomed, after = Track(title="Doomed"), Track(title="After")
+    state.songs.put_nowait(doomed)
+    state.songs.put_nowait(after)
+    first, second = MagicMock(name="doomed"), MagicMock(name="after")
+    monkeypatch.setattr(YTDLSource, "from_track", AsyncMock(side_effect=[first, second]))
+    waits = []
+
+    async def clip_then_skip(timeout=15.0):
+        waits.append(state.current)
+        if len(waits) == 1:
+            state.skip()        # someone runs /skip while /say is talking
+
+    state._wait_for_foreign_audio = clip_then_skip
+    task = asyncio.create_task(state.audio_player_task())
+    await _spin(lambda: state.voice.played)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert state.voice.played == [second]
+    first.cleanup.assert_called()
