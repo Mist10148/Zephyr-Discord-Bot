@@ -125,6 +125,30 @@ def _local_date_of(moment: datetime | None, tzinfo) -> date | None:
     return moment.astimezone(tzinfo).date()
 
 
+def skip_marker(tz_name: str | None, now_utc: datetime) -> datetime:
+    """The ``last_run_at`` that means "skipped today", not "posted today".
+
+    Both used to store the current time, so a digest created at 15:00 for
+    08:00 and then moved to 20:00 still looked as if it had posted today and
+    stayed silent; the dashboard also showed it as "Last posted 15:00".  A
+    skip is recorded as the subscriber's local midnight -- still today, so
+    ``is_due`` holds it until tomorrow -- which no real post lands on exactly.
+    """
+    tzinfo = zone(tz_name)
+    local_midnight = datetime.combine(now_utc.astimezone(tzinfo).date(), time(0), tzinfo=tzinfo)
+    return local_midnight.astimezone(timezone.utc)
+
+
+def is_skip_marker(moment: datetime | None, tz_name: str | None) -> bool:
+    """Whether ``last_run_at`` is a ``skip_marker`` rather than a real post."""
+    if moment is None:
+        return False
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    local = moment.astimezone(zone(tz_name))
+    return (local.hour, local.minute, local.second, local.microsecond) == (0, 0, 0, 0)
+
+
 def claim_due(now_utc: datetime, *, database_url: str | None = None) -> list[dict]:
     """Return the scheduled subscriptions due now, marking them run.
 
@@ -226,6 +250,10 @@ def create(values: dict, *, database_url: str | None = None) -> dict:
         ).all()
         if len(existing) >= MAX_SUBS_PER_GUILD:
             raise SubscriptionError(f"A server may have at most {MAX_SUBS_PER_GUILD} subscriptions.")
+        if values.get("kind") not in SCHEDULED_KINDS:
+            # A watch has no schedule; a stray time only let an identical
+            # watch past the duplicate check below.
+            values = {**values, "schedule_local_time": None}
         if _duplicate_of(connection, values) is not None:
             raise SubscriptionError("That channel already has the same subscription.")
         if values.get("kind") in SCHEDULED_KINDS and values.get("last_run_at") is None:
@@ -242,12 +270,16 @@ def _skip_today_if_passed(values: dict, last_run_at) -> dict:
     probe = SimpleNamespace(schedule_local_time=values.get("schedule_local_time"),
                             tz=values.get("tz"), last_run_at=last_run_at)
     if is_due(probe, now):
-        return {**values, "last_run_at": now}
+        return {**values, "last_run_at": skip_marker(values.get("tz"), now)}
     return values
 
 
-def _duplicate_of(connection, values: dict) -> int | None:
-    """The id of an identical subscription in the same channel, if any."""
+def _duplicate_of(connection, values: dict, *, exclude_id: int | None = None) -> int | None:
+    """The id of an identical subscription in the same channel, if any.
+
+    The time only distinguishes digests: two watches of one place in one
+    channel post every alert twice whatever time either claims.
+    """
     rows = connection.execute(
         select(WeatherSub.id, WeatherSub.lat, WeatherSub.lon, WeatherSub.schedule_local_time).where(
             WeatherSub.guild_id == str(values.get("guild_id")),
@@ -255,10 +287,14 @@ def _duplicate_of(connection, values: dict) -> int | None:
             WeatherSub.kind == values.get("kind"),
         )
     ).all()
+    timed = values.get("kind") in SCHEDULED_KINDS
     for row in rows:
+        if exclude_id is not None and row.id == exclude_id:
+            continue
+        same_time = (row.schedule_local_time or None) == (values.get("schedule_local_time") or None)
         if (abs(float(row.lat) - float(values.get("lat", 0))) < 1e-4
                 and abs(float(row.lon) - float(values.get("lon", 0))) < 1e-4
-                and (row.schedule_local_time or None) == (values.get("schedule_local_time") or None)):
+                and (same_time or not timed)):
             return row.id
     return None
 
@@ -267,23 +303,46 @@ def _duplicate_of(connection, values: dict) -> int | None:
 _SCHEDULE_FIELDS = {"kind", "schedule_local_time", "tz", "enabled"}
 
 
+# Edits that can turn a subscription into a copy of another.
+_IDENTITY_FIELDS = {"channel_id", "kind", "lat", "lon", "schedule_local_time"}
+
+
 def update_sub(sub_id: int, values: dict, *, database_url: str | None = None) -> dict | None:
+    """Apply an edit.  Raises ``SubscriptionError`` if it would duplicate another row."""
     if values:
         engine = get_engine(database_url)
         with engine.begin() as connection:
-            if _SCHEDULE_FIELDS & set(values) and "last_run_at" not in values:
-                row = connection.execute(select(*_COLUMNS).where(WeatherSub.id == sub_id)).first()
-                if row is not None:
-                    merged = {**dict(row._mapping), **values}
-                    if merged["kind"] in SCHEDULED_KINDS and merged["enabled"]:
-                        # The same rule create() applies: re-enabling an 08:00
-                        # digest at 15:00, or moving it to a time already past,
-                        # used to post it within a minute.
-                        probed = _skip_today_if_passed(merged, merged.get("last_run_at"))
-                        if probed is not merged:
-                            values = {**values, "last_run_at": probed["last_run_at"]}
+            row = connection.execute(select(*_COLUMNS).where(WeatherSub.id == sub_id)).first()
+            if row is not None:
+                values = _checked_edit(connection, sub_id, dict(row._mapping), values)
             connection.execute(update(WeatherSub).where(WeatherSub.id == sub_id).values(**values))
     return get(sub_id, database_url=database_url)
+
+
+def _checked_edit(connection, sub_id: int, current: dict, values: dict) -> dict:
+    merged = {**current, **values}
+    if merged["kind"] not in SCHEDULED_KINDS and merged.get("schedule_local_time"):
+        values = {**values, "schedule_local_time": None}
+        merged["schedule_local_time"] = None
+    if _IDENTITY_FIELDS & set(values) and _duplicate_of(connection, merged, exclude_id=sub_id):
+        # create() refused this; an edit used to make it anyway.
+        raise SubscriptionError("That channel already has the same subscription.")
+    if (_SCHEDULE_FIELDS & set(values) and "last_run_at" not in values
+            and merged["kind"] in SCHEDULED_KINDS and merged["enabled"]):
+        # The same rule create() applies: re-enabling an 08:00 digest at 15:00,
+        # or moving it to a time already past, used to post it within a
+        # minute.  A day that was only *skipped* is not a day that posted:
+        # moved to a time still ahead, it posts today.
+        previous = current.get("last_run_at")
+        skipped = is_skip_marker(previous, current.get("tz"))
+        if skipped:
+            previous = None
+        probed = _skip_today_if_passed(merged, previous)
+        if probed is not merged:
+            values = {**values, "last_run_at": probed["last_run_at"]}
+        elif skipped:
+            values = {**values, "last_run_at": None}
+    return values
 
 
 def delete_sub(sub_id: int, *, database_url: str | None = None) -> bool:

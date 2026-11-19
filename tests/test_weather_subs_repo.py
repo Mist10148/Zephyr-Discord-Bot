@@ -223,3 +223,60 @@ def test_a_zone_folder_is_refused_not_an_error():
 
     assert normalise_zone("America") == ("UTC", False)
     assert zone("Etc") is timezone.utc
+
+
+# --- Fourth pass -----------------------------------------------------------------
+
+def _freeze(monkeypatch, moment):
+    class Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return moment if tz is None else moment.astimezone(tz)
+
+    monkeypatch.setattr(repo, "datetime", Frozen)
+
+
+class TestSkippedDays:
+    def test_a_skipped_digest_moved_later_still_posts_today(self, db_url, monkeypatch):
+        """Created 15:00 for 08:00, then moved to 20:00: it used to stay silent."""
+        _freeze(monkeypatch, _utc(2026, 7, 31, 7))            # 15:00 Manila
+        created = _sub(db_url)
+        assert repo.is_skip_marker(created["last_run_at"], "Asia/Manila")
+
+        updated = repo.update_sub(created["id"], {"schedule_local_time": "20:00"}, database_url=db_url)
+        row = SimpleNamespace(**updated)
+        assert repo.is_due(row, _utc(2026, 7, 31, 12, 1)) is True  # 20:01 Manila
+
+    def test_a_digest_that_really_posted_does_not_post_again_when_moved(self, db_url, monkeypatch):
+        _freeze(monkeypatch, _utc(2026, 7, 30, 23))           # 07:00 Manila
+        created = _sub(db_url)
+        repo.mark_fired(created["id"], at=_utc(2026, 7, 31, 0, 1), database_url=db_url)  # posted 08:01
+        _freeze(monkeypatch, _utc(2026, 7, 31, 7))
+
+        updated = repo.update_sub(created["id"], {"schedule_local_time": "20:00"}, database_url=db_url)
+        assert repo.is_due(SimpleNamespace(**updated), _utc(2026, 7, 31, 12, 1)) is False
+
+    def test_a_skip_is_still_today_so_it_waits_for_tomorrow(self, monkeypatch):
+        marker = repo.skip_marker("Asia/Manila", _utc(2026, 7, 31, 7))
+        assert repo.is_due(_row(last_run_at=marker), _utc(2026, 7, 31, 8)) is False
+        assert repo.is_due(_row(last_run_at=marker), _utc(2026, 8, 1, 1)) is True
+        assert not repo.is_skip_marker(_utc(2026, 7, 31, 0, 1), "Asia/Manila")
+
+
+class TestDuplicateEdits:
+    def test_an_edit_cannot_copy_another_subscription(self, db_url):
+        _sub(db_url, schedule_local_time="08:00")
+        other = _sub(db_url, schedule_local_time="09:00")
+        with pytest.raises(repo.SubscriptionError, match="same subscription"):
+            repo.update_sub(other["id"], {"schedule_local_time": "08:00"}, database_url=db_url)
+
+    def test_an_edit_that_leaves_it_unique_is_fine(self, db_url):
+        created = _sub(db_url)
+        updated = repo.update_sub(created["id"], {"schedule_local_time": "08:00"}, database_url=db_url)
+        assert updated["schedule_local_time"] == "08:00"
+
+    def test_a_time_on_a_watch_does_not_dodge_the_duplicate_check(self, db_url):
+        first = _sub(db_url, kind="severe", schedule_local_time=None)
+        assert first["schedule_local_time"] is None
+        with pytest.raises(repo.SubscriptionError, match="same subscription"):
+            _sub(db_url, kind="severe", schedule_local_time="08:00")

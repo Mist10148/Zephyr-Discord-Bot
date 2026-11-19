@@ -6,6 +6,8 @@ the channel receives afterwards.  Rendering it separately here would have been
 easier and wrong.
 """
 
+from datetime import timezone
+
 from flask import current_app, g, jsonify, request
 
 from website.api import api, error, is_row_id, is_snowflake
@@ -29,12 +31,29 @@ def _database_url():
     return current_app.config["DATABASE_URL"]
 
 
+def _iso_utc(moment) -> str | None:
+    """ISO 8601 with an offset.
+
+    SQLite returns naive UTC; without an offset the browser read "00:00 UTC"
+    as local midnight, so a digest posted 08:00 Manila showed "12:00 AM".
+    """
+    if moment is None:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.isoformat()
+
+
 def _public(row: dict) -> dict:
+    last_run_at = row.get("last_run_at")
+    if repo.is_skip_marker(last_run_at, row.get("tz")):
+        # "Skipped today" (created or moved after today's time), not a post.
+        last_run_at = None
     return {
         **row,
         "id": row["id"],
-        "last_run_at": row["last_run_at"].isoformat() if row.get("last_run_at") else None,
-        "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
+        "last_run_at": _iso_utc(last_run_at),
+        "created_at": _iso_utc(row.get("created_at")),
         "kind_label": {"daily": "Daily digest", "severe": "Severe weather watch",
                        "class_suspension": "Class suspension watch"}.get(row["kind"], row["kind"]),
     }
@@ -166,7 +185,9 @@ def create_sub(guild_id: str):
         }
     )
     values.setdefault("units", "metric")
-    values.setdefault("tz", place.get("timezone") or "UTC")
+    # Through normalise_zone like /weather-subscribe: an unloadable zone was
+    # stored as is and quietly ran in UTC.
+    values.setdefault("tz", repo.normalise_zone(place.get("timezone"))[0])
     values.setdefault("enabled", True)
     if values["kind"] == "severe":
         # In the subscription's own units: the metric defaults compared against
@@ -237,7 +258,8 @@ def patch_sub(guild_id: str, sub_id: str):
         if "tz" not in body:
             # As on create: the new place's own zone.  Keeping the old one made
             # an 08:00 Manila digest moved to London post at midnight there.
-            values["tz"] = places[0].get("timezone") or row["tz"]
+            zone_name, accepted = repo.normalise_zone(places[0].get("timezone"))
+            values["tz"] = zone_name if accepted else row["tz"]
 
     # Checked against the merged result, not the patch: switching an existing
     # severe watch to a daily digest must not leave it without a time.
@@ -248,7 +270,10 @@ def patch_sub(guild_id: str, sub_id: str):
 
     if not values:
         return error("invalid_body", "Nothing to change.", 400)
-    updated = repo.update_sub(int(sub_id), values, database_url=_database_url())
+    try:
+        updated = repo.update_sub(int(sub_id), values, database_url=_database_url())
+    except repo.SubscriptionError as exc:
+        return error("invalid_value", str(exc), 400)
     if updated is None:
         # Deleted between the ownership check and the write.
         return error("not_found", "No such subscription.", 404)

@@ -302,3 +302,39 @@ class TestSecondAudit:
 
         assert response.status_code == 200
         assert response.get_json()["tz"] == "Europe/London"
+
+
+class TestFourthPass:
+    def test_times_carry_an_offset(self, app, client, logged_in, fake_redis):
+        """SQLite's naive UTC read as local time in the browser."""
+        from datetime import datetime, timezone
+
+        from zephyr.db.weather_subs import mark_fired
+
+        sub_id = _create(client, logged_in).get_json()["id"]
+        mark_fired(sub_id, at=datetime(2026, 7, 31, 0, 1, tzinfo=timezone.utc),
+                   database_url=app.config["DATABASE_URL"])
+        row = next(r for r in client.get("/api/v1/guilds/1/weather-subs").get_json()["subscriptions"]
+                   if r["id"] == sub_id)
+        assert row["last_run_at"].endswith("+00:00")
+        assert row["created_at"].endswith("+00:00")
+
+    def test_a_skipped_day_is_not_shown_as_a_post(self, app, client, logged_in, fake_redis):
+        from datetime import datetime, timezone
+
+        from zephyr.db import weather_subs as repo
+
+        sub_id = _create(client, logged_in).get_json()["id"]
+        marker = repo.skip_marker("Asia/Manila", datetime.now(timezone.utc))
+        repo.mark_fired(sub_id, at=marker, database_url=app.config["DATABASE_URL"])
+        row = next(r for r in client.get("/api/v1/guilds/1/weather-subs").get_json()["subscriptions"]
+                   if r["id"] == sub_id)
+        assert row["last_run_at"] is None
+
+    def test_an_edit_into_a_duplicate_is_a_400(self, client, logged_in, fake_redis):
+        _create(client, logged_in, schedule_local_time="08:00")
+        other = _create(client, logged_in, schedule_local_time="09:00").get_json()["id"]
+        response = client.patch(f"/api/v1/guilds/1/weather-subs/{other}", json={"schedule_local_time": "08:00"},
+                                headers=_headers(logged_in))
+        assert response.status_code == 400
+        assert "same subscription" in response.get_json()["error"]["message"]
