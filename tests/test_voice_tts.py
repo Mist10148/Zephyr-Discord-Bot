@@ -56,3 +56,30 @@ def test_an_unknown_language_is_refused_up_front():
     asyncio.run(TTSCog.language_command.callback(cog, interaction, "klingon"))
     assert cog.language_for(1) == "en"
     assert "not a language" in interaction.response.send_message.await_args.args[0]
+
+
+def test_a_clip_deletes_its_file_after_ffmpeg_is_cleaned_up(tmp_path, monkeypatch):
+    """The after-callback ran before FFmpeg was killed, so Windows kept the file."""
+    import discord
+
+    from zephyr.cogs import voice_tts
+
+    clip_file = tmp_path / "clip.mp3"
+    clip_file.write_bytes(b"x")
+    order = []
+    monkeypatch.setattr(discord.FFmpegPCMAudio, "__init__", lambda self, *a, **k: None)
+    monkeypatch.setattr(discord.FFmpegPCMAudio, "cleanup",
+                        lambda self: order.append(("ffmpeg", clip_file.exists())))
+
+    clip = voice_tts._TempClip(str(clip_file))
+    clip.cleanup()
+
+    assert order == [("ffmpeg", True)]
+    assert not clip_file.exists()
+
+
+def test_say_text_is_bounded():
+    from zephyr.cogs.voice_tts import MAX_SAY_LENGTH
+
+    parameter = next(p for p in TTSCog.say.parameters if p.name == "text")
+    assert parameter.max_value == MAX_SAY_LENGTH <= 1900

@@ -15,6 +15,31 @@ from gtts import gTTS
 
 from zephyr.core.ffmpeg import FFMPEG_PATH
 
+# gTTS reads long text in slow chunks, and the reply echoes it back: past
+# Discord's 2,000-character message limit the echo failed after the bot had
+# already started speaking, and the error path deleted the clip mid-play.
+MAX_SAY_LENGTH = 500
+
+
+class _TempClip(discord.FFmpegPCMAudio):
+    """A TTS clip that deletes its file once FFmpeg has let go of it.
+
+    discord.py calls the ``after`` callback *before* ``cleanup()`` kills
+    FFmpeg, so deleting there failed on Windows for any clip that was cut
+    short (/disconnect, a kick, a dropped connection) and the mp3 stayed in
+    the temp folder for good.
+    """
+
+    def __init__(self, path: str, **kwargs):
+        super().__init__(path, **kwargs)
+        self._path = path
+
+    def cleanup(self):
+        try:
+            super().cleanup()
+        finally:
+            _safe_remove(self._path)
+
 
 class TTSCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -55,7 +80,7 @@ class TTSCog(commands.Cog):
 
     @app_commands.command(name="say", description="Make the bot say something in voice chat.")
     @app_commands.describe(text="Text you want the bot to say")
-    async def say(self, interaction: discord.Interaction, text: str):
+    async def say(self, interaction: discord.Interaction, text: app_commands.Range[str, 1, MAX_SAY_LENGTH]):
         if not interaction.guild or not interaction.guild.voice_client:
             await interaction.response.send_message("I'm not in a voice call, let me in.", ephemeral=True)
             return
@@ -69,6 +94,7 @@ class TTSCog(commands.Cog):
         # works on read-only / ephemeral cloud filesystems.
         tts_fd, tts_path = tempfile.mkstemp(suffix=".mp3")
         os.close(tts_fd)
+        playing = False
         try:
             tts = gTTS(text=text, lang=self.language_for(interaction.guild.id))
             # gTTS.save() is a blocking HTTP request; on the event loop it froze
@@ -79,13 +105,19 @@ class TTSCog(commands.Cog):
             # AudioPlayer, orphaning its thread and FFmpeg process and leaving
             # the music loop waiting forever for an after-callback.
             if vc and not vc.is_playing() and not vc.is_paused() and not self._music_is_active(interaction.guild.id):
-                audio_source = discord.FFmpegPCMAudio(tts_path, executable=FFMPEG_PATH)
-                vc.play(audio_source, after=lambda e: _safe_remove(tts_path))
-                await interaction.followup.send(f"Speaking: {text}", ephemeral=True)
+                vc.play(_TempClip(tts_path, executable=FFMPEG_PATH))
+                playing = True
+                echo = text if len(text) <= 1900 else text[:1899] + "…"
+                await interaction.followup.send(f"Speaking: {echo}", ephemeral=True)
             else:
                 _safe_remove(tts_path)
                 await interaction.followup.send("Bot is already speaking. Wait for it to finish.", ephemeral=True)
         except Exception as exc:
+            if playing:
+                # The clip is playing and removes its own file; only the
+                # confirmation failed, so do not report the speech as failed.
+                print(f"[TTS] Could not confirm /say: {exc}")
+                return
             _safe_remove(tts_path)
             await interaction.followup.send(f"TTS failed: {exc}", ephemeral=True)
 
