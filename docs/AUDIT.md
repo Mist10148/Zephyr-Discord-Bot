@@ -179,3 +179,55 @@ A third read of music and weather. Every fixed item has a regression test; the s
 | — | Prefix weather commands ignore `/setlocation` | | documented (README) |
 | — | On consecutive hot days the class watch posts shortly after local midnight | A new day is a new advisory | known, left |
 
+
+---
+
+# Fourth pass — November 2026
+
+A fourth read of music and weather, including the code around them (the network checks,
+the dashboard bridge, Spotify, playlists, TTS and the FFmpeg lookup). Every fixed item has a
+regression test; the suite went from 953 to 1,011 tests.
+
+## Music
+
+| # | Problem | Effect | Status |
+|---|---------|--------|--------|
+| M50 | Host names with no dot counted as public | `/play http://web:5000/…` or a saved playlist reached Compose services (`web`, `postgres`, `redis`) and hosts-file names (`ip6-localhost`) | fixed |
+| M51 | Signed numbers in a host (`http://-1/`) | `IPv4Address(-1)` raised out of the check: "Unexpected error" instead of a refusal | fixed |
+| M52 | Names were never resolved; the extracted media URL was never checked | `127.0.0.1.nip.io`, or a public page whose media URL is internal, reached FFmpeg | fixed (resolved on the lookup thread; refused without a title search) |
+| M53 | Spotify short links followed with `allow_redirects=True` | Every hop was fetched before the final host was checked | fixed (one Spotify hop at a time) |
+| M54 | A dashboard command's deadline was two seconds *after* the site gave up | A play finishing just after the 504 was still queued; a retry queued it twice | fixed (one second before) |
+| M55 | Dashboard playlist load had no deadline check | A slow voice connect plus a retry loaded the playlist twice | fixed |
+| M56 | `send_command` ignored that nobody was subscribed | With the bot offline each click held a web worker for 20 s; a few froze the site | fixed (fails at once) |
+| M57 | Any track `source` was stored | `"file"` with no link handed `None` to FFmpeg; `"file"` on a web page fed it HTML | fixed (known sources only; old rows cleaned on load) |
+| M58 | spotipy slept off Spotify's `Retry-After` (up to hours); imports had no limit and called Spotify before validating | A timed-out `/play` left a shared thread asleep; an import hung a web worker | fixed (no retries; 5 imports a minute; validated first) |
+| M59 | Unbounded `/msearch` and `/lyrics` queries | Error reply past 4,096 characters | fixed (200) |
+| M60 | `/volume` refused between songs | The dashboard allowed it | fixed |
+| M61 | Long `/say` text | Spoken, then the echo failed, the clip was deleted mid-play and "TTS failed" shown | fixed (500 characters) |
+| M62 | The TTS file was deleted in `after`, before FFmpeg was killed | Interrupted clips left mp3s in the Windows temp folder | fixed (deleted in `cleanup`) |
+| M63 | `FFMPEG_PATH` pointing at a folder was accepted | Every track and `/say` failed with no warning | fixed (the executable inside it) |
+| — | Playlist PATCH racing a delete | 500 | fixed (404) |
+| — | `Spotify:Track:ID` in mixed case | Recognised but not parsed | fixed |
+
+## Weather
+
+| # | Problem | Effect | Status |
+|---|---------|--------|--------|
+| W36 | One quiet tick cleared a watch's record | A reading wobbling across its threshold (38.3 → 37.8 → 38.1 °C, rain 80 → 75 → 85 %) posted the same watch again | fixed (class watch never cleared; severe only after its 12-hour window) |
+| W37 | Previews did not use the scheduler's repeat rule | The dashboard said a watch would post while the bot stayed quiet; `/weather-preview` ignored dedupe | fixed |
+| W38 | "Skipped today" and "posted today" were the same timestamp | A digest created at 15:00 for 08:00 and moved to 20:00 never posted that day; shown as "Last posted 15:00" | fixed (skip stored as local midnight) |
+| W39 | Duplicate check only on create; a time on a watch dodged it | Edits made duplicate subscriptions; identical watches posted twice | fixed |
+| W40 | Unbounded `/weather-subscribe` options | Saved, then the reply failed; a retry said "already exists" | fixed |
+| W41 | Dashboard times from SQLite had no offset | Read as local time: "Last posted 12:00 AM" for 08:00 Manila | fixed |
+| W42 | Subscriptions could be made in a thread | Once archived, every post was dropped silently | fixed (refused) |
+| W43 | Fallback forecast counted calendar days from today | Late at night `/forecast` showed two days | fixed |
+| W44 | Web `/weather` missed the zone-folder guard; dashboard stored geocoder zones unchecked | HTML 500; a bad zone ran silently in UTC | fixed |
+
+## Known, left as is
+
+- The OpenWeatherMap fallback uses one UTC offset for all five days: the provider gives no zone
+  name. Only matters across a DST change in the next five days.
+- Redirects followed *inside* yt-dlp and FFmpeg cannot be checked hop by hop; the starting host,
+  its DNS answer and the final media URL are.
+- The bridge returns the text of unexpected handler errors to the dashboard.
+- `/pitch` needs an FFmpeg built with librubberband (Debian's, used by the Docker image, is).
