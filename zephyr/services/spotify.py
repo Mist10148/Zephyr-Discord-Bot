@@ -103,10 +103,17 @@ def build_client(client_id: str | None, client_secret: str | None):
     import spotipy
     from spotipy.oauth2 import SpotifyClientCredentials
 
+    # No retries: on a 429 spotipy's urllib3 Retry sleeps for Spotify's
+    # Retry-After, which may be hours.  The bot's 60 s timeout returned to the
+    # user but left the thread asleep in the shared executor, and a web worker
+    # simply hung.  A rate limit is reported at once instead.
     return spotipy.Spotify(
         client_credentials_manager=SpotifyClientCredentials(
             client_id=client_id, client_secret=client_secret
-        )
+        ),
+        requests_timeout=10,
+        retries=0,
+        status_retries=0,
     )
 
 

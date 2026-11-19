@@ -129,3 +129,14 @@ def test_a_mixed_case_spotify_uri_is_parsed():
     from zephyr.services.spotify import is_spotify_url, parse_spotify_id
     assert is_spotify_url("Spotify:Track:4uLU6hMCjMI75M1A2tKUQC")
     assert parse_spotify_id("Spotify:Track:4uLU6hMCjMI75M1A2tKUQC", "track") == "4uLU6hMCjMI75M1A2tKUQC"
+
+
+def test_the_client_never_sleeps_off_a_rate_limit(monkeypatch):
+    """urllib3 honoured Retry-After for up to six hours per retry."""
+    import spotipy
+    from zephyr.services.spotify import build_client
+
+    seen = {}
+    monkeypatch.setattr(spotipy, "Spotify", lambda **kwargs: seen.update(kwargs) or "client")
+    assert build_client("id", "secret") == "client"
+    assert seen["retries"] == 0 and seen["status_retries"] == 0

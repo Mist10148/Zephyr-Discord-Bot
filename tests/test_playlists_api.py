@@ -236,6 +236,28 @@ class TestSpotifyImport:
         assert response.status_code == 502
 
 
+    def test_a_bad_guild_is_refused_before_spotify_is_asked(self, app, client, logged_in, fake_redis, monkeypatch):
+        app.config["SPOTIFY_CLIENT_ID"] = "id"
+        app.config["SPOTIFY_CLIENT_SECRET"] = "secret"
+        monkeypatch.setattr("zephyr.services.spotify.build_client", lambda *a, **k: MagicMock())
+        fetch = MagicMock()
+        monkeypatch.setattr("zephyr.services.spotify.fetch_playlist_metadata", fetch)
+        response = client.post("/api/v1/playlists/import/spotify",
+                               json={"url": "https://open.spotify.com/playlist/abc", "is_public": "yes"},
+                               headers=_headers(logged_in))
+        assert response.status_code == 400
+        fetch.assert_not_called()
+
+    def test_imports_are_rate_limited(self, app, client, logged_in, fake_redis, monkeypatch):
+        from website.api import playlists as playlists_api
+
+        self._spotify(monkeypatch)
+        statuses = [self._import(app, client, logged_in).status_code
+                    for _ in range(playlists_api.SPOTIFY_IMPORT_LIMIT + 1)]
+        assert statuses[-1] == 429
+        assert 429 not in statuses[:-1]
+
+
 class TestLoadIntoGuild:
     def test_loading_goes_through_the_bot(self, client, logged_in, fake_redis):
         playlist_id = _create(client, logged_in).get_json()["id"]

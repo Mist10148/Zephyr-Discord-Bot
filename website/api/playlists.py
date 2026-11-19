@@ -219,6 +219,12 @@ def delete_playlist(playlist_id: str):
     return "", 204
 
 
+# Spotify imports per session: enough to bring in a library, not to spend the
+# deployment's Spotify quota in a loop.
+SPOTIFY_IMPORT_LIMIT = 5
+SPOTIFY_IMPORT_WINDOW = 60
+
+
 @api.post("/playlists/import/spotify")
 @require_session
 def import_spotify():
@@ -246,6 +252,20 @@ def import_spotify():
     url = str(body.get("url") or "").strip()
     if not url:
         return error("invalid_value", "Send the Spotify link to import.", 400)
+    # Everything that can be checked locally is checked before Spotify is
+    # asked: a bad guild or flag used to cost a round trip first.
+    guild_id, problem = _target_guild(body.get("guild_id"))
+    if problem is not None:
+        return problem
+    is_public = body.get("is_public", False)
+    if is_public is None:
+        is_public = False
+    if not isinstance(is_public, bool):
+        return error("invalid_value", "is_public must be true or false.", 400)
+    # Each import spends the deployment's Spotify quota; unlimited, one user
+    # could get every import (and every Spotify /play) rate limited.
+    if not rate_limit("spotify_import", limit=SPOTIFY_IMPORT_LIMIT, window=SPOTIFY_IMPORT_WINDOW):
+        return error("rate_limited", "Slow down a moment.", 429)
 
     try:
         name, tracks = spotify.fetch_playlist_metadata(client, url)
@@ -258,14 +278,6 @@ def import_spotify():
     if not tracks:
         return error("invalid_value", "That Spotify link has no tracks.", 400)
 
-    guild_id, problem = _target_guild(body.get("guild_id"))
-    if problem is not None:
-        return problem
-    is_public = body.get("is_public", False)
-    if is_public is None:
-        is_public = False
-    if not isinstance(is_public, bool):
-        return error("invalid_value", "is_public must be true or false.", 400)
     try:
         for candidate in _import_names(str(body.get("name") or name)):
             try:
