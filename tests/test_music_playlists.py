@@ -72,7 +72,7 @@ class TestLazyResolution:
         track = Track(title="Artist - Song", source="spotify")
         mock_ytdl.extract_info.side_effect = [
             {"entries": [{"id": "found1", "title": "Artist - Song"}]},
-            _info("http://stream/found1", "Artist - Song", "found1", duration=180),
+            _info("http://stream.example/found1", "Artist - Song", "found1", duration=180),
         ]
 
         await YTDLSource.from_track(track, loop=asyncio.get_event_loop())
@@ -87,8 +87,8 @@ class TestLazyResolution:
         track = Track(title="Artist - Song")
         mock_ytdl.extract_info.side_effect = [
             {"entries": [{"id": "found1", "title": "Artist - Song"}]},
-            _info("http://stream/found1", "Artist - Song", "found1"),
-            _info("http://stream/found1", "Artist - Song", "found1"),
+            _info("http://stream.example/found1", "Artist - Song", "found1"),
+            _info("http://stream.example/found1", "Artist - Song", "found1"),
         ]
 
         await YTDLSource.from_track(track, loop=asyncio.get_event_loop())
@@ -106,7 +106,7 @@ class TestLazyResolution:
         track = Track(title="Artist - Song")
         mock_ytdl.extract_info.side_effect = [
             {"entries": [{"id": "found1", "title": "Artist - Song"}]},
-            _info("http://stream/found1", "Artist - Song", "found1"),
+            _info("http://stream.example/found1", "Artist - Song", "found1"),
         ]
 
         await YTDLSource.from_track(track, loop=asyncio.get_event_loop())

@@ -49,6 +49,7 @@ from zephyr.services.spotify import (
     parse_spotify_id,
     resolve_short_link,
 )
+from zephyr.utils import net
 from zephyr.utils.net import is_internal_host
 from zephyr.utils.time_utils import _parse_user_time, _format_timestamp
 
@@ -123,9 +124,23 @@ def _is_internal_url(search: str) -> bool:
     return is_internal_host(host)
 
 
+INTERNAL_LINK_MESSAGE = "Links to private or local addresses can't be played."
+
+
 def _refuse_internal(search: str) -> None:
     if _is_url(search) and _is_internal_url(search):
-        raise YTDLError("Links to private or local addresses can't be played.")
+        raise InternalLinkError(INTERNAL_LINK_MESSAGE)
+
+
+def _refuse_resolving_internal(url: str | None) -> None:
+    """The DNS half of the check.  Blocking: run it on a worker thread.
+
+    ``_refuse_internal`` only reads the URL, so a public name pointing inside
+    (``127.0.0.1.nip.io``) passed it, and so did a public page whose extracted
+    media URL was internal -- FFmpeg fetched both.
+    """
+    if url and _is_url(url) and net.url_resolves_internal(_sanitize_search(url)):
+        raise InternalLinkError(INTERNAL_LINK_MESSAGE)
 
 
 def _is_audio_file_url(search: str) -> bool:
@@ -358,6 +373,10 @@ def _apply_effects(state: 'VoiceState', args: dict) -> None:
 
 class YTDLError(Exception):
     pass
+
+
+class InternalLinkError(YTDLError):
+    """A link to this host or a private network.  Never retried by title."""
 
 
 def _format_duration(duration: int) -> str:
@@ -659,7 +678,12 @@ class YTDLSource(discord.PCMVolumeTransformer):
         for the whole lookup, outside any timeout -- and a 2,000-video playlist
         was read to the end before being cut to 200.
         """
+        _refuse_resolving_internal(query)
         data = cls._ytdl().extract_info(query, download=False, process=process)
+        if isinstance(data, dict) and process:
+            # What FFmpeg will actually open, which a public page can point anywhere.
+            _refuse_internal(data.get('url') or '')
+            _refuse_resolving_internal(data.get('url'))
         if isinstance(data, dict) and data.get('entries') is not None:
             entries = data['entries']
             if not isinstance(entries, list):
@@ -816,7 +840,9 @@ class YTDLSource(discord.PCMVolumeTransformer):
         # extractor fetches any URL it is handed.
         _refuse_internal(track.url or '')
         if track.source == 'file':
-            # Direct media: hand the URL straight to FFmpeg, no extraction.
+            # Direct media: hand the URL straight to FFmpeg, no extraction --
+            # so the DNS check yt-dlp lookups get happens here instead.
+            await loop.run_in_executor(_YTDL_EXECUTOR, _refuse_resolving_internal, track.url)
             return cls._make_ffmpeg_source(track.url, data={'url': track.url, 'title': track.title},
                                            options=options, volume=volume)
 
@@ -824,7 +850,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
         if track.url:
             try:
                 info = await cls._extract(track.url, loop=loop)
-            except asyncio.TimeoutError:
+            except (asyncio.TimeoutError, InternalLinkError):
                 raise
             except Exception as exc:
                 if not track.title or track.title == track.url or _is_unavailable_title(track.title):

@@ -25,6 +25,7 @@ MAX_IMPORT_TRACKS = 200
 # internal address from anyone with /play or a dashboard session.
 SPOTIFY_HOSTS = frozenset({"open.spotify.com", "play.spotify.com", "spotify.com", "www.spotify.com"})
 SHORT_LINK_HOSTS = frozenset({"spotify.link", "spotify.app.link"})
+MAX_SHORT_LINK_HOPS = 5
 
 
 def _host(value: str) -> str | None:
@@ -64,13 +65,26 @@ def resolve_short_link(url: str) -> str:
     """Follow a spotify.link redirect to the real open.spotify.com URL."""
     import requests
 
+    from urllib.parse import urljoin
+
     if not is_short_link(url):
         return url
+    # Followed by hand: with allow_redirects=True every hop was fetched before
+    # anything looked at it, so a short link that bounced through an internal
+    # address made a blind request from the bot and the website.  Only Spotify
+    # hosts are followed; the first open.spotify.com URL is the answer.
+    current = url
     try:
-        response = requests.head(url, allow_redirects=True, timeout=10)
-        resolved = str(response.url)
-        if _host(resolved) in SPOTIFY_HOSTS or resolved.startswith("spotify:"):
-            return resolved
+        for _ in range(MAX_SHORT_LINK_HOPS):
+            response = requests.head(current, allow_redirects=False, timeout=10)
+            location = response.headers.get("Location") if response.is_redirect else None
+            if not location:
+                break
+            current = urljoin(current, location)
+            if current.lower().startswith("spotify:") or _host(current) in SPOTIFY_HOSTS:
+                return current
+            if _host(current) not in SHORT_LINK_HOSTS:
+                break
     except Exception as exc:
         print(f"[Spotify Resolve Error] {exc}")
     return url

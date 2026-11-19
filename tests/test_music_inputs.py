@@ -344,7 +344,7 @@ class TestFromTrack:
     @pytest.mark.asyncio
     async def test_builds_one_source_and_backfills_metadata(self, mock_ytdl, no_audio):
         track = self._track(title="Placeholder", duration_seconds=0)
-        mock_ytdl.extract_info.return_value = _make_info("http://stream/1", "Real Title", "1", duration=240)
+        mock_ytdl.extract_info.return_value = _make_info("http://stream.example/1", "Real Title", "1", duration=240)
 
         await YTDLSource.from_track(track, loop=asyncio.get_event_loop())
 
@@ -355,7 +355,7 @@ class TestFromTrack:
     @pytest.mark.asyncio
     async def test_passes_extractor_headers_and_a_stderr_sink_to_ffmpeg(self, mock_ytdl, no_audio):
         track = self._track()
-        info = _make_info("http://stream/1", "Song", "1")
+        info = _make_info("http://stream.example/1", "Song", "1")
         info["http_headers"] = {"User-Agent": "Zephyr Test", "range": "bytes=0-"}
         mock_ytdl.extract_info.return_value = info
 
@@ -371,7 +371,7 @@ class TestFromTrack:
 
     @pytest.mark.asyncio
     async def test_waits_until_ytdlp_marks_the_stream_available(self, mock_ytdl, no_audio):
-        info = _make_info("http://stream/1", "Song", "1")
+        info = _make_info("http://stream.example/1", "Song", "1")
         info["available_at"] = 107
         mock_ytdl.extract_info.return_value = info
 
@@ -386,7 +386,7 @@ class TestFromTrack:
     @pytest.mark.parametrize("available_at", [None, "not-a-timestamp", 99])
     async def test_skips_wait_for_missing_or_expired_stream_availability(
             self, mock_ytdl, no_audio, available_at):
-        info = _make_info("http://stream/1", "Song", "1")
+        info = _make_info("http://stream.example/1", "Song", "1")
         info["available_at"] = available_at
         mock_ytdl.extract_info.return_value = info
 
@@ -398,7 +398,7 @@ class TestFromTrack:
 
     @pytest.mark.asyncio
     async def test_caps_an_abnormal_stream_availability_wait(self, mock_ytdl, no_audio):
-        info = _make_info("http://stream/1", "Song", "1")
+        info = _make_info("http://stream.example/1", "Song", "1")
         info["available_at"] = 9_999
         mock_ytdl.extract_info.return_value = info
 
@@ -410,7 +410,7 @@ class TestFromTrack:
 
     @pytest.mark.asyncio
     async def test_a_seek_is_passed_to_ffmpeg(self, mock_ytdl, no_audio):
-        mock_ytdl.extract_info.return_value = _make_info("http://stream/1", "Song", "1")
+        mock_ytdl.extract_info.return_value = _make_info("http://stream.example/1", "Song", "1")
         await YTDLSource.from_track(self._track(), seek=42, loop=asyncio.get_event_loop())
         assert "-ss 42" in no_audio.call_args.kwargs["before_options"]
 
@@ -428,7 +428,7 @@ class TestFromTrack:
         mock_ytdl.extract_info.side_effect = [
             Exception("Video unavailable"),
             {"entries": [{"id": "new1", "title": "Findable Song"}]},
-            _make_info("http://stream/new1", "Findable Song", "new1"),
+            _make_info("http://stream.example/new1", "Findable Song", "new1"),
         ]
 
         await YTDLSource.from_track(track, loop=asyncio.get_event_loop())
@@ -662,3 +662,85 @@ def test_a_relative_ffmpeg_path_is_read_from_the_project_root(monkeypatch, tmp_p
     monkeypatch.chdir(tmp_path.parent)
 
     assert ffmpeg.get_ffmpeg_path() == str(tmp_path / "tools" / "ffmpeg-custom")
+
+
+# --- Fourth pass: names that only look public -----------------------------------
+
+@pytest.mark.parametrize("url", [
+    "http://web:5000/api/v1/guilds",
+    "http://postgres:5432/",
+    "http://redis/",
+    "http://ip6-localhost/",
+    "http://-1/",
+])
+def test_single_label_hosts_are_internal(url):
+    """Compose service names and hosts-file entries are inside by definition."""
+    from zephyr.cogs.music import _is_internal_url
+    assert _is_internal_url(url) is True
+
+
+@pytest.mark.parametrize("host", ["-1", "-1.0", "1.-1", "+1.0.0.1", "1.0.0.-0"])
+def test_signed_numeric_hosts_never_raise(host):
+    from zephyr.utils.net import is_internal_host
+    assert is_internal_host(host) in (True, False)
+
+
+def _answer(monkeypatch, address):
+    from zephyr.utils import net
+    monkeypatch.setattr(net, "_getaddrinfo",
+                        lambda *a, **k: [(2, 1, 6, "", (address, 0))])
+
+
+def test_a_public_name_resolving_to_localhost_is_internal(monkeypatch):
+    from zephyr.utils.net import resolves_internal, url_resolves_internal
+    _answer(monkeypatch, "127.0.0.1")
+    assert resolves_internal("127.0.0.1.nip.io") is True
+    assert url_resolves_internal("http://169.254.169.254.nip.io/latest/") is True
+
+
+def test_a_public_name_resolving_publicly_is_not_internal(monkeypatch):
+    from zephyr.utils.net import resolves_internal
+    _answer(monkeypatch, "142.250.72.14")
+    assert resolves_internal("www.youtube.com") is False
+
+
+def test_an_unresolvable_name_is_left_to_fail_on_its_own():
+    from zephyr.utils.net import resolves_internal
+    assert resolves_internal("does-not-exist.example") is False
+
+
+@pytest.mark.asyncio
+async def test_a_lookup_of_a_name_pointing_inside_is_refused(monkeypatch):
+    _answer(monkeypatch, "10.0.0.7")
+    ytdl = MagicMock()
+    monkeypatch.setattr(YTDLSource, "ytdl", ytdl)
+    with pytest.raises(YTDLError, match="private or local"):
+        await YTDLSource.resolve_tracks("https://10.0.0.7.nip.io/watch", loop=asyncio.get_event_loop())
+    ytdl.extract_info.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_an_extracted_stream_url_pointing_inside_is_refused_and_not_searched(monkeypatch):
+    """A public page can name an internal media URL; FFmpeg would open it."""
+    from zephyr.cogs.music import Track
+
+    ytdl = MagicMock()
+    ytdl.extract_info.return_value = {"url": "http://192.168.1.10/stream.m3u8", "title": "x"}
+    monkeypatch.setattr(YTDLSource, "ytdl", ytdl)
+    track = Track(title="Some song", url="https://example.com/page")
+    with pytest.raises(YTDLError, match="private or local"):
+        await YTDLSource.from_track(track, loop=asyncio.get_event_loop())
+    # Refused outright: not "re-resolved" by searching YouTube for the title.
+    assert ytdl.extract_info.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_a_direct_file_on_a_name_pointing_inside_is_refused(monkeypatch):
+    from zephyr.cogs.music import Track
+
+    _answer(monkeypatch, "127.0.0.1")
+    track = Track(title="a.mp3", url="https://files.example/a.mp3", source="file")
+    with patch.object(YTDLSource, "_make_ffmpeg_source") as make:
+        with pytest.raises(YTDLError, match="private or local"):
+            await YTDLSource.from_track(track, loop=asyncio.get_event_loop())
+    make.assert_not_called()

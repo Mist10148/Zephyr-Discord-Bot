@@ -7,7 +7,16 @@ the bot enforces when a playlist link is saved.
 from __future__ import annotations
 
 import ipaddress
+import re
+import socket
 from urllib.parse import urlsplit
+
+# One part of a numeric host as inet_aton reads it: decimal, octal or hex.  No
+# sign -- int() accepts "-1", and IPv4Address(-1) then raised out of the check.
+_NUMERIC_PART = re.compile(r"(?:0x[0-9a-f]*|[0-9]+)", re.IGNORECASE)
+
+# Indirected so tests can answer DNS without touching the shared socket module.
+_getaddrinfo = socket.getaddrinfo
 
 
 def _legacy_ipv4(host: str) -> ipaddress.IPv4Address | None:
@@ -23,7 +32,7 @@ def _legacy_ipv4(host: str) -> ipaddress.IPv4Address | None:
         return None
     numbers = []
     for part in parts:
-        if not part:
+        if not part or not _NUMERIC_PART.fullmatch(part):
             return None
         try:
             if part.lower().startswith("0x"):
@@ -58,10 +67,52 @@ def is_internal_host(host: str) -> bool:
     except ValueError:
         address = _legacy_ipv4(host)
         if address is None:
-            return False
+            # A name with no dot is never on the public internet: it is a
+            # Compose service (web, postgres, redis), a hosts-file entry
+            # (ip6-localhost) or a search-domain shortcut -- all of them inside.
+            return "." not in host
+    return _is_private(address)
+
+
+def _is_private(address) -> bool:
     if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
         address = address.ipv4_mapped
     return not address.is_global
+
+
+def resolves_internal(host: str) -> bool:
+    """Whether a public-looking name resolves to a private address.
+
+    ``127.0.0.1.nip.io`` passes ``is_internal_host`` but connects to localhost.
+    Blocking (a DNS lookup), so call it off the event loop.  A name that does
+    not resolve is not called internal: the fetch will fail on its own.
+    """
+    host = (host or "").strip().strip("[]").rstrip(".").lower()
+    if not host:
+        return False
+    if is_internal_host(host):
+        return True
+    try:
+        infos = _getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except (OSError, UnicodeError):
+        return False
+    for info in infos:
+        try:
+            address = ipaddress.ip_address(info[4][0].split("%", 1)[0])
+        except ValueError:
+            continue
+        if _is_private(address):
+            return True
+    return False
+
+
+def url_resolves_internal(url: str) -> bool:
+    """``resolves_internal`` for a URL's host; an unparsable URL counts as internal."""
+    try:
+        host = urlsplit((url or "").strip()).hostname or ""
+    except ValueError:
+        return True
+    return resolves_internal(host)
 
 
 def is_internal_url(url: str) -> bool:

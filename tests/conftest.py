@@ -247,6 +247,20 @@ def empty_api_caches():
 
 
 @pytest.fixture(autouse=True)
+def offline_dns(monkeypatch):
+    """No DNS in tests: every name fails to resolve, so it is not called internal.
+
+    Tests about name resolution install their own answers on ``net._getaddrinfo``.
+    """
+    from zephyr.utils import net
+
+    def unresolvable(*args, **kwargs):
+        raise OSError("DNS is disabled in tests")
+
+    monkeypatch.setattr(net, "_getaddrinfo", unresolvable)
+
+
+@pytest.fixture(autouse=True)
 def bot_confirms_admins(monkeypatch):
     """Treat every guild mutation's live Manage Server check as passed.
 

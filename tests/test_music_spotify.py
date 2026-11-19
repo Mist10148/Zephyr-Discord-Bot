@@ -81,3 +81,45 @@ def test_only_real_spotify_hosts_count_as_spotify_links():
     assert not is_spotify_url("https://evilspotify.com/track/1")
     # Never fetched: not a short-link host.
     assert resolve_short_link("https://10.0.0.5/?spotify.link") == "https://10.0.0.5/?spotify.link"
+
+
+class _Head:
+    def __init__(self, location=None):
+        self.headers = {"Location": location} if location else {}
+        self.is_redirect = location is not None
+
+
+def test_a_short_link_is_followed_one_spotify_hop_at_a_time(monkeypatch):
+    import requests
+    from zephyr.services.spotify import resolve_short_link
+
+    hops = {
+        "https://spotify.link/abc": _Head("https://spotify.app.link/abc?x=1"),
+        "https://spotify.app.link/abc?x=1": _Head("https://open.spotify.com/track/123"),
+    }
+    seen = []
+
+    def head(url, **kwargs):
+        assert kwargs.get("allow_redirects") is False
+        seen.append(url)
+        return hops[url]
+
+    monkeypatch.setattr(requests, "head", head)
+    assert resolve_short_link("https://spotify.link/abc") == "https://open.spotify.com/track/123"
+    assert seen == ["https://spotify.link/abc", "https://spotify.app.link/abc?x=1"]
+
+
+def test_a_short_link_redirecting_elsewhere_is_not_followed(monkeypatch):
+    """Each hop used to be fetched before anything checked it."""
+    import requests
+    from zephyr.services.spotify import resolve_short_link
+
+    seen = []
+
+    def head(url, **kwargs):
+        seen.append(url)
+        return _Head("http://169.254.169.254/latest/meta-data/")
+
+    monkeypatch.setattr(requests, "head", head)
+    assert resolve_short_link("https://spotify.link/abc") == "https://spotify.link/abc"
+    assert seen == ["https://spotify.link/abc"]
