@@ -286,3 +286,28 @@ def test_weather_preview_says_when_a_watch_would_stay_quiet(monkeypatch):
     asyncio.run(WeatherAlertsCog.preview.callback(WeatherAlertsCog(FakeBot(None)), interaction, 7))
 
     assert "Already announced" in followup.await_args.args[0]
+
+
+def test_subscribe_options_are_bounded():
+    params = {p.name: p for p in WeatherAlertsCog.subscribe.parameters}
+    assert params["location"].max_value == 100
+    assert params["tz"].max_value == 64
+
+
+def test_subscribing_from_a_thread_is_refused():
+    """An archived thread leaves the cache, and every post was then dropped."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    import discord
+
+    thread = MagicMock(spec=discord.Thread)
+    respond = AsyncMock()
+    interaction = SimpleNamespace(guild=SimpleNamespace(id=42, me=object()), channel=thread,
+                                  response=SimpleNamespace(send_message=respond, defer=AsyncMock()))
+    kind = SimpleNamespace(value="daily")
+
+    asyncio.run(WeatherAlertsCog.subscribe.callback(WeatherAlertsCog(FakeBot(None)), interaction, kind, "Iloilo"))
+
+    assert "not a thread" in respond.await_args.args[0]
+    interaction.response.defer.assert_not_awaited()

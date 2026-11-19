@@ -293,15 +293,24 @@ class WeatherAlertsCog(commands.Cog):
         self,
         interaction: discord.Interaction,
         kind: app_commands.Choice[str],
-        location: str,
+        # Bounded: a 6,000-character value was saved, then echoed back past
+        # Discord's limits, so the reply failed and a retry said "already exists".
+        location: app_commands.Range[str, 1, 100],
         channel: discord.TextChannel = None,
-        at: str = "08:00",
-        tz: str = None,
+        at: app_commands.Range[str, 1, 5] = "08:00",
+        tz: app_commands.Range[str, 1, 64] = None,
     ):
         if interaction.guild is None:
             await interaction.response.send_message("❌ This command can only be used in a server.", ephemeral=True)
             return
         destination = channel or interaction.channel
+        if isinstance(destination, discord.Thread):
+            # A thread leaves the bot's cache once it archives, and from then
+            # on every post was dropped with only a console line to show for it.
+            await interaction.response.send_message(
+                "❌ Subscriptions post to a channel, not a thread. Run this in the channel, "
+                "or pick one with `channel:`.", ephemeral=True)
+            return
         me = interaction.guild.me
         permissions = destination.permissions_for(me) if me else None
         if permissions is not None and not (permissions.send_messages and permissions.embed_links):
