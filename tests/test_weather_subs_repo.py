@@ -214,3 +214,12 @@ def test_clear_fingerprint(db_url):
     repo.mark_fired(created["id"], fingerprint="abc", database_url=db_url)
     repo.clear_fingerprint(created["id"], database_url=db_url)
     assert repo.get(created["id"], database_url=db_url)["last_fingerprint"] is None
+
+
+def test_a_zone_folder_is_refused_not_an_error():
+    from datetime import timezone
+
+    from zephyr.db.weather_subs import normalise_zone, zone
+
+    assert normalise_zone("America") == ("UTC", False)
+    assert zone("Etc") is timezone.utc

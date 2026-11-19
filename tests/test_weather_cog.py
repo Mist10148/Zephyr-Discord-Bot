@@ -232,3 +232,47 @@ def test_the_dashboard_class_outlook_uses_todays_peak(client, monkeypatch):
     payload = client.get("/api/v1/weather?lat=10.72&lon=122.56").get_json()
 
     assert payload["class_suspension"]["level"] == "likely"
+
+
+class TestThirdAuditCommands:
+    def test_a_failure_after_defer_is_answered(self):
+        """/setlocation and /mylocation hung on "thinking..." after a database error."""
+        from unittest.mock import AsyncMock
+
+        from discord import app_commands
+
+        interaction = MagicMock()
+        interaction.response.is_done.return_value = True
+        interaction.followup.send = AsyncMock()
+        error = app_commands.CommandInvokeError(MagicMock(), RuntimeError("database down"))
+
+        asyncio.run(cog.WeatherCog.cog_app_command_error(cog.WeatherCog.__new__(cog.WeatherCog), interaction, error))
+
+        interaction.followup.send.assert_awaited_once()
+
+    def test_every_city_option_is_bounded(self):
+        commands = [value for value in vars(cog.WeatherCog).values() if hasattr(value, "_params")]
+        options = [param for command in commands for name, param in command._params.items() if name == "city"]
+        assert len(options) >= 11
+        # discord.py keeps a string Range as min_value / max_value (min_length / max_length on the wire).
+        assert all(param.to_dict().get("max_length") == 100 for param in options)
+
+    def test_the_slash_reply_defers_before_reading_the_saved_city(self, monkeypatch):
+        from unittest.mock import AsyncMock
+
+        order = []
+        instance = cog.WeatherCog.__new__(cog.WeatherCog)
+        interaction = MagicMock()
+        interaction.response.defer = AsyncMock(side_effect=lambda: order.append("defer"))
+        interaction.followup.send = AsyncMock()
+
+        async def city_for(_interaction, city):
+            order.append("city")
+            return "Manila"
+
+        async def card(place):
+            return MagicMock()
+
+        instance._city_for = city_for
+        asyncio.run(instance._reply(interaction, None, card))
+        assert order == ["defer", "city"]

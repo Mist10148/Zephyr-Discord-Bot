@@ -7,6 +7,7 @@ prefix commands use, so the two can no longer drift apart.
 """
 
 import asyncio
+import traceback
 from collections import Counter
 from datetime import datetime, timezone, timedelta
 from urllib.parse import quote, urlencode
@@ -529,6 +530,12 @@ def _owm_current(lat: float, lon: float) -> dict:
 # ---------------------------------------------------------------------------
 # Weather Slash Cog
 # ---------------------------------------------------------------------------
+# Longer than any real place name.  Unbounded, a slash option could carry
+# thousands of characters, and the "could not find" reply that repeats it
+# went past Discord's message and embed limits -- so the command hung.
+CityOption = app_commands.Range[str, 1, 100]
+
+
 class WeatherCog(commands.Cog):
     #: Used when a caller gives no city and has set no default of their own.
     #: Iloilo City is the bot's home, and was the hardcoded default before
@@ -563,9 +570,29 @@ class WeatherCog(commands.Cog):
             return SavedPlace(name, stored["lat"], stored["lon"])
         return name
 
+    async def cog_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        """Answer every failed command.
+
+        Without this a database error in /setlocation or /mylocation (after
+        defer) left "Zephyr is thinking..." on screen for good.
+        """
+        if isinstance(error, app_commands.CheckFailure):
+            message = "❌ You can't use that here."
+        else:
+            original = getattr(error, "original", error)
+            traceback.print_exception(type(original), original, original.__traceback__)
+            message = "❌ Something went wrong with that weather command. Try again shortly."
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
+        except Exception as exc:
+            print(f"[Weather] Could not report a command error: {exc}")
+
     @app_commands.command(name="setlocation", description="Set your default city for weather commands.")
     @app_commands.describe(city="Your city, or leave empty to clear it")
-    async def set_location(self, interaction: discord.Interaction, city: str = None):
+    async def set_location(self, interaction: discord.Interaction, city: CityOption = None):
         await interaction.response.defer(ephemeral=True)
         if not city:
             await asyncio.to_thread(clear_bot_user, str(interaction.user.id))
@@ -610,40 +637,40 @@ class WeatherCog(commands.Cog):
             f"📍 Your default city is **{stored['default_city']}**. Clear it with `/setlocation` and no city.",
             ephemeral=True)
 
-    async def _reply(self, interaction: discord.Interaction, build) -> None:
-        """Defer, build the embed, reply: lookups can outlast Discord's 3 seconds."""
+    async def _reply(self, interaction: discord.Interaction, city: str | None, build) -> None:
+        """Defer, find the place, build the embed, reply.
+
+        Deferred *before* the /setlocation read: a slow database start could
+        take the command past Discord's 3 seconds, and the reply then failed.
+        """
         await interaction.response.defer()
-        await interaction.followup.send(embed=await build)
+        place = await self._city_for(interaction, city)
+        await interaction.followup.send(embed=await build(place))
 
     @app_commands.command(name="temperature", description="Get the current temperature of a city.")
     @app_commands.describe(city="City name (defaults to your /setlocation city)")
-    async def slash_temperature(self, interaction: discord.Interaction, city: str = None):
-        city = await self._city_for(interaction, city)
-        await self._reply(interaction, _metric_card(city, "temperature"))
+    async def slash_temperature(self, interaction: discord.Interaction, city: CityOption = None):
+        await self._reply(interaction, city, lambda place: _metric_card(place, "temperature"))
 
     @app_commands.command(name="description", description="Get the weather description of a city.")
     @app_commands.describe(city="City name (defaults to your /setlocation city)")
-    async def slash_description(self, interaction: discord.Interaction, city: str = None):
-        city = await self._city_for(interaction, city)
-        await self._reply(interaction, _metric_card(city, "description"))
+    async def slash_description(self, interaction: discord.Interaction, city: CityOption = None):
+        await self._reply(interaction, city, lambda place: _metric_card(place, "description"))
 
     @app_commands.command(name="humidity", description="Get the humidity of a city.")
     @app_commands.describe(city="City name (defaults to your /setlocation city)")
-    async def slash_humidity(self, interaction: discord.Interaction, city: str = None):
-        city = await self._city_for(interaction, city)
-        await self._reply(interaction, _metric_card(city, "humidity"))
+    async def slash_humidity(self, interaction: discord.Interaction, city: CityOption = None):
+        await self._reply(interaction, city, lambda place: _metric_card(place, "humidity"))
 
     @app_commands.command(name="pressure", description="Get the atmospheric pressure of a city.")
     @app_commands.describe(city="City name (defaults to your /setlocation city)")
-    async def slash_pressure(self, interaction: discord.Interaction, city: str = None):
-        city = await self._city_for(interaction, city)
-        await self._reply(interaction, _metric_card(city, "pressure"))
+    async def slash_pressure(self, interaction: discord.Interaction, city: CityOption = None):
+        await self._reply(interaction, city, lambda place: _metric_card(place, "pressure"))
 
     @app_commands.command(name="windspeed", description="Get the wind speed of a city.")
     @app_commands.describe(city="City name (defaults to your /setlocation city)")
-    async def slash_windspeed(self, interaction: discord.Interaction, city: str = None):
-        city = await self._city_for(interaction, city)
-        await self._reply(interaction, _metric_card(city, "windspeed"))
+    async def slash_windspeed(self, interaction: discord.Interaction, city: CityOption = None):
+        await self._reply(interaction, city, lambda place: _metric_card(place, "windspeed"))
 
     @app_commands.command(name="use", description="Provides a link to the web application version of this bot.")
     async def slash_use(self, interaction: discord.Interaction):
@@ -652,38 +679,35 @@ class WeatherCog(commands.Cog):
 
     @app_commands.command(name="precipitation", description="Get precipitation details for a city.")
     @app_commands.describe(city="City name (defaults to your /setlocation city)")
-    async def slash_precipitation(self, interaction: discord.Interaction, city: str = None):
-        city = await self._city_for(interaction, city)
-        await self._reply(interaction, _metric_card(city, "precipitation"))
+    async def slash_precipitation(self, interaction: discord.Interaction, city: CityOption = None):
+        await self._reply(interaction, city, lambda place: _metric_card(place, "precipitation"))
 
     @app_commands.command(name="typhoon", description="Get the latest typhoon alert for Iloilo City.")
     async def slash_typhoon(self, interaction: discord.Interaction):
-        await self._reply(interaction, _typhoon_card())
+        await interaction.response.defer()
+        await interaction.followup.send(embed=await _typhoon_card())
 
     @app_commands.command(name="air", description="Get the air quality for a specific city.")
     @app_commands.describe(city="City name (defaults to your /setlocation city)")
-    async def slash_air(self, interaction: discord.Interaction, city: str = None):
-        city = await self._city_for(interaction, city)
-        await self._reply(interaction, _air_card(city))
+    async def slash_air(self, interaction: discord.Interaction, city: CityOption = None):
+        await self._reply(interaction, city, lambda place: _air_card(place))
 
     @app_commands.command(name="weather", description="Get current weather, air quality, and precipitation for a city.")
     @app_commands.describe(city="City name (defaults to your /setlocation city)")
-    async def slash_weather(self, interaction: discord.Interaction, city: str = None):
-        city = await self._city_for(interaction, city)
-        await self._reply(interaction, _current_card(city))
+    async def slash_weather(self, interaction: discord.Interaction, city: CityOption = None):
+        await self._reply(interaction, city, lambda place: _current_card(place))
 
     @app_commands.command(name="forecast", description="Get a clean 3-day forecast for a city.")
     @app_commands.describe(city="City name (defaults to your /setlocation city)")
-    async def slash_forecast(self, interaction: discord.Interaction, city: str = None):
-        city = await self._city_for(interaction, city)
+    async def slash_forecast(self, interaction: discord.Interaction, city: CityOption = None):
         await interaction.response.defer()
+        city = await self._city_for(interaction, city)
         await _send_paginated_embeds(interaction, await _forecast_pages(city))
 
     @app_commands.command(name="search", description="Search for current weather and air quality in a city.")
     @app_commands.describe(city="City name (defaults to your /setlocation city)")
-    async def slash_search(self, interaction: discord.Interaction, city: str = None):
-        city = await self._city_for(interaction, city)
-        await self._reply(interaction, _current_card(city))
+    async def slash_search(self, interaction: discord.Interaction, city: CityOption = None):
+        await self._reply(interaction, city, lambda place: _current_card(place))
 
     @app_commands.command(name="ping", description="Shows the bot's ping")
     async def slash_ping(self, interaction: discord.Interaction):

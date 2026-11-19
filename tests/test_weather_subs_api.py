@@ -62,6 +62,7 @@ class TestCreate:
             {"kind": "hurricane"},
             {"channel_id": "not-an-id"},
             {"tz": "Middle/Earth"},
+            {"tz": "America"},          # a zone folder: PermissionError / IsADirectoryError
             {"schedule_local_time": "breakfast"},
             {"units": "kelvin"},
         ],

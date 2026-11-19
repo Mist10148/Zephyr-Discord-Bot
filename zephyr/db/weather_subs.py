@@ -60,7 +60,9 @@ def zone(name: str | None):
     """
     try:
         return ZoneInfo(name or "UTC")
-    except (ZoneInfoNotFoundError, ValueError, ModuleNotFoundError):
+    # OSError: a zone *folder* such as "America" raises PermissionError on
+    # Windows and IsADirectoryError on Linux, which was a 500 on the dashboard.
+    except (ZoneInfoNotFoundError, ValueError, ModuleNotFoundError, OSError):
         return timezone.utc
 
 
@@ -75,7 +77,9 @@ def normalise_zone(name: str | None) -> tuple[str, bool]:
     try:
         ZoneInfo(candidate)
         return candidate, True
-    except (ZoneInfoNotFoundError, ValueError, ModuleNotFoundError):
+    # OSError: a zone *folder* such as "America" raises PermissionError on
+    # Windows and IsADirectoryError on Linux, which was a 500 on the dashboard.
+    except (ZoneInfoNotFoundError, ValueError, ModuleNotFoundError, OSError):
         return "UTC", False
 
 
