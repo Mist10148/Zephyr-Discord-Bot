@@ -16,6 +16,7 @@ new one.
 import hashlib
 import json
 import math
+from datetime import datetime, timedelta, timezone
 
 from zephyr.utils.weather_utils import (
     UNIT_LABELS,
@@ -146,6 +147,29 @@ def is_repeat(alert: dict, last_fingerprint: str | None) -> bool:
     if new is None or old is None or not _same_event(new, old):
         return False
     return all(key in old["levels"] and value <= old["levels"][key] for key, value in new["levels"].items())
+
+
+def should_forget(kind: str, last_fired_at: datetime | None, now: datetime | None = None) -> bool:
+    """Whether a quiet tick ends the watch, so the next alert is news again.
+
+    One quiet tick used to be enough, so a reading wobbling across its
+    threshold (today's heat peak 38.3 -> 37.8 -> 38.1 °C, rain 80 -> 75 -> 85 %)
+    posted the same watch again on every return.
+
+    * A class watch is about one day and its fingerprint carries the date, so
+      tomorrow is already news; nothing needs forgetting.
+    * A severe watch covers the next ``SEVERE_HOURS``.  Quiet *after* that
+      window is a new event; quiet inside it is the same weather wavering.
+    """
+    if kind == "class_suspension":
+        return False
+    if last_fired_at is None:
+        return True
+    if last_fired_at.tzinfo is None:
+        # SQLite hands back naive UTC.
+        last_fired_at = last_fired_at.replace(tzinfo=timezone.utc)
+    now = now or datetime.now(timezone.utc)
+    return now - last_fired_at >= timedelta(hours=SEVERE_HOURS)
 
 
 def fingerprint_to_store(alert: dict, last_fingerprint: str | None) -> str:

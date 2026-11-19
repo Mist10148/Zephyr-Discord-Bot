@@ -242,3 +242,30 @@ def test_a_cold_day_adds_no_classes_line_to_the_digest():
     assert all("Classes" not in field.name for field in cog_module.alert_embed(alert).fields)
     alert["class_suspension"] = {"level": "likely", "reason": "Extreme Heat"}
     assert any("Classes" in field.name for field in cog_module.alert_embed(alert).fields)
+
+
+def test_a_quiet_tick_inside_the_severe_window_keeps_the_watch(monkeypatch, fired):
+    """Rain wobbling 80 -> 75 -> 85 % posted the same storm twice."""
+    from datetime import datetime, timedelta, timezone
+
+    cleared = []
+    monkeypatch.setattr(cog_module, "evaluate", lambda *a, **k: None)
+    monkeypatch.setattr(cog_module, "clear_fingerprint", lambda sub_id: cleared.append(sub_id))
+    recent = datetime.now(timezone.utc) - timedelta(hours=1)
+    old = (datetime.now(timezone.utc) - timedelta(hours=13)).replace(tzinfo=None)  # SQLite-naive
+
+    _deliver(WeatherAlertsCog(FakeBot(FakeChannel())), _sub(last_fingerprint="abc", last_run_at=recent), dedupe=True)
+    assert cleared == []
+    _deliver(WeatherAlertsCog(FakeBot(FakeChannel())), _sub(last_fingerprint="abc", last_run_at=old), dedupe=True)
+    assert cleared == [7]
+
+
+def test_a_quiet_tick_never_clears_a_class_watch(monkeypatch, fired):
+    """Its fingerprint carries the date; clearing made a wobbling peak repost the same day."""
+    cleared = []
+    monkeypatch.setattr(cog_module, "evaluate", lambda *a, **k: None)
+    monkeypatch.setattr(cog_module, "clear_fingerprint", lambda sub_id: cleared.append(sub_id))
+
+    _deliver(WeatherAlertsCog(FakeBot(FakeChannel())),
+             _sub(kind="class_suspension", last_fingerprint="abc", last_run_at=None), dedupe=True)
+    assert cleared == []

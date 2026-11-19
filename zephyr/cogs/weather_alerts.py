@@ -43,6 +43,7 @@ from zephyr.utils.weather_alerts import (
     fingerprint_to_store,
     is_heat_advisory,
     is_repeat,
+    should_forget,
 )
 from zephyr.utils.weather_utils import (
     WeatherProviderError,
@@ -224,9 +225,11 @@ class WeatherAlertsCog(commands.Cog):
             thresholds=subscription.get("thresholds"),
         )
         if alert is None:
-            if dedupe and subscription.get("last_fingerprint"):
-                # Quiet again: the next storm or heat peak is news, even if it
-                # looks exactly like the last one.
+            if (dedupe and subscription.get("last_fingerprint")
+                    and should_forget(subscription["kind"], subscription.get("last_run_at"))):
+                # Quiet past the watch's window: the next storm is news, even if
+                # it looks exactly like the last one.  Quiet *inside* it is the
+                # same weather wavering, and forgetting then reposted it.
                 await asyncio.to_thread(clear_fingerprint, subscription["id"])
             return True
         if dedupe and is_repeat(alert, subscription.get("last_fingerprint")):
