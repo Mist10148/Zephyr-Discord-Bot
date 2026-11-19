@@ -1857,6 +1857,12 @@ class VoiceState:
             return True
 
 
+# A search or lyrics query.  Unbounded, a 6,000-character query came back in
+# the error embed and pushed it past Discord's 4,096 characters, so the user
+# saw "Something went wrong" instead of the reason.
+QueryOption = app_commands.Range[str, 1, 200]
+
+
 class MusicCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -2759,7 +2765,7 @@ class MusicCog(commands.Cog):
 
     @app_commands.command(name='msearch', description='Search YouTube and pick a track to play.')
     @app_commands.describe(query="What to search for")
-    async def msearch(self, interaction: discord.Interaction, query: str):
+    async def msearch(self, interaction: discord.Interaction, query: QueryOption):
         if not interaction.user.voice or not interaction.user.voice.channel:
             await interaction.response.send_message("❌ You need to be in a voice channel to play music.", ephemeral=True)
             return
@@ -3178,8 +3184,10 @@ class MusicCog(commands.Cog):
             return
         ctx = await self._interaction_ctx(interaction)
         state = self.get_voice_state(ctx)
-        if not state.is_playing:
-            await interaction.response.send_message("Nothing is being played at the moment.", ephemeral=True)
+        # Connected is enough: the volume carries over to the next track, and
+        # the dashboard already allowed it between songs.
+        if not state.voice or not state.voice.is_connected():
+            await interaction.response.send_message("Not connected to any voice channel.", ephemeral=True)
             return
         if not 0 <= volume <= 1000:
             await interaction.response.send_message("Volume must be between 0 and 1000.", ephemeral=True)
@@ -3565,7 +3573,7 @@ class MusicCog(commands.Cog):
 
     @app_commands.command(name='lyrics', description='Shows lyrics for the current song or a search query.')
     @app_commands.describe(query="Song title/artist (leave empty for current song)")
-    async def lyrics(self, interaction: discord.Interaction, query: str = None):
+    async def lyrics(self, interaction: discord.Interaction, query: QueryOption = None):
         ctx = await self._interaction_ctx(interaction)
         state = self.get_voice_state(ctx)
 

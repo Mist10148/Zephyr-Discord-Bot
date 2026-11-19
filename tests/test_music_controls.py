@@ -611,3 +611,28 @@ async def test_a_dashboard_playlist_load_past_its_deadline_queues_nothing(monkey
     finally:
         bridge.command_deadline.reset(token)
     assert len(state.songs) == 0
+
+
+@pytest.mark.asyncio
+async def test_volume_can_be_set_between_songs():
+    """The dashboard allowed it; /volume said "Nothing is being played"."""
+    state = VoiceState(MagicMock(), guild_id=1)
+    state.voice = MagicMock()
+    state.voice.is_connected.return_value = True
+    cog = MusicCog.__new__(MusicCog)
+    cog._gate = AsyncMock(return_value=True)
+    cog._interaction_ctx = AsyncMock(return_value=SimpleNamespace())
+    cog.get_voice_state = MagicMock(return_value=state)
+    interaction = SimpleNamespace(response=SimpleNamespace(send_message=AsyncMock()))
+
+    await MusicCog.volume.callback(cog, interaction, volume=80)
+
+    assert state.volume == 0.8
+    assert "80%" in interaction.response.send_message.await_args.kwargs["embed"].description
+
+
+@pytest.mark.parametrize("command", ["msearch", "lyrics"])
+def test_search_queries_are_bounded(command):
+    """A 6,000-character query pushed the error reply past 4,096 characters."""
+    parameter = next(p for p in getattr(MusicCog, command).parameters if p.name == "query")
+    assert parameter.max_value == 200
