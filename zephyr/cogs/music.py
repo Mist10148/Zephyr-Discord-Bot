@@ -2066,6 +2066,16 @@ class MusicCog(commands.Cog):
                 raise VoiceError("You are not connected to a voice channel.")
         return member
 
+    @staticmethod
+    def _member_of(guild, actor_id):
+        """The cached member for ``actor_id``, or None -- never an API fetch."""
+        if guild is None:
+            return None
+        try:
+            return guild.get_member(int(actor_id))
+        except (TypeError, ValueError):
+            return None
+
     def _may_force_skip(self, state: 'VoiceState', member) -> bool:
         """Who skips at once rather than voting: the requester, a DJ, a manager."""
         if state.current is not None and member.id == state.current.requester_id:
@@ -2153,7 +2163,13 @@ class MusicCog(commands.Cog):
         return {'paused': False}
 
     async def _bridge_skip(self, guild, actor_id, args):
-        self._authorize(guild, actor_id)
+        state = self.peek_voice_state(guild.id) if guild is not None else None
+        member = self._member_of(guild, actor_id)
+        # Whoever queued the song may always skip it (README, PRD), even when a
+        # DJ role gates every other control: the ⏭️ button used to refuse them.
+        if not (state is not None and state.current is not None and member is not None
+                and member.id == state.current.requester_id):
+            self._authorize(guild, actor_id)
         state = self._require_state(guild.id)
         if not state.is_playing:
             raise VoiceError("Nothing is playing.")
@@ -2688,8 +2704,9 @@ class MusicCog(commands.Cog):
         if not interaction.user.voice or not interaction.user.voice.channel:
             await interaction.followup.send("❌ You need to be in a voice channel.", ephemeral=True)
             return False
-        ctx = await self._interaction_ctx(interaction)
-        state = self.get_voice_state(ctx, sticky=True)
+        # Not Context.from_interaction: a select-menu interaction carries no
+        # command data, so that raised and no /msearch pick was ever queued.
+        state = self.ensure_voice_state(interaction.guild.id, channel_id=interaction.channel_id, sticky=True)
         await self._connect(state, interaction.guild, interaction.user.voice.channel)
         state.start_player()
         state.songs.put_nowait(track)
@@ -2766,6 +2783,13 @@ class MusicCog(commands.Cog):
         state = self.get_voice_state(ctx)
         if not state.is_playing:
             await interaction.response.send_message("Not playing any music right now...", ephemeral=True)
+            return
+        if self._may_force_skip(state, interaction.user):
+            # The requester, a DJ or a server manager skip at once, as README
+            # and the ⏭️ button say; /skip used to make a DJ vote like anyone.
+            state.skip()
+            await interaction.response.send_message(
+                embed=discord.Embed(description='⏭️ Skipped.', color=discord.Color.green()))
             return
         outcome, text = state.vote_skip(interaction.user)
         if outcome in ('not_listening', 'already_voted'):

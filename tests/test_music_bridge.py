@@ -312,3 +312,26 @@ class TestBridgeActions:
         # The read-only actions are passed through unwrapped; the rest are not.
         assert actions["player.state"] == cog._bridge_state
         assert actions["player.skip"] != cog._bridge_skip
+
+
+class TestSkipButtonRequester:
+    @pytest.mark.asyncio
+    async def test_the_requester_skips_their_own_song_under_a_dj_role(self):
+        state = _state()
+        member = _member(member_id=42)
+        state.current = Track(title="Mine", url="http://m", requester_id=42)
+        cog = _cog({1: state}, dj_role_id="77")
+
+        result = await cog._bridge_skip(_guild(member), "42", {})
+
+        assert result == {"skipped": "Mine"}
+
+    @pytest.mark.asyncio
+    async def test_anyone_else_still_needs_the_dj_role(self):
+        state = _state()
+        member = _member(member_id=43)
+        state.current = Track(title="Theirs", url="http://t", requester_id=42)
+        cog = _cog({1: state}, dj_role_id="77")
+
+        with pytest.raises(VoiceError, match="DJ role"):
+            await cog._bridge_skip(_guild(member), "43", {})

@@ -417,3 +417,52 @@ def test_a_song_opened_from_a_mix_queues_only_that_song():
     playlist = "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL1234567890"
     assert _drop_auto_mix(playlist) == playlist
     assert _drop_auto_mix("lofi beats") == "lofi beats"
+
+
+@pytest.mark.asyncio
+async def test_an_msearch_pick_queues_without_command_data():
+    """A select-menu interaction has no command; Context.from_interaction raised on it."""
+    cog = _cog()
+    state = VoiceState(MagicMock(), guild_id=1)
+    state.start_player = MagicMock()
+    seen = {}
+
+    def ensure(guild_id, *, channel_id=None, sticky=False):
+        seen.update(guild_id=guild_id, channel_id=channel_id, sticky=sticky)
+        return state
+
+    cog.ensure_voice_state = ensure
+    cog._connect = AsyncMock()
+    interaction = MagicMock()
+    interaction.command = None
+    interaction.guild.id = 1
+    interaction.channel_id = 42
+    track = Track(title="picked")
+
+    assert await cog._enqueue_track(interaction, track) is True
+    assert seen == {"guild_id": 1, "channel_id": 42, "sticky": True}
+    assert list(state.songs) == [track]
+
+
+@pytest.mark.asyncio
+async def test_slash_skip_is_instant_for_a_dj():
+    cog = _cog()
+    cog._dj_role_ids = {1: "77"}
+    state = VoiceState(MagicMock(), guild_id=1)
+    state.voice = MagicMock()
+    state.voice.channel = "vc"
+    state._skip_threshold = lambda: 5
+    state.skip = MagicMock()
+    state.current = Track(title="t", requester_id=1)
+    cog.get_voice_state = lambda ctx, sticky=False: state
+    cog._interaction_ctx = AsyncMock()
+    dj = _voter(4, channel="somewhere else")
+    dj.roles = [SimpleNamespace(id=77)]
+    interaction = MagicMock()
+    interaction.user = dj
+    interaction.response.send_message = AsyncMock()
+
+    await MusicCog.skip.callback(cog, interaction)
+
+    state.skip.assert_called_once()
+    assert not state.skip_votes
