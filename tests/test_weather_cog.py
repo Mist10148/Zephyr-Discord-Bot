@@ -82,6 +82,25 @@ class TestOwmDayGrouping:
         assert [day["date"] for day in days] == [local_today.strftime("%Y-%m-%d")]
 
 
+    def test_late_at_night_the_forecast_still_has_its_days(self, monkeypatch):
+        """With no slot left today, /forecast showed a "2-day forecast"."""
+        utc = timezone.utc
+        tomorrow = datetime.now(utc).date() + timedelta(days=1)
+        slots = [datetime.combine(tomorrow + timedelta(days=offset), datetime.min.time(), utc) + timedelta(hours=12)
+                 for offset in range(4)]
+        payload = {
+            "cod": "200",
+            "city": {"timezone": 0},
+            "list": [{"dt": int(slot.timestamp()), "main": {"temp": 30, "feels_like": 33},
+                      "wind": {"speed": 2}, "pop": 0.2, "weather": [{"main": "Clouds"}]} for slot in slots],
+        }
+        monkeypatch.setattr(cog.requests, "get", lambda *a, **k: MagicMock(status_code=200, json=lambda: payload))
+
+        days = cog._owm_daily_forecast(lat=0, lon=0, days=3)
+
+        assert len(days) == 3
+        assert days[0]["date"] == tomorrow.strftime("%Y-%m-%d")
+
 class TestNoKeyLeaks:
     def test_owm_errors_never_include_the_request_url(self, monkeypatch):
         response = MagicMock(status_code=401, json=lambda: {"cod": 401, "message": "Invalid API key"})
@@ -276,3 +295,11 @@ class TestThirdAuditCommands:
         instance._city_for = city_for
         asyncio.run(instance._reply(interaction, None, card))
         assert order == ["defer", "city"]
+
+
+def test_a_zone_folder_from_the_provider_falls_back_to_the_offset():
+    """ZoneInfo("America") raises an OSError, which became an HTML 500."""
+    from website.api.weather import _zone
+
+    fixed = _zone({"timezone": "America"}, 3600)
+    assert fixed.utcoffset(None) == timedelta(hours=1)

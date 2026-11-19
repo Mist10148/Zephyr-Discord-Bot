@@ -484,10 +484,14 @@ def _owm_daily_forecast(city: str = None, lat: float = None, lon: float = None, 
         entry["winds"].append((wind.get("speed") or 0) * 3.6)
         entry["pops"].append(pop)
 
-    today = datetime.now(local).date()
+    today = datetime.now(local).date().strftime("%Y-%m-%d")
     result = []
-    for i in range(days):
-        date = (today + timedelta(days=i)).strftime("%Y-%m-%d")
+    # The days the provider has, from today on, until ``days`` are filled.
+    # Counting calendar days from today lost one late at night, when no
+    # 3-hour slot is left for today: /forecast showed a "2-day forecast".
+    for date in sorted(day for day in grouped if day >= today):
+        if len(result) >= days:
+            break
         g = grouped.get(date)
         temps = [t for t in (g or {}).get("temps", []) if t is not None]
         if not temps:

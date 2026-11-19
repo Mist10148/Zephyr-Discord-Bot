@@ -31,7 +31,9 @@ def _zone(bundle: dict, offset: int):
     """
     try:
         return ZoneInfo(bundle.get("timezone") or "")
-    except (ZoneInfoNotFoundError, ValueError, ModuleNotFoundError):
+    # OSError: a zone *folder* ("America") raises PermissionError or
+    # IsADirectoryError, which escaped as an HTML 500 (W30 fixed the others).
+    except (ZoneInfoNotFoundError, ValueError, ModuleNotFoundError, OSError):
         return timezone(timedelta(seconds=offset))
 
 
