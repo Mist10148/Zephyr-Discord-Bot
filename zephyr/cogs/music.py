@@ -562,7 +562,21 @@ class YTDLSource(discord.PCMVolumeTransformer):
         'options': '-vn',
     }
 
-    ytdl = yt_dlp.YoutubeDL(YTDL_OPTIONS)
+    # One YoutubeDL per worker thread, not one shared by all four: an instance
+    # carries per-call state (playlist recursion, cookies, extractor caches) and
+    # is not thread-safe, so concurrent lookups could corrupt each other.
+    # Tests replace ``ytdl`` with a double, which is then used as is.
+    ytdl = None
+    _ytdl_local = threading.local()
+
+    @classmethod
+    def _ytdl(cls):
+        if cls.ytdl is not None:
+            return cls.ytdl
+        instance = getattr(cls._ytdl_local, 'instance', None)
+        if instance is None:
+            instance = cls._ytdl_local.instance = yt_dlp.YoutubeDL(cls.YTDL_OPTIONS)
+        return instance
 
     def __init__(self, source: discord.FFmpegPCMAudio, *, data: dict, diagnostics: _FFmpegDiagnostics,
                  volume: float = 0.5):
@@ -645,7 +659,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
         for the whole lookup, outside any timeout -- and a 2,000-video playlist
         was read to the end before being cut to 200.
         """
-        data = cls.ytdl.extract_info(query, download=False, process=process)
+        data = cls._ytdl().extract_info(query, download=False, process=process)
         if isinstance(data, dict) and data.get('entries') is not None:
             entries = data['entries']
             if not isinstance(entries, list):

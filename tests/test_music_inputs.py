@@ -556,7 +556,7 @@ async def test_a_hung_flat_lookup_times_out(monkeypatch):
     import zephyr.cogs.music as music
 
     monkeypatch.setattr(music, "FLAT_EXTRACT_TIMEOUT_SECONDS", 0.05)
-    monkeypatch.setattr(YTDLSource.ytdl, "extract_info", lambda *a, **k: __import__("time").sleep(0.5))
+    monkeypatch.setattr(YTDLSource, "ytdl", MagicMock(extract_info=lambda *a, **k: __import__("time").sleep(0.5)))
     with pytest.raises(YTDLError, match="timed out"):
         await YTDLSource.resolve_tracks("anything", loop=asyncio.get_event_loop())
 
@@ -638,3 +638,27 @@ def test_overflowing_times_are_a_value_error(value):
 def test_ordinary_times_still_parse(value, seconds):
     from zephyr.utils.time_utils import _parse_user_time
     assert _parse_user_time(value) == seconds
+
+
+def test_each_worker_thread_gets_its_own_youtube_dl():
+    """YoutubeDL is not thread-safe; four workers shared one instance."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    assert YTDLSource.ytdl is None
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first, second = pool.map(lambda _: (__import__("time").sleep(0.05), id(YTDLSource._ytdl()))[1], range(2))
+    assert first != second
+    assert id(YTDLSource._ytdl()) == id(YTDLSource._ytdl())
+
+
+def test_a_relative_ffmpeg_path_is_read_from_the_project_root(monkeypatch, tmp_path):
+    import zephyr.core.ffmpeg as ffmpeg
+
+    exe = tmp_path / "tools" / "ffmpeg-custom"
+    exe.parent.mkdir()
+    exe.write_text("")
+    monkeypatch.setattr(ffmpeg, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(ffmpeg, "FFMPEG_PATH_OVERRIDE", "tools/ffmpeg-custom")
+    monkeypatch.chdir(tmp_path.parent)
+
+    assert ffmpeg.get_ffmpeg_path() == str(tmp_path / "tools" / "ffmpeg-custom")
