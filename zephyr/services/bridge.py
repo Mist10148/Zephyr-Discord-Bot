@@ -220,7 +220,11 @@ def send_command(
             # skips once the bot caught up.
             "expires_at": time.time() + timeout,
         }
-        client.publish(COMMAND_CHANNEL, json.dumps(envelope))
+        if client.publish(COMMAND_CHANNEL, json.dumps(envelope)) == 0:
+            # Nobody is subscribed: the bot is offline.  Waiting out the whole
+            # timeout held a web worker thread for 20 s per click, and a few
+            # clicks froze the site.
+            raise BridgeTimeout("Zephyr is offline right now.")
 
         deadline = time.monotonic() + timeout
         while True:

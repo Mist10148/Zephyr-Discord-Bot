@@ -196,7 +196,9 @@ class FakeRedis:
                 subscriber.deliver(channel, data)
                 delivered += 1
         if self.on_publish is not None:
+            # The hook stands in for a subscribed bot.
             self.on_publish(channel, data)
+            delivered += 1
         return delivered
 
     def close(self):

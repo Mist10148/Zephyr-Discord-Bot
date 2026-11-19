@@ -375,6 +375,18 @@ class YTDLError(Exception):
     pass
 
 
+def _refuse_past_deadline() -> None:
+    """Refuse to change the queue once a dashboard caller has stopped waiting.
+
+    The dashboard has already shown "did not respond"; queueing now would
+    surprise the user, and a retry would queue it twice.  No deadline (a slash
+    command) never refuses.
+    """
+    deadline = bridge.command_deadline.get()
+    if deadline is not None and time.time() > deadline:
+        raise VoiceError("That took too long, so nothing was queued. Try again.")
+
+
 class InternalLinkError(YTDLError):
     """A link to this host or a private network.  Never retried by title."""
 
@@ -2428,11 +2440,7 @@ class MusicCog(commands.Cog):
         tracks = await self._resolve_query(query, requester_id=member.id, requester_mention=member.mention)
         if not tracks:
             raise VoiceError("Nothing found for that query.")
-        deadline = bridge.command_deadline.get()
-        if deadline is not None and time.time() > deadline:
-            # The dashboard has already shown "did not respond"; queueing now
-            # would surprise the user, and a retry would queue it twice.
-            raise VoiceError("That took too long, so nothing was queued. Try again.")
+        _refuse_past_deadline()
         state = await self._live_state(state, guild, destination)
         if str(args.get('mode')) == 'next':
             for track in reversed(tracks):
@@ -3451,6 +3459,9 @@ class MusicCog(commands.Cog):
         else:
             state = self.ensure_voice_state(guild.id)
         await self._connect(state, guild, destination)
+        # A slow voice connect could outlast the dashboard's wait; loading the
+        # playlist after its "did not respond" made a retry load it twice.
+        _refuse_past_deadline()
         self._ensure_np_channel(state, guild)
         state.start_player()
 

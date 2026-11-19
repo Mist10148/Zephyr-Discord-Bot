@@ -585,3 +585,29 @@ async def test_a_dashboard_play_past_its_deadline_queues_nothing(monkeypatch):
     finally:
         bridge.command_deadline.reset(token)
     assert len(state.songs) == 0
+
+
+@pytest.mark.asyncio
+async def test_a_dashboard_playlist_load_past_its_deadline_queues_nothing(monkeypatch):
+    """A slow voice connect outlasted the dashboard's wait and a retry loaded twice."""
+    import time as _time
+
+    from zephyr.cogs.music import VoiceError
+    from zephyr.services import bridge
+
+    cog = _cog()
+    state = VoiceState(MagicMock(), guild_id=1)
+    state.start_player = MagicMock()
+    cog.ensure_voice_state = MagicMock(return_value=state)
+    cog._connect = AsyncMock()
+    cog._ensure_np_channel = MagicMock()
+    member = SimpleNamespace(id=5, mention="<@5>", voice=None)
+    playlist = {"tracks": [{"title": "a", "url": None, "duration_s": 1, "source": "youtube"}]}
+
+    token = bridge.command_deadline.set(_time.time() - 1)
+    try:
+        with pytest.raises(VoiceError, match="took too long"):
+            await cog._enqueue_playlist(SimpleNamespace(id=1), member, object(), playlist)
+    finally:
+        bridge.command_deadline.reset(token)
+    assert len(state.songs) == 0

@@ -127,6 +127,7 @@ def test_a_refusal_is_an_error_not_a_result(fake_redis):
 
 
 def test_no_answer_times_out_rather_than_hanging(fake_redis):
+    fake_redis.on_publish = lambda channel, raw: None  # listening, never answering
     started = time.monotonic()
     with pytest.raises(bridge.BridgeTimeout):
         bridge.send_command("player.skip", guild_id="1", actor_id="42", timeout=0.1)
@@ -255,3 +256,11 @@ def _run_soon(bot, command):
     import asyncio
 
     asyncio.run(bot._dispatch_command(command))
+
+
+def test_with_no_bot_listening_the_command_fails_at_once(fake_redis):
+    """Waiting out the timeout held a web worker for 20 s per click."""
+    started = time.monotonic()
+    with pytest.raises(bridge.BridgeTimeout, match="offline"):
+        bridge.send_command("player.skip", guild_id="1", actor_id="42", timeout=5)
+    assert time.monotonic() - started < 1

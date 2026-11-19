@@ -103,4 +103,5 @@ async def test_a_handler_can_see_when_its_caller_gives_up(monkeypatch):
     await asyncio.create_task(bot._dispatch_command(
         {"id": "x", "action": "player.play", "args": {}, "expires_at": expires}))
 
-    assert seen == [expires + client_module.COMMAND_EXPIRY_GRACE_SECONDS]
+    # Before the caller gives up, not after: past it the reply reaches nobody.
+    assert seen == [expires - client_module.COMMAND_REPLY_MARGIN_SECONDS]

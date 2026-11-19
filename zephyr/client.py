@@ -39,6 +39,11 @@ async def type_print(text, delay=0.03):
 # Allowance for clock skew between the web and bot hosts when deciding a
 # bridge command has expired.
 COMMAND_EXPIRY_GRACE_SECONDS = 2.0
+# How long before the caller gives up a handler must stop and answer.  The grace
+# above is for *dropping* a late command; a handler deciding whether to act must
+# finish before the caller stops listening, or a request reported as failed
+# still happens and a retry does it twice.
+COMMAND_REPLY_MARGIN_SECONDS = 1.0
 
 
 class ZephyrBot(commands.Bot):
@@ -219,7 +224,7 @@ class ZephyrBot(commands.Bot):
                 raise LookupError(f"Unknown action {command['action']!r}")
             guild = self.get_guild(int(command["guild_id"])) if command.get("guild_id") else None
             if isinstance(expires_at, (int, float)):
-                bridge.command_deadline.set(expires_at + COMMAND_EXPIRY_GRACE_SECONDS)
+                bridge.command_deadline.set(expires_at - COMMAND_REPLY_MARGIN_SECONDS)
             data = await handler(guild, command.get("actor_id"), command.get("args") or {})
             await asyncio.to_thread(bridge.publish_response, command_id, ok=True, data=data or {})
         except Exception as e:
