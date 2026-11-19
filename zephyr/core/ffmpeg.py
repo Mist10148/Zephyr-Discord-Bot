@@ -41,7 +41,12 @@ def get_ffmpeg_path():
         override = os.path.expanduser(FFMPEG_PATH_OVERRIDE)
         if not os.path.isabs(override):
             override = os.path.normpath(os.path.join(str(PROJECT_ROOT), override))
-        if os.path.exists(override):
+        # README says to drop the binaries in a folder "or point FFMPEG_PATH at
+        # it", so a folder means the executable inside it.  exists() accepted
+        # the folder itself, and every track then failed with no warning.
+        if os.path.isdir(override):
+            override = os.path.join(override, ffmpeg_exe_name)
+        if os.path.isfile(override):
             return override
         _log.warning("FFMPEG_PATH=%s was not found; looking elsewhere.", FFMPEG_PATH_OVERRIDE)
 

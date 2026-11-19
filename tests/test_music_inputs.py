@@ -744,3 +744,26 @@ async def test_a_direct_file_on_a_name_pointing_inside_is_refused(monkeypatch):
         with pytest.raises(YTDLError, match="private or local"):
             await YTDLSource.from_track(track, loop=asyncio.get_event_loop())
     make.assert_not_called()
+
+
+def test_ffmpeg_path_may_name_the_folder_holding_ffmpeg(tmp_path, monkeypatch):
+    """A folder used to be accepted as the executable, and every track failed."""
+    import os
+
+    from zephyr.core import ffmpeg
+
+    name = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+    folder = tmp_path / "bin"
+    folder.mkdir()
+    (folder / name).write_text("")
+    monkeypatch.setattr(ffmpeg, "FFMPEG_PATH_OVERRIDE", str(folder))
+
+    assert ffmpeg.get_ffmpeg_path() == str(folder / name)
+
+
+def test_a_folder_without_ffmpeg_is_not_used(tmp_path, monkeypatch):
+    from zephyr.core import ffmpeg
+
+    monkeypatch.setattr(ffmpeg, "FFMPEG_PATH_OVERRIDE", str(tmp_path))
+    monkeypatch.setattr(ffmpeg, "PROJECT_ROOT", tmp_path)
+    assert ffmpeg.get_ffmpeg_path() != str(tmp_path)
