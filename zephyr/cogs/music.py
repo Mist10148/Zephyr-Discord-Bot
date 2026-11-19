@@ -11,7 +11,6 @@ import asyncio
 import copy
 import dataclasses
 import functools
-import ipaddress
 import itertools
 import logging
 import shlex
@@ -50,6 +49,7 @@ from zephyr.services.spotify import (
     parse_spotify_id,
     resolve_short_link,
 )
+from zephyr.utils.net import is_internal_host
 from zephyr.utils.time_utils import _parse_user_time, _format_timestamp
 
 
@@ -118,15 +118,9 @@ def _is_internal_url(search: str) -> bool:
         host = (urlsplit(_sanitize_search(search)).hostname or '').strip('[]').lower()
     except ValueError:
         return True
-    if not host:
-        return False
-    if host == 'localhost' or host.endswith(('.localhost', '.local', '.internal')):
-        return True
-    try:
-        address = ipaddress.ip_address(host)
-    except ValueError:
-        return False
-    return not address.is_global
+    # Shared with the website, and it also understands 127.1, 2130706433 and
+    # 0x7f000001 -- forms getaddrinfo resolves to localhost but ipaddress rejects.
+    return is_internal_host(host)
 
 
 def _refuse_internal(search: str) -> None:
@@ -274,6 +268,24 @@ def _coerce_float(value, name: str) -> float:
     return number
 
 
+def _coerce_bool(value, name: str) -> bool:
+    """Read one on/off flag out of a bridge command's args.
+
+    ``bool("false")`` is True, so a browser sending the string turned an effect
+    on (or reset every effect) instead of off.  Only real booleans, 0/1 and the
+    obvious words are accepted.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str) and value.strip().lower() in {'true', 'on', 'yes', '1'}:
+        return True
+    if isinstance(value, str) and value.strip().lower() in {'false', 'off', 'no', '0'}:
+        return False
+    raise VoiceError(f"`{name}` must be true or false.")
+
+
 # Effect name -> the VoiceState attribute it toggles, and what it excludes.
 _TOGGLE_EFFECTS = {
     'nightcore': ('_nightcore_enabled', ('_vaporwave_enabled',)),
@@ -306,16 +318,19 @@ def _apply_effects(state: 'VoiceState', args: dict) -> None:
         if not -20 <= boost <= 20:
             raise VoiceError("Bass boost must be between -20 and 20 dB.")
 
-    if args.get('reset'):
+    reset = _coerce_bool(args.get('reset', False), 'reset')
+    toggles = {name: _coerce_bool(args[name], name) for name in _TOGGLE_EFFECTS if name in args}
+
+    if reset:
         for attribute, _ in _TOGGLE_EFFECTS.values():
             setattr(state, attribute, False)
         state._pitch = 1.0
         state._bass_boost = None
 
     for name, (attribute, excludes) in _TOGGLE_EFFECTS.items():
-        if name not in args:
+        if name not in toggles:
             continue
-        enabled = bool(args[name])
+        enabled = toggles[name]
         setattr(state, attribute, enabled)
         if enabled:
             for other in excludes:
@@ -768,10 +783,12 @@ class YTDLSource(discord.PCMVolumeTransformer):
             before = options.get('before_options', '')
             options['before_options'] = f"{before} -ss {seek}".strip()
 
+        # Saved playlists are editable from the web, so every stored link is
+        # checked again here -- not only direct files: yt-dlp's generic
+        # extractor fetches any URL it is handed.
+        _refuse_internal(track.url or '')
         if track.source == 'file':
             # Direct media: hand the URL straight to FFmpeg, no extraction.
-            # Saved playlists are editable from the web, so check again here.
-            _refuse_internal(track.url or '')
             return cls._make_ffmpeg_source(track.url, data={'url': track.url, 'title': track.title},
                                            options=options, volume=volume)
 
@@ -3406,7 +3423,7 @@ class MusicCog(commands.Cog):
     async def _bridge_autoplay(self, guild, actor_id, args):
         self._authorize(guild, actor_id)
         state = self._require_state(guild.id)
-        state._autoplay_enabled = bool(args.get('enabled'))
+        state._autoplay_enabled = _coerce_bool(args.get('enabled', False), 'enabled')
         return {'autoplay': state._autoplay_enabled}
 
     # ---------------- Spotify Helpers ----------------

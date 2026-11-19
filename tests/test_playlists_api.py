@@ -363,3 +363,25 @@ def test_creating_a_playlist_with_a_taken_name_is_a_conflict(client, logged_in, 
 
     assert response.status_code == 409
     assert client.get(f"/api/v1/playlists/{first}").get_json()["tracks"] == before
+
+
+class TestPlaylistInputHardening:
+    def test_a_private_address_cannot_be_saved(self, client, logged_in, fake_redis):
+        for url in ("http://169.254.169.254/latest/meta-data/", "http://2130706433/x", "http://127.1:6379/"):
+            response = _create(client, logged_in, tracks=[{"title": "x", "url": url}])
+            assert response.status_code == 400, url
+
+    def test_a_string_false_is_not_public(self, client, logged_in, fake_redis):
+        response = _create(client, logged_in, is_public="false")
+        assert response.status_code == 400
+
+    def test_huge_or_infinite_durations_are_stored_as_unknown(self, client, logged_in, fake_redis):
+        raw = ('{"name": "Long", "tracks": ['
+               '{"title": "A", "duration_s": 1e400}, {"title": "B", "duration_s": 1e20}, '
+               '{"title": "C", "duration_s": 215}]}')
+        response = client.post("/api/v1/playlists", data=raw, content_type="application/json",
+                               headers=_headers(logged_in))
+
+        assert response.status_code == 201
+        detail = client.get(f"/api/v1/playlists/{response.get_json()['id']}").get_json()
+        assert [track["duration_s"] for track in detail["tracks"]] == [0, 0, 215]

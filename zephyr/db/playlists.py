@@ -61,6 +61,25 @@ def _owner_rows(connection, owner_id: str, name: str):
     return [row for row in rows if _name_key(row.name) == key]
 
 
+# A week: longer than any real track or stream, far inside a 32-bit column.
+MAX_DURATION_S = 7 * 24 * 3600
+
+
+def clean_duration(value) -> int:
+    """A stored track length in whole seconds, 0 when unknown or nonsense.
+
+    ``int(1e400)`` (JSON's ``inf``) raised OverflowError and ``1e20`` overflowed
+    the Integer column; both turned a playlist save into a 500.
+    """
+    try:
+        number = float(value or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    if number != number or not 0 <= number <= MAX_DURATION_S:
+        return 0
+    return int(number)
+
+
 def _clean_tracks(tracks: list[dict]) -> list[dict]:
     """Normalise incoming track dicts and drop the unusable ones.
 
@@ -73,15 +92,11 @@ def _clean_tracks(tracks: list[dict]) -> list[dict]:
         url = (track.get("url") or "").strip() or None
         if not title and not url:
             continue
-        try:
-            duration = int(track.get("duration_s") or 0)
-        except (TypeError, ValueError):
-            duration = 0
         cleaned.append(
             {
                 "title": title or url,
                 "url": url,
-                "duration_s": max(0, duration),
+                "duration_s": clean_duration(track.get("duration_s")),
                 "source": (track.get("source") or "youtube").strip() or "youtube",
             }
         )

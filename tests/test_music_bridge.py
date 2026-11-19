@@ -335,3 +335,24 @@ class TestSkipButtonRequester:
 
         with pytest.raises(VoiceError, match="DJ role"):
             await cog._bridge_skip(_guild(member), "43", {})
+
+
+class TestStrictBooleans:
+    def test_the_string_false_turns_an_effect_off(self):
+        state = _state()
+        state._nightcore_enabled = True
+        _apply_effects(state, {"nightcore": "false"})
+        assert state._nightcore_enabled is False
+
+    def test_the_string_false_does_not_reset(self):
+        state = _state()
+        state._pitch = 1.5
+        _apply_effects(state, {"reset": "false"})
+        assert state._pitch == 1.5
+
+    def test_nonsense_is_refused_before_anything_changes(self):
+        state = _state()
+        state._pitch = 1.5
+        with pytest.raises(VoiceError, match="true or false"):
+            _apply_effects(state, {"reset": True, "nightcore": "maybe"})
+        assert state._pitch == 1.5

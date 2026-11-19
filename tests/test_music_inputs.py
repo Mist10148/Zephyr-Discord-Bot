@@ -588,3 +588,39 @@ def test_lazy_entries_are_read_on_the_worker_thread_and_capped():
     assert isinstance(data["entries"], list)
     assert len(data["entries"]) == 5
     assert reader_threads and all(name.startswith("ytdl") for name in reader_threads)
+
+
+@pytest.mark.parametrize("url", [
+    "http://127.1/x.mp3",
+    "http://2130706433:6379/x.mp3",
+    "http://0x7f000001/x.mp3",
+    "http://0177.0.0.1/x.mp3",
+    "http://[::ffff:127.0.0.1]/x.mp3",
+    "http://10.1/x",
+])
+def test_shorthand_private_addresses_are_internal(url):
+    from zephyr.cogs.music import _is_internal_url
+    assert _is_internal_url(url) is True
+
+
+@pytest.mark.parametrize("url", ["https://youtu.be/abc", "http://8.8.8.8/x", "https://1.1/x"])
+def test_public_hosts_are_not_internal(url):
+    from zephyr.cogs.music import _is_internal_url
+    assert _is_internal_url(url) is False
+
+
+@pytest.mark.asyncio
+async def test_a_saved_youtube_link_to_a_private_address_is_refused():
+    """Only source='file' used to be checked; yt-dlp fetches any other URL."""
+    from unittest.mock import AsyncMock
+    from zephyr.cogs.music import Track, YTDLError, YTDLSource
+
+    extract = AsyncMock()
+    original = YTDLSource._extract
+    YTDLSource._extract = extract
+    try:
+        with pytest.raises(YTDLError, match="private or local"):
+            await YTDLSource.from_track(Track(title="x", url="http://169.254.169.254/latest/", source="youtube"))
+    finally:
+        YTDLSource._extract = original
+    extract.assert_not_awaited()

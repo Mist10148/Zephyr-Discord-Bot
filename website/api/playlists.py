@@ -11,6 +11,7 @@ from website.api import api, error, is_row_id, is_snowflake
 from website.api.guard import current_session, rate_limit, require_session
 from zephyr.db import playlists as repo
 from zephyr.services import spotify
+from zephyr.utils.net import is_internal_url
 
 MAX_TITLE_LENGTH = 300
 
@@ -64,11 +65,14 @@ def _clean_tracks(raw) -> list[dict]:
         url = entry.get("url")
         if url is not None and not str(url).startswith(("http://", "https://")):
             raise ValueError("A track url must be an http(s) link.")
+        if url and is_internal_url(str(url)):
+            # The bot fetches these when the playlist is loaded.
+            raise ValueError("Links to private or local addresses can't be saved.")
         tracks.append(
             {
                 "title": title,
                 "url": str(url) if url else None,
-                "duration_s": entry.get("duration_s") or 0,
+                "duration_s": repo.clean_duration(entry.get("duration_s")),
                 "source": str(entry.get("source") or "youtube")[:32],
             }
         )
@@ -116,13 +120,19 @@ def create_playlist():
         return problem
     if body.get("name") is not None and not isinstance(body.get("name"), str):
         return error("invalid_value", "name must be text.", 400)
+    # bool("false") is True: the same rule as PATCH, or a create made it public.
+    is_public = body.get("is_public", False)
+    if is_public is None:
+        is_public = False
+    if not isinstance(is_public, bool):
+        return error("invalid_value", "is_public must be true or false.", 400)
     try:
         saved = repo.save_playlist(
             current_session().user_id,
             str(body.get("name") or ""),
             tracks,
             guild_id=guild_id,
-            is_public=bool(body.get("is_public")),
+            is_public=is_public,
             # Creating must not quietly replace a playlist that has this name;
             # editing an existing one is PATCH /playlists/<id>.
             replace=False,
@@ -248,6 +258,11 @@ def import_spotify():
     guild_id, problem = _target_guild(body.get("guild_id"))
     if problem is not None:
         return problem
+    is_public = body.get("is_public", False)
+    if is_public is None:
+        is_public = False
+    if not isinstance(is_public, bool):
+        return error("invalid_value", "is_public must be true or false.", 400)
     try:
         for candidate in _import_names(str(body.get("name") or name)):
             try:
@@ -256,7 +271,7 @@ def import_spotify():
                     candidate,
                     tracks,
                     guild_id=guild_id,
-                    is_public=bool(body.get("is_public")),
+                    is_public=is_public,
                     replace=False,
                     database_url=_database_url(),
                 )
