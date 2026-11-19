@@ -88,3 +88,19 @@ async def test_a_slow_command_does_not_hold_up_the_next_one(monkeypatch):
     await asyncio.wait_for(asyncio.gather(*bot._command_tasks), timeout=1)
 
     assert order == ["fast", "slow"]
+
+
+@pytest.mark.asyncio
+async def test_a_handler_can_see_when_its_caller_gives_up(monkeypatch):
+    seen = []
+
+    async def play(guild, actor_id, args):
+        seen.append(bridge.command_deadline.get())
+
+    monkeypatch.setattr(bridge, "publish_response", lambda *a, **k: None)
+    bot = _bot({"player.play": play})
+    expires = time.time() + 20
+    await asyncio.create_task(bot._dispatch_command(
+        {"id": "x", "action": "player.play", "args": {}, "expires_at": expires}))
+
+    assert seen == [expires + client_module.COMMAND_EXPIRY_GRACE_SECONDS]

@@ -1435,10 +1435,17 @@ class VoiceState:
                 try:
                     track = await self._wait_for_track(allow_radio=not halted, radio_tried=radio_tried)
                 except asyncio.TimeoutError:
+                    if len(self.songs):
+                        # A /play landed in the instant the wait timed out.
+                        continue
+                    # Marked dead *before* the disconnect is awaited: during it a
+                    # /play used to find this state still alive, queue into it
+                    # (or reconnect, only for _stop to drop the new client) and
+                    # say "Enqueued" for a track that never played.
+                    self.exists = False
                     # cancel_player=False because we are *inside* the player
                     # task: cancelling and awaiting ourselves only works by accident.
                     await self.stop(cancel_player=False)
-                    self.exists = False
                     return
                 self.current = track
                 if self.loop == 'queue' and track:
@@ -1908,6 +1915,25 @@ class MusicCog(commands.Cog):
             state.np_channel_id = channel_id
         return state
 
+    async def _live_state(self, state: VoiceState, guild, destination, *,
+                          channel_id: int | None = None) -> VoiceState:
+        """The state to queue into after a slow lookup.
+
+        A search or playlist read can take up to a minute, and the idle timeout
+        may retire the player meanwhile.  Queueing into the retired state said
+        "Enqueued" for a track that never played, so a fresh one is connected
+        instead.
+        """
+        if state.exists:
+            state.start_player()
+            return state
+        fresh = self.ensure_voice_state(guild.id, channel_id=channel_id if channel_id is not None
+                                        else state.np_channel_id, sticky=True)
+        await self._connect(fresh, guild, destination)
+        self._ensure_np_channel(fresh, guild)
+        fresh.start_player()
+        return fresh
+
     def get_voice_state(self, ctx: commands.Context, *, sticky: bool = False):
         """Context-flavoured wrapper, so the existing command call sites are unchanged."""
         channel_id = ctx.channel.id if getattr(ctx, 'channel', None) else None
@@ -2340,6 +2366,12 @@ class MusicCog(commands.Cog):
         tracks = await self._resolve_query(query, requester_id=member.id, requester_mention=member.mention)
         if not tracks:
             raise VoiceError("Nothing found for that query.")
+        deadline = bridge.command_deadline.get()
+        if deadline is not None and time.time() > deadline:
+            # The dashboard has already shown "did not respond"; queueing now
+            # would surprise the user, and a retry would queue it twice.
+            raise VoiceError("That took too long, so nothing was queued. Try again.")
+        state = await self._live_state(state, guild, destination)
         if str(args.get('mode')) == 'next':
             for track in reversed(tracks):
                 state.songs.add_to_front(track)
@@ -2592,7 +2624,8 @@ class MusicCog(commands.Cog):
         await interaction.response.defer()
         ctx = await self._interaction_ctx(interaction)
         state = self.get_voice_state(ctx, sticky=True)
-        await self._connect(state, interaction.guild, interaction.user.voice.channel)
+        destination = interaction.user.voice.channel
+        await self._connect(state, interaction.guild, destination)
         state.start_player()
 
         async def _edit_status(description: str):
@@ -2623,6 +2656,8 @@ class MusicCog(commands.Cog):
             if not songs:
                 await _edit_status('❌ No tracks found.')
                 return
+            state = await self._live_state(state, interaction.guild, destination,
+                                           channel_id=interaction.channel_id)
 
             if mode == 'skip':
                 for song in reversed(songs):

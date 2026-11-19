@@ -514,3 +514,74 @@ async def test_a_long_lyrics_title_fits_the_embed():
 
     embed = interaction.followup.send.await_args.kwargs["embed"]
     assert len(embed.title) <= 256
+
+
+# ---------------------------------------------------------------------------
+# Third audit (M41, M42)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_idle_timeout_retires_the_state_before_disconnecting(monkeypatch):
+    """A /play during the disconnect must not find this state still alive."""
+    monkeypatch.setattr("zephyr.cogs.music.IDLE_POLL_SECONDS", 0.01)
+    monkeypatch.setattr("zephyr.cogs.music.IDLE_DISCONNECT_SECONDS", 0.02)
+    state = _state()
+    alive_during_stop = []
+
+    async def stop(*, cancel_player=True):
+        alive_during_stop.append(state.exists)
+
+    state.stop = stop
+    task = asyncio.create_task(state.audio_player_task())
+    await asyncio.wait_for(task, 2)
+
+    assert alive_during_stop == [False]
+
+
+@pytest.mark.asyncio
+async def test_a_slow_lookup_queues_into_a_fresh_player_if_the_old_one_left():
+    cog = _cog()
+    old = VoiceState(MagicMock(), guild_id=1, channel_id=7)
+    old.exists = False
+    fresh = VoiceState(MagicMock(), guild_id=1)
+    fresh.start_player = MagicMock()
+    cog.ensure_voice_state = MagicMock(return_value=fresh)
+    cog._connect = AsyncMock()
+    cog._ensure_np_channel = MagicMock()
+    guild = SimpleNamespace(id=1)
+
+    live = await cog._live_state(old, guild, "vc", channel_id=None)
+
+    assert live is fresh
+    cog.ensure_voice_state.assert_called_once_with(1, channel_id=7, sticky=True)
+    cog._connect.assert_awaited_once_with(fresh, guild, "vc")
+    fresh.start_player.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_a_dashboard_play_past_its_deadline_queues_nothing(monkeypatch):
+    import time as _time
+
+    from zephyr.cogs.music import VoiceError
+    from zephyr.services import bridge
+
+    cog = _cog()
+    state = VoiceState(MagicMock(), guild_id=1)
+    state.voice = MagicMock()
+    state.voice.is_connected.return_value = True
+    state.start_player = MagicMock()
+    cog.ensure_voice_state = MagicMock(return_value=state)
+    cog._connect = AsyncMock()
+    cog._ensure_np_channel = MagicMock()
+    member = SimpleNamespace(id=5, mention="<@5>", voice=None)
+    cog._authorize = MagicMock(return_value=member)
+    cog._resolve_query = AsyncMock(return_value=[Track(title="late")])
+
+    token = bridge.command_deadline.set(_time.time() - 1)
+    try:
+        with pytest.raises(VoiceError, match="took too long"):
+            await cog._bridge_play(SimpleNamespace(id=1), "5", {"query": "slow playlist"})
+    finally:
+        bridge.command_deadline.reset(token)
+    assert len(state.songs) == 0

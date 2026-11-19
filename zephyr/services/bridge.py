@@ -27,6 +27,7 @@ timeout, and two files is how they stop agreeing.
 import json
 import secrets
 import time
+from contextvars import ContextVar
 
 # Imported as a module, not `from ... import get_client`, so that patching
 # redis_client.get_client redirects every call site at once.
@@ -36,6 +37,12 @@ GUILDS_KEY = "zephyr:guilds"
 GUILDS_UPDATED_KEY = "zephyr:guilds:updated_at"
 
 PRESENCE_KEY = "zephyr:presence"
+
+# When the web caller of the command being handled gives up (epoch seconds),
+# set by the bot around each handler.  A slow handler checks it before doing
+# something irreversible, so a request the dashboard already reported as
+# failed does not still happen -- and happen twice when the user retries.
+command_deadline: ContextVar[float | None] = ContextVar("command_deadline", default=None)
 PRESENCE_TTL = 30
 
 PLAYER_KEY = "zephyr:player:{guild_id}"

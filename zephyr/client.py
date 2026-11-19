@@ -218,6 +218,8 @@ class ZephyrBot(commands.Bot):
             if handler is None:
                 raise LookupError(f"Unknown action {command['action']!r}")
             guild = self.get_guild(int(command["guild_id"])) if command.get("guild_id") else None
+            if isinstance(expires_at, (int, float)):
+                bridge.command_deadline.set(expires_at + COMMAND_EXPIRY_GRACE_SECONDS)
             data = await handler(guild, command.get("actor_id"), command.get("args") or {})
             await asyncio.to_thread(bridge.publish_response, command_id, ok=True, data=data or {})
         except Exception as e:
