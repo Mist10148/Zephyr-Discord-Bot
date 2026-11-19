@@ -91,15 +91,16 @@ Zephyr-Discord-Bot/
 
 ### 🌦️ Weather
 
-Every lookup takes an optional city; without one it uses your `/setlocation` default, then Iloilo.
-The lookups (`/weather`, `/forecast`, `/temperature`, `/description`, `/humidity`, `/pressure`,
-`/windspeed`, `/air`, `/precipitation`, `/typhoon`, `/search`, `/use`, `/helpweather`) also work
-as `/`-prefixed text messages; the rest are slash-only.
+Every slash lookup takes an optional city (up to 100 characters); without one it uses your
+`/setlocation` default, then Iloilo. The lookups (`/weather`, `/forecast`, `/temperature`,
+`/description`, `/humidity`, `/pressure`, `/windspeed`, `/air`, `/precipitation`, `/typhoon`,
+`/search`, `/use`, `/helpweather`) also work as `/`-prefixed text messages; the rest are
+slash-only. The text versions do not read `/setlocation` and default to Iloilo.
 
 | Command | Description |
 |---------|-------------|
 | `/weather [city]` | The full card: temperature, feels-like, wind & gusts, visibility, clouds, air quality, sunrise/sunset |
-| `/temperature [city]` | Temperature, feels-like and today's high / low |
+| `/temperature [city]` | Temperature and feels-like (`/forecast` has the day's high / low) |
 | `/description [city]` | Current conditions |
 | `/humidity [city]` | Humidity, dew point and comfort |
 | `/windspeed [city]` | Wind speed, direction, gusts (km/h) |
@@ -108,7 +109,7 @@ as `/`-prefixed text messages; the rest are slash-only.
 | `/air [city]` | Air-quality badge & pollutants |
 | `/search [city]` | Same card as `/weather` |
 | `/forecast [city]` | 3-day overview, then a page per day |
-| `/class` | Class-suspension outlook from the heat index (Iloilo City) |
+| `/class` | Class-suspension outlook from each day's peak heat index (Iloilo City) |
 | `/typhoon` | Typhoon / cyclone alerts for Iloilo City (needs an OpenWeatherMap One Call 3.0 subscription) |
 | `/setlocation [city]` | Set your default city (leave empty to clear it) |
 | `/mylocation` | Show your default city |

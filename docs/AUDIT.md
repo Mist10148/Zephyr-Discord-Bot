@@ -129,3 +129,53 @@ has a regression test.
 | W23 | Web forecast used today's UTC offset for all seven days | Times an hour off after a DST change | fixed |
 | W24 | No Embed Links check; 4xx send errors retried every minute | A broken channel re-fetched the forecast all day | fixed |
 | W25 | Raw database error posted publicly; duplicate subscriptions allowed | Leaked SQL; double posts | fixed |
+
+---
+
+# Third pass — November 2026
+
+A third read of music and weather. Every fixed item has a regression test; the suite went from
+893 to 953 tests.
+
+## Music
+
+| # | Problem | Effect | Status |
+|---|---------|--------|--------|
+| M31 | `/msearch` pick built a command context from a select-menu interaction | `Context.from_interaction` raised; **no pick was ever queued** | fixed |
+| M32 | `/skip` ignored the DJ / Manage Server instant skip | A DJ got a vote, contrary to README and the ⏭️ button | fixed |
+| M33 | ⏭️ button sent the requester through the DJ-gated bridge skip | With a DJ role set, you could not skip your own song | fixed |
+| M34 | `/remove count:N` listed every title | Past 4,096 characters the tracks were removed but the reply failed | fixed (ten listed) |
+| M35 | Saved-playlist links were checked for private addresses only when `source='file'` | yt-dlp's generic extractor fetched internal addresses from an edited playlist | fixed (bot and website) |
+| M36 | `duration_s` of `1e400` / `1e20` | Playlist save → 500 | fixed |
+| M37 | `bool("false")` | Created public playlists; turned effects on; `reset:"false"` reset everything | fixed (strict booleans) |
+| M38 | `/seek` with hundreds of digits | `OverflowError` → "Something went wrong"; huge seeks sent to FFmpeg on live streams | fixed (capped at a week) |
+| M39 | `/lyrics` title over 256 characters | First lyrics page rejected | fixed |
+| M40 | `/queue` total under loop=queue | Playing song counted twice | fixed |
+| M41 | Idle timeout marked the state dead only after disconnecting | `/play` in that window said "Enqueued" into a player that left | fixed; slow lookups also reconnect if the player left meanwhile |
+| M42 | Dashboard play finished after the site's 20 s timeout | Reported as failed but queued anyway; a retry queued it twice | fixed (`bridge.command_deadline`) |
+| M43 | `/stop` or `/clear` during an autoplay refill | Refill landed afterwards and five songs played | fixed |
+| M44 | Skip/stop/seek check ran before the wait for a `/say` clip | A request made during the clip was lost | fixed |
+| M45 | `[Deleted video]` / `[Private video]` entries | Searched by title, a random video played and a saved playlist kept it | fixed (dropped) |
+| M46 | Private-address check only knew dotted quads | `127.1`, `2130706433`, `0x7f000001` reached localhost | fixed (`zephyr/utils/net.py`) |
+| M47 | One `YoutubeDL` shared by four lookup threads | Not thread-safe; concurrent lookups could corrupt each other | fixed (one per thread) |
+| M48 | A very long `/play` query | Error reply past 4,096 characters | fixed |
+| M49 | Relative `FFMPEG_PATH` resolved from the working directory; a missing FFmpeg was silent | Every track failed in turn | fixed (project root, startup warning) |
+| — | FFmpeg stderr is kept for the whole run | A track that recovered from a mid-stream error can still be treated as failed and retried from 0:00 | known, left (needs real-stream testing) |
+
+## Weather
+
+| # | Problem | Effect | Status |
+|---|---------|--------|--------|
+| W26 | Severe watch fingerprint was rounded values compared for equality | Reposted as the peak eased (40→39→38°), on rounding edges, and when one reason dropped out | fixed (highest level per reason remembered) |
+| W27 | Severe watch named the lowest storm code | "Thunderstorm" when hail (99) was forecast | fixed |
+| W28 | `/class` "Today" and the dashboard rated the current feels-like | Disagreed with the watch and digest, which rate today's peak | fixed |
+| W29 | OpenWeatherMap's current `temp_max`/`temp_min` shown as today's high / low | Usually the current temperature ±1° | fixed (removed) |
+| W30 | Time zone that is a folder (`America`) | `PermissionError`/`IsADirectoryError`: dashboard 500, generic bot error | fixed |
+| W31 | Weather cog had no error handler | `/setlocation`, `/mylocation` hung on "thinking…" after a database error | fixed; slash lookups also defer before the database read |
+| W32 | Unbounded `city` options | Error replies past Discord's limits | fixed (100 characters) |
+| W33 | `/forecast` OpenWeatherMap fallback re-geocoded a saved place by name | Could forecast another country's San Jose | fixed |
+| W34 | Class watch keyed on (date, level) by equality | Reposted every time the forecast flipped across 41 °C | fixed |
+| W35 | Snow and fog got the rain emoji | | fixed |
+| — | Prefix weather commands ignore `/setlocation` | | documented (README) |
+| — | On consecutive hot days the class watch posts shortly after local midnight | A new day is a new advisory | known, left |
+

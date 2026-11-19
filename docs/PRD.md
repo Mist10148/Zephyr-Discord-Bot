@@ -155,9 +155,12 @@ the dashboard.
   code crosses a threshold. Thresholds are editable, and each can be switched off individually.
 - **Class suspension watch:** posted when the heat index reaches an advisory level (heat only; a
   cool day is not an advisory, although `/class` still mentions it).
-- Both watches run every 15 minutes and deduplicate by a coarse fingerprint, so a storm that lasts
-  all afternoon is announced once rather than sixteen times. Once conditions are quiet again the
-  fingerprint is forgotten, so the next day's identical storm is announced too.
+- Both watches run every 15 minutes and remember the highest level they announced for each
+  reason, so a storm that lasts all afternoon is announced once rather than sixteen times — and
+  stays announced as its peak eases or a reading wobbles. A new reason (say, a storm on top of the
+  wind) or a higher level (wind up a 10 km/h step, heat up 2°, class suspension "possible" →
+  "likely") is announced. Once conditions are quiet again the record is forgotten, so the next
+  day's identical storm is announced too.
 - Imperial subscriptions keep their thresholds in °F and mph; switching units converts them.
 - `/weather-preview` and the dashboard's preview show exactly what a subscription would post right
   now, using the same code the scheduler uses.
