@@ -23,6 +23,7 @@ from discord.ext import commands, tasks
 
 from zephyr.db.weather_subs import (
     KINDS,
+    WATCHED_KINDS,
     SubscriptionError,
     claim_due,
     clear_fingerprint,
@@ -435,6 +436,12 @@ class WeatherAlertsCog(commands.Cog):
         if alert is None:
             await interaction.followup.send(
                 "Nothing to report right now — this subscription would stay quiet.", ephemeral=True)
+            return
+        if subscription["kind"] in WATCHED_KINDS and is_repeat(alert, subscription.get("last_fingerprint")):
+            # The scheduler would stay quiet: this was already announced.
+            await interaction.followup.send(
+                "Already announced — the watch would not post this again.",
+                embed=alert_embed(alert), ephemeral=True)
             return
         await interaction.followup.send(embed=alert_embed(alert), ephemeral=True)
 

@@ -269,3 +269,20 @@ def test_a_quiet_tick_never_clears_a_class_watch(monkeypatch, fired):
     _deliver(WeatherAlertsCog(FakeBot(FakeChannel())),
              _sub(kind="class_suspension", last_fingerprint="abc", last_run_at=None), dedupe=True)
     assert cleared == []
+
+
+def test_weather_preview_says_when_a_watch_would_stay_quiet(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(cog_module, "get", lambda sub_id: _sub(last_fingerprint="abc123"))
+    monkeypatch.setattr(cog_module, "get_openmeteo_bundle", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(cog_module, "evaluate", lambda *a, **k: ALERT)
+    followup = AsyncMock()
+    interaction = SimpleNamespace(guild=SimpleNamespace(id=42),
+                                  response=SimpleNamespace(defer=AsyncMock()),
+                                  followup=SimpleNamespace(send=followup))
+
+    asyncio.run(WeatherAlertsCog.preview.callback(WeatherAlertsCog(FakeBot(None)), interaction, 7))
+
+    assert "Already announced" in followup.await_args.args[0]

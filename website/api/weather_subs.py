@@ -297,4 +297,8 @@ def preview_sub(guild_id: str, sub_id: str):
         return error("preview_failed", f"This subscription could not be evaluated ({exc.__class__.__name__}).", 500)
     return jsonify({"id": row["id"], "kind": row["kind"], "alert": alert,
                     "would_post": alert is not None,
-                    "duplicate": bool(alert and alert["fingerprint"] == row.get("last_fingerprint"))})
+                    # The scheduler's own rule.  Equality disagreed with it as
+                    # soon as a stored fingerprint had been merged, or a peak
+                    # eased: the bot stayed quiet while this said it would post.
+                    "duplicate": bool(alert and row["kind"] in repo.WATCHED_KINDS
+                                      and weather_alerts.is_repeat(alert, row.get("last_fingerprint")))})

@@ -231,6 +231,21 @@ class TestPreview:
         assert body["would_post"] is True
         assert body["duplicate"] is True
 
+    def test_an_easing_peak_previews_as_a_duplicate_like_the_scheduler(self, app, client, logged_in, fake_redis):
+        """Equality said "would post" for a weaker repeat the bot keeps quiet about."""
+        from zephyr.db.weather_subs import mark_fired
+        from zephyr.utils.weather_alerts import evaluate_severe
+
+        sub_id = _create(client, logged_in, kind="severe", schedule_local_time=None).get_json()["id"]
+        fingerprint = evaluate_severe(_bundle(wind=95), None, location="Iloilo City")["fingerprint"]
+        mark_fired(sub_id, fingerprint=fingerprint, database_url=app.config["DATABASE_URL"])
+
+        with patch("website.api.weather_subs.get_openmeteo_bundle", return_value=_bundle(wind=72)):
+            body = client.get(f"/api/v1/guilds/1/weather-subs/{sub_id}/preview").get_json()
+
+        assert body["would_post"] is True
+        assert body["duplicate"] is True
+
     def test_a_provider_outage_is_502(self, client, logged_in, fake_redis):
         from zephyr.utils.weather_utils import WeatherUpstreamError
 
