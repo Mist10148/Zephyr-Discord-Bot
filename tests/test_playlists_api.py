@@ -385,3 +385,34 @@ class TestPlaylistInputHardening:
         assert response.status_code == 201
         detail = client.get(f"/api/v1/playlists/{response.get_json()['id']}").get_json()
         assert [track["duration_s"] for track in detail["tracks"]] == [0, 0, 215]
+
+
+class TestTrackSources:
+    """The source decides how a row is played, so the browser's value is checked."""
+
+    def test_a_file_without_a_link_is_stored_as_a_search(self, client, logged_in, fake_redis):
+        created = _create(client, logged_in, tracks=[{"title": "Song A", "source": "file"}])
+        detail = client.get(f"/api/v1/playlists/{created.get_json()['id']}").get_json()
+        assert detail["tracks"][0]["source"] == "search"
+
+    def test_an_unknown_source_becomes_youtube(self, client, logged_in, fake_redis):
+        created = _create(client, logged_in, tracks=[{"title": "A", "url": "https://youtu.be/a", "source": "ftp"}])
+        detail = client.get(f"/api/v1/playlists/{created.get_json()['id']}").get_json()
+        assert detail["tracks"][0]["source"] == "youtube"
+
+
+def test_a_patch_racing_a_delete_is_404_not_500(client, logged_in, fake_redis, monkeypatch):
+    from zephyr.db import playlists as repo
+
+    playlist_id = _create(client, logged_in).get_json()["id"]
+    real_get = repo.get_playlist
+    calls = []
+
+    def vanishing(*args, **kwargs):
+        calls.append(1)
+        return real_get(*args, **kwargs) if len(calls) == 1 else None
+
+    monkeypatch.setattr(repo, "get_playlist", vanishing)
+    response = client.patch(f"/api/v1/playlists/{playlist_id}", json={"name": "Renamed"},
+                            headers=_headers(logged_in))
+    assert response.status_code == 404

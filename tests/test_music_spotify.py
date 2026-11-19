@@ -123,3 +123,9 @@ def test_a_short_link_redirecting_elsewhere_is_not_followed(monkeypatch):
     monkeypatch.setattr(requests, "head", head)
     assert resolve_short_link("https://spotify.link/abc") == "https://spotify.link/abc"
     assert seen == ["https://spotify.link/abc"]
+
+
+def test_a_mixed_case_spotify_uri_is_parsed():
+    from zephyr.services.spotify import is_spotify_url, parse_spotify_id
+    assert is_spotify_url("Spotify:Track:4uLU6hMCjMI75M1A2tKUQC")
+    assert parse_spotify_id("Spotify:Track:4uLU6hMCjMI75M1A2tKUQC", "track") == "4uLU6hMCjMI75M1A2tKUQC"

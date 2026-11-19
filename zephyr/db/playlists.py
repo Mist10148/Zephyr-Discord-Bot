@@ -65,6 +65,26 @@ def _owner_rows(connection, owner_id: str, name: str):
 MAX_DURATION_S = 7 * 24 * 3600
 
 
+# What the player knows how to play.  The source decides how a row is played --
+# "file" goes straight to FFmpeg -- so a value from the browser is not trusted.
+TRACK_SOURCES = frozenset({"youtube", "spotify", "search", "file", "autoplay"})
+
+
+def clean_source(source, url: str | None) -> str:
+    """A known source for a stored row.
+
+    Anything else became whatever the browser sent: ``"file"`` with no link
+    handed ``None`` to FFmpeg, and ``"file"`` on a YouTube page fed it HTML.
+    A file needs a direct link; without one the row is found by title.
+    """
+    value = str(source or "").strip().lower()
+    if value not in TRACK_SOURCES:
+        value = "youtube"
+    if value == "file" and not url:
+        value = "search"
+    return value
+
+
 def clean_duration(value) -> int:
     """A stored track length in whole seconds, 0 when unknown or nonsense.
 
@@ -97,7 +117,7 @@ def _clean_tracks(tracks: list[dict]) -> list[dict]:
                 "title": title or url,
                 "url": url,
                 "duration_s": clean_duration(track.get("duration_s")),
-                "source": (track.get("source") or "youtube").strip() or "youtube",
+                "source": clean_source(track.get("source"), url),
             }
         )
     return cleaned

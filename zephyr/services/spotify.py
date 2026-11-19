@@ -52,9 +52,10 @@ def is_spotify_url(value: str) -> bool:
 
 def parse_spotify_id(url: str, kind: str) -> str | None:
     """Extract a Spotify ID from a web URL or a ``spotify:`` URI."""
-    if url.startswith("spotify:"):
+    if url.lower().startswith("spotify:"):
+        # is_spotify_url accepts any case; "Spotify:Track:ID" was then unparsed.
         parts = url.split(":")
-        if len(parts) >= 3 and parts[1] == kind:
+        if len(parts) >= 3 and parts[1].lower() == kind:
             return parts[2].split("?")[0]
         return None
     match = re.search(rf"/{kind}/([^/?#]+)", url)

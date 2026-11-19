@@ -73,7 +73,7 @@ def _clean_tracks(raw) -> list[dict]:
                 "title": title,
                 "url": str(url) if url else None,
                 "duration_s": repo.clean_duration(entry.get("duration_s")),
-                "source": str(entry.get("source") or "youtube")[:32],
+                "source": repo.clean_source(entry.get("source"), str(url) if url else None),
             }
         )
     return tracks
@@ -202,6 +202,9 @@ def patch_playlist(playlist_id: str):
         return error("invalid_value", str(exc), 400)
 
     updated = repo.get_playlist(playlist["id"], database_url=_database_url())
+    if updated is None:
+        # Deleted between the ownership check and the write.
+        return error("not_found", "No such playlist.", 404)
     return jsonify({**updated, "mine": True,
                     "created_at": updated["created_at"].isoformat() if updated.get("created_at") else None})
 

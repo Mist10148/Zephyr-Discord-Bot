@@ -219,3 +219,28 @@ class TestThirdAudit:
             with pytest.raises(YTDLError, match="Could not fetch"):
                 await YTDLSource.from_track(track, loop=asyncio.get_event_loop())
         search.assert_not_awaited()
+
+
+@pytest.mark.parametrize("source,url,expected", [
+    ("file", None, "search"),
+    ("file", "https://cdn.example.com/a.mp3", "file"),
+    ("FILE", "https://cdn.example.com/a.mp3", "file"),
+    ("whatever", "https://youtu.be/a", "youtube"),
+    (None, None, "youtube"),
+    ("autoplay", "https://youtu.be/a", "autoplay"),
+])
+def test_clean_source(source, url, expected):
+    from zephyr.db.playlists import clean_source
+    assert clean_source(source, url) == expected
+
+
+@pytest.mark.asyncio
+async def test_a_file_track_with_no_link_is_found_by_title(monkeypatch):
+    """FFmpegPCMAudio(None) used to drop it as 'could not stream'."""
+    track = Track(title="Artist - Song", url=None, source="file")
+    resolve = AsyncMock(return_value={"url": "https://stream.example/1", "title": "Artist - Song"})
+    monkeypatch.setattr(YTDLSource, "_resolve_by_title", resolve)
+    with patch.object(YTDLSource, "_make_ffmpeg_source") as make:
+        await YTDLSource.from_track(track, loop=asyncio.get_event_loop())
+    resolve.assert_awaited_once()
+    assert make.call_args.args[0] == "https://stream.example/1"

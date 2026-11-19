@@ -35,6 +35,7 @@ from zephyr.core.ffmpeg import FFMPEG_PATH
 from zephyr.db.guild_settings import read_dj_roles, read_music_settings
 from zephyr.db.playlists import (
     PlaylistError,
+    clean_source,
     delete_playlist,
     find_playlist,
     get_playlist,
@@ -851,7 +852,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
         # checked again here -- not only direct files: yt-dlp's generic
         # extractor fetches any URL it is handed.
         _refuse_internal(track.url or '')
-        if track.source == 'file':
+        if track.source == 'file' and track.url:
             # Direct media: hand the URL straight to FFmpeg, no extraction --
             # so the DNS check yt-dlp lookups get happens here instead.
             await loop.run_in_executor(_YTDL_EXECUTOR, _refuse_resolving_internal, track.url)
@@ -3468,7 +3469,9 @@ class MusicCog(commands.Cog):
         for row in playlist['tracks']:
             state.songs.put_nowait(Track(
                 title=row['title'], url=row['url'], duration_seconds=row['duration_s'] or 0,
-                requester_id=member.id, requester_mention=member.mention, source=row['source']))
+                requester_id=member.id, requester_mention=member.mention,
+                # Rows saved before sources were checked may say anything.
+                source=clean_source(row['source'], row['url'])))
         state.changed()
         return len(playlist['tracks'])
 
