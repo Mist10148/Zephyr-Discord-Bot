@@ -234,6 +234,10 @@ class VoiceError(Exception):
     pass
 
 
+# Rows listed in the /remove reply; the rest are counted.
+REMOVE_LIST_LIMIT = 10
+
+
 def _short(text: str, limit: int | None) -> str:
     text = text or ''
     if limit and len(text) > limit:
@@ -673,18 +677,18 @@ class YTDLSource(discord.PCMVolumeTransformer):
             data = await cls._extract(query, loop=loop, process=False,
                                       max_entries=max_entries or MAX_FLAT_ENTRIES)
             if data is None:
-                raise YTDLError(f'Could not find anything that matches `{search}`')
+                raise YTDLError(f'Could not find anything that matches `{_short(search, 200)}`')
 
             entries = list(data.get('entries') or [])
 
             # Plain-text search: take only the top hit rather than enqueueing ten.
             if not as_url:
                 if not entries:
-                    raise YTDLError(f'Could not find anything that matches `{search}`')
+                    raise YTDLError(f'Could not find anything that matches `{_short(search, 200)}`')
                 tracks = cls._build_tracks_from_entries(
                     entries[:1], requester_id=requester_id, requester_mention=requester_mention, source='search')
                 if not tracks:
-                    raise YTDLError(f'Could not find anything that matches `{search}`')
+                    raise YTDLError(f'Could not find anything that matches `{_short(search, 200)}`')
                 return tracks
 
             # A single URL with no entries: one flat extract is enough for metadata.
@@ -2592,7 +2596,9 @@ class MusicCog(commands.Cog):
         state.start_player()
 
         async def _edit_status(description: str):
-            embed = discord.Embed(description=description, color=discord.Color.blurple())
+            # Titles and error text can carry most of a 6,000-character query;
+            # past 4,096 Discord refused the reply and the user saw nothing useful.
+            embed = discord.Embed(description=_short(description, 4000), color=discord.Color.blurple())
             try:
                 await interaction.edit_original_response(embed=embed)
             except Exception:
@@ -2942,6 +2948,10 @@ class MusicCog(commands.Cog):
 
         total_duration = state.current.duration_seconds if state.is_playing else 0
         for song in state.songs:
+            # Under loop=queue the playing track is already re-queued at the
+            # back; counting it again overstated the total (as _queue_payload notes).
+            if state.is_playing and song is state.current:
+                continue
             total_duration += song.duration_seconds or 0
         embed.set_footer(text=f'Page {page}/{pages} • Total duration: {_format_timestamp(total_duration)}')
         await interaction.response.send_message(embed=embed)
@@ -2976,7 +2986,14 @@ class MusicCog(commands.Cog):
             song = state.songs[index - 1]
             removed.append(song.title)
             state.songs.remove(index - 1)
-        await interaction.response.send_message(embed=discord.Embed(description=f'🗑️ Removed **{len(removed)}** track(s):\n' + '\n'.join(f'• {t}' for t in removed), color=discord.Color.orange()))
+        # Every title used to be listed: /remove count:100 removed the tracks and
+        # then failed to reply, past the 4,096-character description limit.
+        shown = [f'• {_short(t, 80)}' for t in removed[:REMOVE_LIST_LIMIT]]
+        if len(removed) > REMOVE_LIST_LIMIT:
+            shown.append(f'…and {len(removed) - REMOVE_LIST_LIMIT} more')
+        await interaction.response.send_message(embed=discord.Embed(
+            description=f'🗑️ Removed **{len(removed)}** track(s):\n' + '\n'.join(shown),
+            color=discord.Color.orange()))
 
     @app_commands.command(name='move', description='Moves a track to another position in the queue.')
     async def move(self, interaction: discord.Interaction, from_index: int, to_index: int):
@@ -3481,7 +3498,8 @@ class MusicCog(commands.Cog):
     async def _send_lyrics(self, interaction: discord.Interaction, title: str, lyrics: str):
         chunks = [lyrics[i:i + 4000] for i in range(0, len(lyrics), 4000)]
         for idx, chunk in enumerate(chunks):
-            embed = discord.Embed(title=f'🎤 Lyrics — {title}' if idx == 0 else None,
+            # Embed titles stop at 256; a long "feat." chain broke the first part.
+            embed = discord.Embed(title=_short(f'🎤 Lyrics — {title}', 256) if idx == 0 else None,
                                   description=chunk,
                                   color=discord.Color.teal())
             embed.set_footer(text=f"Part {idx + 1}/{len(chunks)}")

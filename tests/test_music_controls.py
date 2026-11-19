@@ -466,3 +466,51 @@ async def test_slash_skip_is_instant_for_a_dj():
 
     state.skip.assert_called_once()
     assert not state.skip_votes
+
+
+@pytest.mark.asyncio
+async def test_queue_total_does_not_count_the_current_song_twice_under_queue_loop():
+    state = _state()
+    playing = Track(title="Playing", duration_seconds=100)
+    state.current = playing
+    state.songs.put_nowait(Track(title="Next", duration_seconds=50))
+    state.loop = "queue"          # re-appends the playing track at the back
+    cog = MusicCog.__new__(MusicCog)
+    cog._interaction_ctx = AsyncMock(return_value=SimpleNamespace())
+    cog.get_voice_state = MagicMock(return_value=state)
+    interaction = SimpleNamespace(response=SimpleNamespace(send_message=AsyncMock()))
+
+    await MusicCog.queue.callback(cog, interaction, page=1)
+
+    embed = interaction.response.send_message.await_args.kwargs["embed"]
+    assert "Total duration: 02:30" in embed.footer.text
+
+
+@pytest.mark.asyncio
+async def test_removing_many_long_titles_still_replies():
+    state = _state()
+    for index in range(100):
+        state.songs.put_nowait(Track(title=f"Song {index} " + "x" * 290))
+    cog = MusicCog.__new__(MusicCog)
+    cog._gate = AsyncMock(return_value=True)
+    cog._interaction_ctx = AsyncMock(return_value=SimpleNamespace())
+    cog.get_voice_state = MagicMock(return_value=state)
+    interaction = SimpleNamespace(response=SimpleNamespace(send_message=AsyncMock()))
+
+    await MusicCog.remove.callback(cog, interaction, index=1, count=100)
+
+    embed = interaction.response.send_message.await_args.kwargs["embed"]
+    assert len(state.songs) == 0
+    assert len(embed.description) <= 4096
+    assert "…and 90 more" in embed.description
+
+
+@pytest.mark.asyncio
+async def test_a_long_lyrics_title_fits_the_embed():
+    cog = MusicCog.__new__(MusicCog)
+    interaction = SimpleNamespace(followup=SimpleNamespace(send=AsyncMock()))
+
+    await cog._send_lyrics(interaction, "Artist feat. " * 40 + "- Song", "la la la")
+
+    embed = interaction.followup.send.await_args.kwargs["embed"]
+    assert len(embed.title) <= 256

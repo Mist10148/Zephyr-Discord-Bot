@@ -624,3 +624,17 @@ async def test_a_saved_youtube_link_to_a_private_address_is_refused():
     finally:
         YTDLSource._extract = original
     extract.assert_not_awaited()
+
+
+@pytest.mark.parametrize("value", ["9" * 400 + "h", "9" * 40, "999:99:99" + "9" * 30, "200h"])
+def test_overflowing_times_are_a_value_error(value):
+    from zephyr.utils.time_utils import _parse_user_time
+    with pytest.raises(ValueError):
+        _parse_user_time(value)
+
+
+@pytest.mark.parametrize("value,seconds", [("90", 90), ("1:30", 90), ("1:00:00", 3600), ("2m", 120),
+                                           ("1.5h", 5400), ("45s", 45)])
+def test_ordinary_times_still_parse(value, seconds):
+    from zephyr.utils.time_utils import _parse_user_time
+    assert _parse_user_time(value) == seconds
