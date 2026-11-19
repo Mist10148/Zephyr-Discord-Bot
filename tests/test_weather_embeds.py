@@ -151,3 +151,15 @@ async def test_the_pager_keeps_footers_and_belongs_to_its_owner():
     owner.response.edit_message = AsyncMock()
     await view._turn(owner, 1)
     assert view.index == 1 and view.next.disabled
+
+
+def test_current_cards_do_not_call_the_area_spread_a_daily_high_low():
+    """OpenWeatherMap's current temp_max/temp_min are not the day's high and low."""
+    from zephyr.utils import weather_embeds as look
+
+    data = {"name": "X", "main": {"temp": 30, "feels_like": 35, "temp_min": 29.1, "temp_max": 31.4,
+                                  "pressure": 1009, "humidity": 70},
+            "weather": [{"id": 800, "main": "Clear", "description": "clear sky"}], "wind": {"speed": 2},
+            "timezone": 28800, "dt": 1700000000, "sys": {}}
+    assert "↑" not in look.current_embed(data).description
+    assert "↑" not in str(look.metric_embed(data, "temperature").to_dict())

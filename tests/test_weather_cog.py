@@ -168,3 +168,67 @@ def test_web_forecast_times_follow_dst_per_row():
     fixed = _zone({"timezone": "Not/AZone"}, 3600)
     assert _time_payload("2026-01-01T00:00", fixed)["time_epoch"] == int(
         datetime(2025, 12, 31, 23, tzinfo=timezone.utc).timestamp())
+
+
+def test_the_forecast_fallback_keeps_the_saved_coordinates(monkeypatch):
+    seen = {}
+
+    def owm(city=None, lat=None, lon=None, days=3):
+        seen.update(city=city, lat=lat, lon=lon)
+        return [{"date": "2026-11-18", "weather_code": 0, "temp_max": 20, "temp_min": 10,
+                 "feels_like_max": 20, "feels_like_min": 10, "precipitation_probability": 0,
+                 "wind_speed_max": 5}]
+
+    def open_meteo_down(*args, **kwargs):
+        raise RuntimeError("Open-Meteo is down")
+
+    monkeypatch.setattr(cog, "get_openmeteo_daily_forecast", open_meteo_down)
+    monkeypatch.setattr(cog, "_owm_daily_forecast", owm)
+    asyncio.run(cog._forecast_pages(cog.SavedPlace("San Jose", 37.34, -121.89)))
+
+    assert seen == {"city": None, "lat": 37.34, "lon": -121.89}
+
+
+def test_class_today_is_rated_on_the_days_peak(monkeypatch):
+    """At 06:00 the current feels-like is mild while the forecast peak is not."""
+    current = {"temp": 26, "apparent_temp": 27, "humidity": 80, "wind_speed": 5, "weather_code": 1}
+    day = {"temp_max": 33, "feels_like_max": 42, "precipitation_probability": 10, "wind_speed_max": 10,
+           "weather_code": 1}
+    monkeypatch.setattr(cog, "_get_class_weather_data", lambda: (current, [day, day, day]))
+    captured = {}
+
+    async def send(interaction, embeds, ephemeral=False):
+        captured["embeds"] = embeds
+
+    monkeypatch.setattr(cog, "_send_paginated_embeds", send)
+    interaction = MagicMock()
+
+    async def run():
+        interaction.response.defer = MagicMock(return_value=asyncio.sleep(0))
+        await cog.WeatherCog.class_command.callback(cog.WeatherCog.__new__(cog.WeatherCog), interaction)
+
+    asyncio.run(run())
+    today = captured["embeds"][0]
+    assert "42" in today.description
+
+
+def test_snow_is_not_rain():
+    from zephyr.utils.weather_utils import wmo_emoji
+    assert wmo_emoji(73) == "🌨️"
+    assert wmo_emoji(61) == "🌧️"
+    assert wmo_emoji(95) == "⛈️"
+
+
+def test_the_dashboard_class_outlook_uses_todays_peak(client, monkeypatch):
+    import website.api.weather as web
+
+    bundle = {"timezone": "Asia/Manila", "utc_offset_seconds": 28800,
+              "current": {"time": "2026-11-19T06:00", "apparent_temperature": 27},
+              "hourly": {}, "daily": {"time": ["2026-11-19"], "apparent_temperature_max": [42]}}
+    monkeypatch.setattr(web, "get_openmeteo_bundle", lambda *a, **k: bundle)
+    monkeypatch.setattr(web, "get_openmeteo_air_quality", lambda *a, **k: {"current": {}})
+    web.cache.clear() if hasattr(web.cache, "clear") else None
+
+    payload = client.get("/api/v1/weather?lat=10.72&lon=122.56").get_json()
+
+    assert payload["class_suspension"]["level"] == "likely"

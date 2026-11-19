@@ -216,7 +216,13 @@ async def _forecast_pages(city: str) -> list[discord.Embed]:
 
     if not days:
         try:
-            days = await asyncio.to_thread(_owm_daily_forecast, city=city, days=3)
+            coords = _coords(city)
+            if coords:
+                # A /setlocation place: looking its name up again could land
+                # in another country (San Jose, CA vs San Jose, Costa Rica).
+                days = await asyncio.to_thread(_owm_daily_forecast, lat=coords[0], lon=coords[1], days=3)
+            else:
+                days = await asyncio.to_thread(_owm_daily_forecast, city=str(city), days=3)
             fallback = True
         except Exception as e:
             print(f"[Forecast OWM Error] {e.__class__.__name__}")
@@ -726,9 +732,15 @@ class WeatherCog(commands.Cog):
         # that used to fail the whole command instead of showing what it had.
         has_today = len(daily) >= 3
         later = daily[1:3] if has_today else daily[-2:]
+        # Rated on today's *peak* heat index, as the class-suspension watch and
+        # the digest are: at 06:00 the current reading (27 °C) said classes
+        # resume while the watch, on the forecast 42 °C peak, said suspension.
+        today_peaks = [value for value in (current.get("apparent_temp"),
+                                           daily[0].get("feels_like_max") if has_today else None)
+                       if isinstance(value, (int, float))]
         pages = [("Today", {
             "temp": current["temp"],
-            "feels_like": current["apparent_temp"],
+            "feels_like": max(today_peaks) if today_peaks else None,
             "humidity": current["humidity"],
             "precipitation_probability": daily[0].get("precipitation_probability") if has_today else None,
             "wind_speed": current["wind_speed"],

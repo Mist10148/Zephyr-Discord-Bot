@@ -271,9 +271,11 @@ def current_embed(data: dict, *, aqi: int | None = None, fallback_city: str = ""
     sys = data.get("sys") or {}
 
     embed = _base(data, f"{emoji}  {description}", fallback_city=fallback_city)
+    # No high / low: OpenWeatherMap's current temp_max/temp_min are the spread
+    # of readings across the area right now, not the day's high and low, and
+    # were labelled as if they were.
     lines = [f"## {temp(main.get('temp'))}",
-             f"Feels like **{temp(main.get('feels_like'))}**  ·  "
-             f"↑ {temp(main.get('temp_max'), unit='°')}  ↓ {temp(main.get('temp_min'), unit='°')}"]
+             f"Feels like **{temp(main.get('feels_like'))}**"]
     precip = _precip_line(data)
     if precip:
         lines.append(precip)
@@ -311,8 +313,7 @@ def metric_embed(data: dict, metric: str, *, fallback_city: str = "") -> discord
     if metric == "temperature":
         title = "🌡️ Temperature"
         headline = temp(main.get("temp"))
-        context = (f"Feels like **{temp(main.get('feels_like'))}**  ·  "
-                   f"↑ {temp(main.get('temp_max'), unit='°')}  ↓ {temp(main.get('temp_min'), unit='°')}")
+        context = f"Feels like **{temp(main.get('feels_like'))}**"
     elif metric == "description":
         title = "🌤️ Conditions"
         headline = f"{emoji} {description}"

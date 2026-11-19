@@ -100,7 +100,13 @@ _WMO_ICONS = {code: ("sun.max" if code == 0 else "cloud.sun" if code in {1, 2} e
 
 def wmo_description(code: int | None) -> str: return _WMO_WEATHER_CODES.get(code, "Unknown")
 def wmo_icon(code: int | None) -> str: return _WMO_ICONS.get(code, "cloud")
-def wmo_emoji(code: int | None) -> str: return "☀️" if code == 0 else "⛈️" if code in {95, 96, 99} else "🌧️" if code and code >= 51 else "☁️"
+def wmo_emoji(code: int | None) -> str:
+    if code == 0: return "☀️"
+    if code in {95, 96, 99}: return "⛈️"
+    if code in {71, 73, 75, 77, 85, 86}: return "🌨️"   # snow used to get the rain emoji
+    if code in {45, 48}: return "🌫️"
+    if code and code >= 51: return "🌧️"
+    return "☁️"
 def wmo_group(code: int | None) -> str:
     if code == 0: return "clear"
     if code in {1, 2}: return "partly-cloudy"

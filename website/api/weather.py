@@ -43,6 +43,12 @@ def _time_payload(time_local: str | None, zone) -> dict:
     return {"time_local": time_local, "time_epoch": int(local.timestamp())}
 
 
+def _todays_peak(*values) -> float | None:
+    """Today's highest heat index: what the class watch and /class rate, not the current reading."""
+    numbers = [value for value in values if isinstance(value, (int, float)) and not isinstance(value, bool)]
+    return max(numbers) if numbers else None
+
+
 def _small_int(name: str, default: int) -> int:
     """A non-negative integer query arg, or the default for anything else."""
     raw = request.args.get(name, "")
@@ -84,7 +90,7 @@ def weather():
         for index, time_local in enumerate(daily_data.get("time") or []):
             code = daily_value("weather_code", index)
             daily.append({"time_local": time_local, "time_epoch": _time_payload(f"{time_local}T00:00", zone)["time_epoch"], "weather_code": code, "description": wmo_description(code), "icon": wmo_icon(code), "temp_max": daily_value("temperature_2m_max", index), "temp_min": daily_value("temperature_2m_min", index), "feels_like_max": daily_value("apparent_temperature_max", index), "feels_like_min": daily_value("apparent_temperature_min", index), "precipitation_probability": daily_value("precipitation_probability_max", index), "wind_speed_max": daily_value("wind_speed_10m_max", index)})
-        return jsonify({"latitude": lat, "longitude": lon, "timezone": bundle.get("timezone"), "utc_offset_seconds": offset, "units": units, "current": current_payload, "hourly": hourly, "daily": daily, "air_quality": air_quality, "class_suspension": class_suspension_payload(current.get("apparent_temperature"), units=units)})
+        return jsonify({"latitude": lat, "longitude": lon, "timezone": bundle.get("timezone"), "utc_offset_seconds": offset, "units": units, "current": current_payload, "hourly": hourly, "daily": daily, "air_quality": air_quality, "class_suspension": class_suspension_payload(_todays_peak(current.get("apparent_temperature"), daily_value("apparent_temperature_max", 0)), units=units)})
     except WeatherProviderError as exc:
         return error("weather_unavailable", str(exc), 502)
 
