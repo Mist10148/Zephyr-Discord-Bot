@@ -99,14 +99,68 @@ STORM_CODES = {95, 96, 99}
 SEVERE_HOURS = 12
 
 
-def _round_to(value: float | None, step: float) -> float | None:
-    if value is None:
-        return None
-    return round(value / step) * step
-
-
 def _fingerprint(payload: dict) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
+
+
+# Watch fingerprints are readable records rather than hashes, so a repeat can be
+# told from an escalation.  Equality alone reposted the same storm as its
+# 12-hour peak eased (40 -> 39 -> 38 degrees each looked new), when a reading
+# wobbled across a rounding edge, when one reason dropped out, and every time
+# the class level flipped back and forth across a threshold.
+_WATCH_PREFIX = "w2:"
+CLASS_LEVEL_RANK = {"possible": 1, "likely": 2, "certain": 3}
+
+
+def _watch_fingerprint(kind: str, location: str, levels: dict, **extra) -> str:
+    place = hashlib.sha256(location.encode()).hexdigest()[:8]
+    return _WATCH_PREFIX + json.dumps({**extra, "kind": kind, "place": place, "levels": levels},
+                                      sort_keys=True, separators=(",", ":"))
+
+
+def _read_watch(fingerprint: str | None) -> dict | None:
+    if not fingerprint or not fingerprint.startswith(_WATCH_PREFIX):
+        return None
+    try:
+        record = json.loads(fingerprint[len(_WATCH_PREFIX):])
+    except ValueError:
+        return None
+    return record if isinstance(record, dict) and isinstance(record.get("levels"), dict) else None
+
+
+def _same_event(new: dict, old: dict) -> bool:
+    return all(new.get(key) == old.get(key) for key in ("kind", "place", "date"))
+
+
+def is_repeat(alert: dict, last_fingerprint: str | None) -> bool:
+    """Whether ``alert`` says nothing the last posted one did not.
+
+    A watch repeats while every reason it gives was already announced at the
+    same or a higher level; a new reason or a higher level is news.
+    """
+    if not last_fingerprint:
+        return False
+    if alert.get("fingerprint") == last_fingerprint:
+        return True
+    new, old = _read_watch(alert.get("fingerprint")), _read_watch(last_fingerprint)
+    if new is None or old is None or not _same_event(new, old):
+        return False
+    return all(key in old["levels"] and value <= old["levels"][key] for key, value in new["levels"].items())
+
+
+def fingerprint_to_store(alert: dict, last_fingerprint: str | None) -> str:
+    """What to remember after posting ``alert``: the highest level seen per reason.
+
+    Merged rather than replaced, so a storm whose rain warning dropped out and
+    came back within the same event is not announced a second time.
+    """
+    new, old = _read_watch(alert.get("fingerprint")), _read_watch(last_fingerprint)
+    if new is None or old is None or not _same_event(new, old):
+        return alert["fingerprint"]
+    levels = dict(old["levels"])
+    for key, value in new["levels"].items():
+        levels[key] = max(value, levels.get(key, value))
+    return _WATCH_PREFIX + json.dumps({**new, "levels": levels}, sort_keys=True, separators=(",", ":"))
 
 
 def _daily(bundle: dict, index: int = 0) -> dict:
@@ -173,19 +227,24 @@ def evaluate_severe(bundle: dict, thresholds: dict | None, *, location: str, uni
     feels = peak("apparent_temperature")
     storm_codes = sorted({row.get("weather_code") for row in hours if row.get("weather_code") in STORM_CODES})
 
-    reasons, buckets = [], {}
+    # Levels are floored steps, so a reading only escalates by climbing a
+    # whole step -- and is_repeat keeps the highest level announced, so a
+    # value wobbling around a step edge is announced once, not every tick.
+    reasons, levels = [], {}
     if limits.get("wind_speed") is not None and wind is not None and wind >= limits["wind_speed"]:
         reasons.append(f"Wind up to {wind:.0f} {labels['wind']}")
-        buckets["wind"] = _round_to(wind, 10)
+        levels["wind"] = math.floor(wind / 10)
     if limits.get("precipitation_probability") is not None and rain is not None and rain >= limits["precipitation_probability"]:
         reasons.append(f"{rain:.0f}% chance of rain")
-        buckets["rain"] = _round_to(rain, 10)
+        levels["rain"] = 1
     if limits.get("apparent_temperature") is not None and feels is not None and feels >= limits["apparent_temperature"]:
         reasons.append(f"Feels like {feels:.0f}{labels['temperature']}")
-        buckets["feels"] = _round_to(feels, 1)
+        levels["feels"] = math.floor(feels / 2)
     if limits.get("storm") and storm_codes:
-        reasons.append(wmo_description(storm_codes[0]))
-        buckets["storm"] = storm_codes
+        # The worst storm ahead, not the mildest: 95 is a thunderstorm, 99 one
+        # with heavy hail, and the warning used to name the 95.
+        reasons.append(wmo_description(storm_codes[-1]))
+        levels["storm"] = storm_codes[-1]
 
     if not reasons:
         return None
@@ -195,7 +254,7 @@ def evaluate_severe(bundle: dict, thresholds: dict | None, *, location: str, uni
         "summary": f"In the next {SEVERE_HOURS} hours: " + "; ".join(reasons) + ".",
         "reasons": reasons,
         "fields": [{"name": "Watch window", "value": f"Next {SEVERE_HOURS} hours"}],
-        "fingerprint": _fingerprint({"kind": "severe", "location": location, **buckets}),
+        "fingerprint": _watch_fingerprint("severe", location, levels),
     }
 
 
@@ -220,11 +279,11 @@ def evaluate_class_suspension(bundle: dict, *, location: str, units: str = "metr
             {"name": "Feels like (max)", "value": _value(feels, labels["temperature"])},
             {"name": "Advisory only", "value": "Based on the heat index. Always confirm with your school or local government."},
         ],
-        # Keyed on the day and the level, so an escalation posts again but a
-        # steady forecast does not repeat every quarter of an hour.
-        "fingerprint": _fingerprint(
-            {"kind": "class_suspension", "location": location, "date": today.get("time"), "level": payload["level"]}
-        ),
+        # Keyed on the day; is_repeat lets a higher level post again but not a
+        # forecast dipping back and forth across a threshold.
+        "fingerprint": _watch_fingerprint("class_suspension", location,
+                                          {"level": CLASS_LEVEL_RANK.get(payload["level"], 0)},
+                                          date=today.get("time")),
     }
 
 

@@ -176,3 +176,58 @@ class TestSecondAudit:
         assert not alerts.threshold_in_range("wind_speed", float("nan"), "metric")
         assert not alerts.threshold_in_range("wind_speed", -1, "metric")
         assert alerts.threshold_in_range("apparent_temperature", 100, "imperial")
+
+
+class TestOneWatchPerEvent:
+    """Third audit: an easing peak, a rounding edge, a dropped reason or a level
+    flipping back and forth each used to post the same watch again."""
+
+    def _posts(self, bundles, evaluate):
+        last, posted = None, []
+        for bundle in bundles:
+            alert = evaluate(bundle)
+            if alert is None:
+                last = None
+                continue
+            if alerts.is_repeat(alert, last):
+                continue
+            posted.append(alert)
+            last = alerts.fingerprint_to_store(alert, last)
+        return posted
+
+    def test_an_easing_heat_peak_is_announced_once(self):
+        severe = lambda b: alerts.evaluate_severe(b, None, location="X")
+        posted = self._posts([_bundle(feels=41), _bundle(feels=40), _bundle(feels=39), _bundle(feels=38)], severe)
+        assert len(posted) == 1
+
+    def test_wind_wobbling_around_a_step_is_announced_once(self):
+        severe = lambda b: alerts.evaluate_severe(b, None, location="X")
+        posted = self._posts([_bundle(wind=69.9), _bundle(wind=70.1), _bundle(wind=69.8), _bundle(wind=70.2)], severe)
+        assert len(posted) == 2      # the first warning, then one escalation past 70
+
+    def test_a_reason_dropping_out_and_back_is_not_news(self):
+        severe = lambda b: alerts.evaluate_severe(b, None, location="X")
+        posted = self._posts([_bundle(wind=70, rain=90), _bundle(wind=70, rain=50),
+                              _bundle(wind=70, rain=85)], severe)
+        assert len(posted) == 1
+
+    def test_a_new_reason_is_news(self):
+        severe = lambda b: alerts.evaluate_severe(b, None, location="X")
+        posted = self._posts([_bundle(wind=70), _bundle(wind=70, code=95)], severe)
+        assert len(posted) == 2
+
+    def test_a_flapping_class_level_posts_once_per_escalation(self):
+        watch = lambda b: alerts.evaluate_class_suspension(b, location="X")
+        posted = self._posts([_bundle(feels_max=40.8), _bundle(feels_max=41.2), _bundle(feels_max=40.9),
+                              _bundle(feels_max=41.1)], watch)
+        assert [alert["level"] for alert in posted] == ["possible", "likely"]
+
+    def test_the_worst_storm_is_named(self):
+        bundle = _bundle(hours=2)
+        bundle["hourly"]["weather_code"] = [95, 99]
+        alert = alerts.evaluate_severe(bundle, None, location="X")
+        assert "hail" in alert["summary"].lower()
+
+    def test_an_old_hash_fingerprint_is_not_a_repeat(self):
+        alert = alerts.evaluate_severe(_bundle(wind=70), None, location="X")
+        assert alerts.is_repeat(alert, "0123456789abcdef") is False

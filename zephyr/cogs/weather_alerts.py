@@ -37,7 +37,13 @@ from zephyr.db.weather_subs import (
     parse_local_time,
 )
 from zephyr.utils import weather_embeds as look
-from zephyr.utils.weather_alerts import DEFAULT_THRESHOLDS, evaluate, is_heat_advisory
+from zephyr.utils.weather_alerts import (
+    DEFAULT_THRESHOLDS,
+    evaluate,
+    fingerprint_to_store,
+    is_heat_advisory,
+    is_repeat,
+)
 from zephyr.utils.weather_utils import (
     WeatherProviderError,
     geocode_search,
@@ -223,7 +229,7 @@ class WeatherAlertsCog(commands.Cog):
                 # looks exactly like the last one.
                 await asyncio.to_thread(clear_fingerprint, subscription["id"])
             return True
-        if dedupe and alert["fingerprint"] == subscription.get("last_fingerprint"):
+        if dedupe and is_repeat(alert, subscription.get("last_fingerprint")):
             return True
 
         try:
@@ -263,7 +269,8 @@ class WeatherAlertsCog(commands.Cog):
         if dedupe:
             # Only recorded once something was actually posted, so a quiet tick
             # never masks the next real warning.
-            await asyncio.to_thread(mark_fired, subscription["id"], fingerprint=alert["fingerprint"])
+            await asyncio.to_thread(mark_fired, subscription["id"],
+                                    fingerprint=fingerprint_to_store(alert, subscription.get("last_fingerprint")))
         return True
 
     # ------------------------------------------------------------------
